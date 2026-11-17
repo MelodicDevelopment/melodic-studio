@@ -15,7 +15,9 @@ src-tauri/src/
   paths.rs      PATH fix for GUI-launched apps so git and ssh resolve
   worktree.rs   git worktrees (`<repo>.worktrees/<branch>` beside the repository) + the "active checkout" commands
   agent.rs      agent sessions: runs the user's `claude` CLI headless in a checkout, streams its stream-json events
-  lsp.rs        starts an installed language server in the active checkout and relays its JSON-RPC messages
+  lsp.rs        starts a language server in the active checkout and relays its JSON-RPC messages; lsp_servers / lsp_install / lsp_uninstall
+  lsp/servers.rs  the servers we know (TypeScript/JavaScript, PHP, C#, Rust, Python, Go): lookup, "does it run" check, launch options, managed installs
+  lsp/e2e.rs    ignored tests against the real servers, fixtures in tests/fixtures (cargo test -- --ignored e2e)
 src/
   services/backend.service.ts   the ONLY place that calls invoke(); in-memory demo backend for the browser preview
   services/repo.store.ts        all app state as signals + every action; components read signals in templates
@@ -30,6 +32,8 @@ src/
   shared/monaco.ts      lazy Monaco load, workers, theme from --ml-*/--ms-* tokens, copies Monaco's CSS into the shadow root
   services/agents.store.ts      agent sessions (persisted in localStorage), worktrees, review/merge/remove
   services/lsp.service.ts       LSP client; attaches itself to Monaco when the Files tab first opens
+  services/lsp/protocol.ts      the Monaco-free half of the client (JSON-RPC, initialize, answer conversions); scripts/lsp-smoke.mjs runs it in Node against real servers
+  services/language-servers.store.ts + components/settings   the "Language servers" section of Settings: status, Install, Remove, Restart
   components/agents     sidebar "Agents" tab, the session transcript pane, the worktree banner, their dialogs
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
   styles/global.css     theme: --ml-* overrides + --ms-* tokens, light on :root, dark on :root[data-theme='dark']
@@ -49,7 +53,10 @@ src/
 
 - Worktrees: `RepoRef.worktree` is the active checkout. `commands::repo()` resolves every command to it, so Changes, History, Files and language servers follow a worktree switch with no per-command work; `main_repo()` is for the few commands that must act on the main checkout. The frontend calls `RepoStore.switchContext()` after any switch.
 - Agents are Claude Code, not a reimplementation: `claude -p --output-format stream-json --verbose --permission-mode <mode> [--resume <id>]`, prompt on stdin (never argv), cwd checked against the repository's worktrees. Only assistant/user/result/init events are forwarded. `total_cost_usd` is the session's running total. Agents do not commit; the user reviews in the Changes tab of the agent's worktree, commits, then merges.
-- Language servers are whatever the user has installed (a project's `node_modules/.bin` first, then PATH); nothing is bundled or downloaded. The protocol is spoken in `lsp.service.ts`; the Rust side only frames messages. The editor component knows nothing about it.
+- Language servers: a project's own copy (`node_modules/.bin`) first, then the app's managed copy, then PATH. Nothing is bundled; managed copies are installed on request (Settings) into the app's data dir (`app_data_dir()/language-servers`: `node/` is an npm prefix, `dotnet/` a tool path, `storage/` server caches), never globally. The protocol is spoken in `lsp.service.ts` + `lsp/protocol.ts`; the Rust side only frames messages. The editor component knows nothing about it.
+- TypeScript's managed install is `typescript-language-server` + `typescript@6`, not `typescript` latest: TypeScript 7 (the native compiler) ships no `tsserver.js`, which that server drives. `lsp_start` hands the client `initializationOptions` (tsserver path: the project's if it has a `tsserver.js`, else the managed one; intelephense storage paths). `.tsx`/`.jsx` go to the server as `typescriptreact`/`javascriptreact`. npm servers are started as `node <script>`, not through the `.bin` shim (a `.cmd` on Windows, where killing it would leave the server running).
+- A server process has a unique key (`program@root#n`). One that exits by itself, or refuses `initialize`, is reported once (`lsp-closed` carries its last error line; `LspService.failures`, a toast, the Settings row) and not started again until `LspService.refresh()` (Restart, or any install/removal). `lsp_servers` runs each found copy with its version flag, because a file on PATH can be a stand-in that does not run (rustup's `rust-analyzer` proxy).
+- Monaco's own TypeScript/JavaScript hover, definition, references, outline and diagnostics are off while a TypeScript server answers for the checkout on screen, on otherwise (`setBuiltInTypeScript` in `shared/monaco.ts`). Monaco 0.57 reads `setModeConfiguration` only once, when the first TS/JS file opens, so those five are switched off there before any file is open and registered by us from Monaco's own adapter classes (`monaco-editor/languages/features/typescript/tsMode.js`, typed in `shared/monaco-ts-mode.d.ts`); check that import when upgrading Monaco.
 
 ## Conventions
 
@@ -67,8 +74,11 @@ npm run desktop:dev     # Tauri window + Vite on :5190
 npm run dev             # browser preview with demo data
 npm run typecheck && (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 npm run icon            # regenerate icons from icon-source.svg
+(cd src-tauri && cargo test -- --ignored e2e)   # language servers end to end: installs the real ones into a temp dir (network, npm, dotnet), ~15 s when cached
 ```
 
 ## Status / next
 
 Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+
+Language servers: install/removal, launch, and hover/definition/outline/diagnostics run end to end against the real typescript-language-server, intelephense and csharp-ls (ignored Rust tests, plus the frontend's protocol code run in Node), on macOS only. The Monaco wiring in `lsp.service.ts`, the built-in TypeScript switch and the Settings section are type-checked and built but have not been seen in a window; nothing has run on Windows or Linux.

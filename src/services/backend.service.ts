@@ -141,6 +141,28 @@ export interface FileContent {
 	tooLarge: boolean;
 	size: number;
 }
+/** One row of Settings' "Language servers"; see ServerInfo in src-tauri/src/lsp/servers.rs. */
+export interface LanguageServer {
+	/** `typescript`, `php`, `csharp`, `rust`: what install and remove take. */
+	name: string;
+	label: string;
+	program: string;
+	/** Where the copy that would be started was found; null when there is none. */
+	source: 'project' | 'managed' | 'path' | null;
+	path: string | null;
+	version: string | null;
+	/** Found, but it does not run: what it said. */
+	problem: string | null;
+	/** The app has its own copy, which Remove deletes. */
+	managed: boolean;
+	/** The app can install it. */
+	installable: boolean;
+	/** What the install needs (`npm`, `dotnet`), and whether that is on this computer. */
+	prerequisite: string | null;
+	prerequisiteFound: boolean;
+	/** For servers the app cannot install: the command that does. */
+	hint: string | null;
+}
 export type OpenTarget = 'finder' | 'editor' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
 export type ResetMode = 'soft' | 'mixed' | 'hard';
 export interface AppError {
@@ -226,6 +248,11 @@ export class BackendService {
 	async lspStart(id: string, language: string) { return (await this.call<{ key: string; root: string; fresh: boolean } | null | undefined>('lsp_start', { id, language })) ?? null; }
 	lspSend(key: string, message: unknown) { return this.call<void>('lsp_send', { key, message }); }
 	lspStop(key: string) { return this.call<void>('lsp_stop', { key }); }
+	/** The servers Settings lists, looked for in the active checkout of `id`, the app's own folder and PATH. */
+	async lspServers(id: string | null) { return (await this.call<LanguageServer[] | undefined>('lsp_servers', { id })) ?? []; }
+	/** Installs into the app's data folder, never globally. Takes as long as npm or dotnet do. */
+	lspInstall(name: string) { return this.call<void>('lsp_install', { name }); }
+	lspUninstall(name: string) { return this.call<void>('lsp_uninstall', { name }); }
 
 	/** Subscribe to an event the native side emits. Resolves to an unsubscribe function. */
 	async listen<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
@@ -375,6 +402,12 @@ class DemoBackend {
 	private stashes: Stash[] = [];
 	private stashed: FileChange[] = [];
 
+	private languageServers: LanguageServer[] = [
+		{ name: 'typescript', label: 'TypeScript and JavaScript', program: 'typescript-language-server', source: 'project', path: `${DEMO_ID}/node_modules/.bin/typescript-language-server`, version: '6.1.0', problem: null, managed: false, installable: true, prerequisite: 'npm', prerequisiteFound: true, hint: null },
+		{ name: 'php', label: 'PHP', program: 'intelephense', source: null, path: null, version: null, problem: null, managed: false, installable: true, prerequisite: 'npm', prerequisiteFound: true, hint: null },
+		{ name: 'csharp', label: 'C#', program: 'csharp-ls', source: null, path: null, version: null, problem: null, managed: false, installable: true, prerequisite: 'dotnet', prerequisiteFound: false, hint: null },
+		{ name: 'rust', label: 'Rust', program: 'rust-analyzer', source: 'path', path: '/Users/demo/.cargo/bin/rust-analyzer', version: null, problem: "error: Unknown binary 'rust-analyzer' in official toolchain 'stable'.", managed: false, installable: false, prerequisite: null, prerequisiteFound: true, hint: 'rustup component add rust-analyzer' },
+	];
 	private worktreeList: Worktree[] = [{ path: DEMO_ID, branch: 'feature/repeat-mode', head: 'a'.repeat(40), isMain: true, active: true, changes: 4 }];
 	private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
 
@@ -590,6 +623,14 @@ class DemoBackend {
 				return;
 			}
 			case 'agent_stop':
+				return;
+			case 'lsp_servers':
+				return this.languageServers;
+			case 'lsp_install':
+				this.languageServers = this.languageServers.map((s) => (s.name === args.name ? { ...s, managed: true, source: s.source === 'project' ? s.source : 'managed', path: s.source === 'project' ? s.path : `/Users/demo/Library/Application Support/Melodic Studio/language-servers/${s.program}`, version: s.version ?? '1.0.0', problem: null } : s));
+				return;
+			case 'lsp_uninstall':
+				this.languageServers = this.languageServers.map((s) => (s.name === args.name ? { ...s, managed: false, ...(s.source === 'managed' ? { source: null, path: null, version: null } : {}) } : s));
 				return;
 			case 'pick_folder':
 				return '/Users/demo/Source';

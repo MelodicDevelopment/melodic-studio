@@ -65,10 +65,94 @@ async function load(): Promise<MonacoApi> {
 	const diagnostics = { noSemanticValidation: true, noSyntaxValidation: false };
 	monaco.typescript.typescriptDefaults.setDiagnosticsOptions(diagnostics);
 	monaco.typescript.javascriptDefaults.setDiagnosticsOptions(diagnostics);
+	ownTypeScriptFeatures(monaco);
 
 	applyMonacoTheme(monaco);
 	new MutationObserver(() => applyMonacoTheme(monaco)).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 	return monaco;
+}
+
+// ---- built-in TypeScript features, switchable --------------------------------------
+
+/** The features a language server also provides; with both answering, every hover and definition shows twice. */
+const SWITCHED = { hovers: false, definitions: false, references: false, documentSymbols: false, diagnostics: false };
+
+type Scripted = 'typescript' | 'javascript';
+
+let _builtIn = true;
+/** The languages a file has been opened in; Monaco has a worker for these. */
+const _inUse = new Set<Scripted>();
+/** Per language: undo the registrations made by `registerBuiltIn`. */
+const _registered = new Map<string, Monaco.IDisposable[]>();
+let _registerBuiltIn: ((language: Scripted) => Promise<void>) | null = null;
+
+/**
+ * Monaco registers its TypeScript and JavaScript providers once, when the first such file is opened,
+ * and `setModeConfiguration` after that changes nothing. So the switchable ones are taken out of its
+ * hands here, before any file is open, and registered by us instead (they are Monaco's own classes),
+ * which leaves us holding the handles to turn them off and on.
+ */
+function ownTypeScriptFeatures(monaco: MonacoApi): void {
+	const sides = {
+		typescript: { defaults: monaco.typescript.typescriptDefaults, worker: monaco.typescript.getTypeScriptWorker },
+		javascript: { defaults: monaco.typescript.javascriptDefaults, worker: monaco.typescript.getJavaScriptWorker },
+	};
+	_registerBuiltIn = async (language) => {
+		const { defaults, worker: getWorker } = sides[language];
+		const mode = await import('monaco-editor/languages/features/typescript/tsMode.js');
+		if (!_builtIn || _registered.has(language)) {
+			return;
+		}
+		// The worker exists a moment after the language is first used; ask again until it does.
+		const worker = async (...uris: Monaco.Uri[]): Promise<Monaco.typescript.TypeScriptWorker> => {
+			for (let tries = 0; ; tries++) {
+				try {
+					return await (await getWorker())(...uris);
+				} catch (e) {
+					if (tries >= 40) {
+						throw e;
+					}
+					await new Promise((done) => setTimeout(done, 50));
+				}
+			}
+		};
+		const libFiles = new mode.LibFiles(worker);
+		_registered.set(language, [
+			monaco.languages.registerHoverProvider(language, new mode.QuickInfoAdapter(worker)),
+			monaco.languages.registerDefinitionProvider(language, new mode.DefinitionAdapter(libFiles, worker)),
+			monaco.languages.registerReferenceProvider(language, new mode.ReferenceAdapter(libFiles, worker)),
+			monaco.languages.registerDocumentSymbolProvider(language, new mode.OutlineAdapter(worker)),
+			new mode.DiagnosticsAdapter(libFiles, defaults, language, worker),
+		]);
+	};
+	for (const language of ['typescript', 'javascript'] as const) {
+		const { defaults } = sides[language];
+		defaults.setModeConfiguration({ ...defaults.modeConfiguration, ...SWITCHED });
+		// Not before the language is in use: Monaco starts its worker then, and our providers need it.
+		monaco.languages.onLanguage(language, () => {
+			_inUse.add(language);
+			void _registerBuiltIn?.(language);
+		});
+	}
+}
+
+/**
+ * Turn Monaco's own TypeScript/JavaScript hover, definition, references, outline and diagnostics
+ * on or off. Off while a TypeScript language server answers for the checkout on screen; on otherwise.
+ * Completion, signature help and the rest stay Monaco's either way.
+ */
+export function setBuiltInTypeScript(on: boolean): void {
+	if (on === _builtIn) {
+		return;
+	}
+	_builtIn = on;
+	if (!on) {
+		_registered.forEach((handles) => handles.forEach((handle) => handle.dispose()));
+		_registered.clear();
+		return;
+	}
+	// A language not in use yet is registered when its first file opens.
+	_inUse.forEach((language) => void _registerBuiltIn?.(language));
 }
 
 /**

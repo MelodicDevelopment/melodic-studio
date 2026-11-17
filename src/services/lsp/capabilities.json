@@ -1,0 +1,11 @@
+{
+	"workspace": { "configuration": true, "workspaceFolders": true },
+	"textDocument": {
+		"synchronization": { "didSave": false },
+		"hover": { "contentFormat": ["markdown", "plaintext"] },
+		"definition": { "linkSupport": true },
+		"references": {},
+		"documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+		"publishDiagnostics": {}
+	}
+}
