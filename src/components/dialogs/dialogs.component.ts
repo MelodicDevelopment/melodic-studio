@@ -2,6 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { RepoStore } from '../../services/repo.store';
 import { InitService } from '../init/init-repo.component';
+import { joinPath } from '../../shared/paths';
 import type { ResetMode } from '../../services/backend.service';
 import { savedTheme, setTheme, type ThemeMode } from '../../shared/theme';
 import { dialogsTemplate } from './dialogs.template';
@@ -72,13 +73,12 @@ export class DialogsComponent {
 			return;
 		}
 		// A folder that is not a repository yet (or a brand new one) goes through the setup wizard.
-		const parent = this.createParent.trim().replace(/[\\/]+$/, '');
 		const ok =
 			this.addTab === 'add'
 				? await this._init.open(this.addPath.trim())
 				: this.addTab === 'clone'
 					? await this.store.cloneRepo(this.cloneUrl.trim(), this.cloneParent.trim())
-					: await this._init.open(`${parent}${parent.includes('\\') ? '\\' : '/'}${this.createName.trim()}`);
+					: await this._init.open(joinPath(this.createParent.trim(), this.createName.trim()));
 		if (ok) {
 			this.store.closeDialog('add-repo');
 		}

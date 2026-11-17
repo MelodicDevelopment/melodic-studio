@@ -11,6 +11,8 @@ import { ExplorerStore } from '../services/explorer.store';
 import { AiService } from '../services/ai.service';
 import { LspService } from '../services/lsp.service';
 import { TerminalStore } from '../services/terminal.store';
+import { AiFeaturesStore } from '../services/ai-features.store';
+import { HostStore } from '../services/host.store';
 
 const backend = (): BackendService => Injector.get(BackendService);
 
@@ -49,6 +51,12 @@ function q(path: string): Element | null {
 	},
 	get terminal() {
 		return Injector.get(TerminalStore);
+	},
+	get aiFeatures() {
+		return Injector.get(AiFeaturesStore);
+	},
+	get host() {
+		return Injector.get(HostStore);
 	},
 	/** Any other service, by class: `s.inject(SomeStore)` from a module the script imported. */
 	inject: <T>(token: new (...args: never[]) => T): T => Injector.get(token as never),

@@ -214,7 +214,7 @@ export class ExplorerStore {
 		this.open(path, true);
 		const monaco = await loadMonaco();
 		// The same address `model()` gives the file.
-		const wanted = monaco.Uri.file(`${id}/${path}`).toString();
+		const wanted = monaco.Uri.file(joinPath(id, path)).toString();
 		return new Promise((resolve) => {
 			let tries = 0;
 			const timer = setInterval(() => {
