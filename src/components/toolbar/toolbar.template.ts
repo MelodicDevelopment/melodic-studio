@@ -183,6 +183,11 @@ export function toolbarTemplate(self: ToolbarComponent) {
 								${st.host.pulls && st.upstream && !st.detached
 									? html`<div class="item" @click=${() => self.openHost('new-pull')}><ml-icon icon="plus" size="sm"></ml-icon><span class="name">New ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')} for ${st.branch}</span></div>`
 									: ''}
+								${st.host.issues || (st.host.pulls && !st.detached) ? html`<div class="group">In Melodic Studio</div>` : ''}
+								${st.host.issues ? html`<div class="item" @click=${() => self.openHostDialog('issues')}><ml-icon icon="robot" size="sm"></ml-icon><span class="name">Browse ${st.host.issuesLabel.toLowerCase()}…</span></div>` : ''}
+								${st.host.pulls && !st.detached
+									? html`<div class="item" @click=${() => self.openHostDialog('pull-request')}><ml-icon icon="sparkle" size="sm"></ml-icon><span class="name">Create ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')}…</span></div>`
+									: ''}
 							</div>
 						</div>
 					</ml-popover>

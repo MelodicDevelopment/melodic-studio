@@ -2,6 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
+import { HostStore } from '../../services/host.store';
 import { isDesktop, isMac, type Branch, type OpenTarget, type RepoSummary } from '../../services/backend.service';
 import { toolbarTemplate } from './toolbar.template';
 import { toolbarStyles } from './toolbar.styles';
@@ -16,6 +17,7 @@ export type ToolbarMenu = ({ kind: 'repo'; repo: RepoSummary } | { kind: 'branch
 })
 export class ToolbarComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
+	@Service(HostStore) readonly host!: HostStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 	elementRef!: HTMLElement;
 
@@ -161,6 +163,16 @@ export class ToolbarComponent {
 	openHost(target: OpenTarget): void {
 		this.close('host-pop');
 		void this.store.openIn(target);
+	}
+
+	/** The issues list or the pull request dialog (components/host), from the host menu. */
+	openHostDialog(which: 'issues' | 'pull-request'): void {
+		this.close('host-pop');
+		if (which === 'issues') {
+			this.host.openIssues();
+		} else {
+			this.host.openPr();
+		}
 	}
 
 	/** Open a dialog from inside a popover: the popover has to go first or it sits on top. */

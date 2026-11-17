@@ -21,6 +21,7 @@ import './services/agents.store';
 import './services/lsp.service';
 import './services/ai.service';
 import './services/terminal.store';
+import './services/host.store';
 
 // App components
 import './components/diff/diff-view.component';
@@ -36,4 +37,5 @@ import './components/agents/worktree-banner.component';
 import './components/init/init-repo.component';
 import './components/terminal/terminal.component';
 import './components/dialogs/dialogs.component';
+import './components/host/host-dialogs.component';
 import './components/app/app.component';

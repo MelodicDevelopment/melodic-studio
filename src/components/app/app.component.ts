@@ -2,6 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
+import { HostStore } from '../../services/host.store';
 import { appTemplate } from './app.template';
 import { appStyles } from './app.styles';
 
@@ -26,6 +27,7 @@ function savedWidth(): number {
 })
 export class AppComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
+	@Service(HostStore) readonly host!: HostStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 
 	sidebarWidth = savedWidth();
