@@ -92,7 +92,7 @@ pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
 
 #[tauri::command]
 pub async fn repo_add(state: State<'_, AppState>, path: String) -> Result<RepoSummary> {
-    let top = Git::toplevel(Path::new(&path))?;
+    let top = Git::toplevel(&crate::paths::typed(&path))?;
     register(&state, &top)
 }
 
@@ -102,7 +102,7 @@ pub async fn repo_create(state: State<'_, AppState>, parent: String, name: Strin
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         return Err(AppError::msg("Give the repository a simple folder name"));
     }
-    let dir = PathBuf::from(&parent).join(name);
+    let dir = crate::paths::typed(&parent).join(name);
     if dir.join(".git").exists() {
         return Err(AppError::msg("A repository already exists there. Use Add existing instead."));
     }
@@ -122,7 +122,7 @@ pub async fn repo_clone(state: State<'_, AppState>, url: String, parent: String)
     if url.is_empty() {
         return Err(AppError::msg("Enter a repository URL"));
     }
-    let dest = PathBuf::from(&parent).join(git::repo_name(url));
+    let dest = crate::paths::typed(&parent).join(git::repo_name(url));
     if dest.exists() {
         return Err(AppError::msg(format!("{} already exists", dest.display())));
     }
@@ -359,35 +359,11 @@ pub async fn open_in(app: tauri::AppHandle, state: State<'_, AppState>, id: Stri
         }
         "editor" => {
             let editor = state.config.lock().unwrap().editor();
-            open_editor(&editor, &dir)
+            crate::proc::open_editor(&editor, &dir)
         }
-        "terminal" => open_terminal(&dir),
+        "terminal" => crate::proc::open_terminal(&dir),
         _ => Err(AppError::msg("Unknown target")),
     }
-}
-
-fn open_editor(editor: &str, dir: &str) -> Result<()> {
-    let mut parts = editor.split_whitespace();
-    let program = parts.next().unwrap_or("code");
-    if crate::proc::command(program).args(parts).arg(dir).spawn().is_ok() {
-        return Ok(());
-    }
-    // `code` is often not on PATH on macOS; the app bundle still is.
-    #[cfg(target_os = "macos")]
-    if program == "code" && crate::proc::command("open").args(["-a", "Visual Studio Code", dir]).spawn().is_ok() {
-        return Ok(());
-    }
-    Err(AppError::msg(format!("Could not start \"{editor}\". Set your editor command in Settings.")))
-}
-
-fn open_terminal(dir: &str) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let result = crate::proc::command("open").args(["-a", "Terminal", dir]).spawn();
-    #[cfg(target_os = "windows")]
-    let result = crate::proc::command("cmd").args(["/C", "start", "cmd"]).current_dir(dir).spawn();
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let result = crate::proc::command("x-terminal-emulator").current_dir(dir).spawn();
-    result.map(|_| ()).map_err(|e| AppError::msg(format!("Could not open a terminal: {e}")))
 }
 
 #[tauri::command]

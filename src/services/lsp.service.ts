@@ -15,6 +15,7 @@ import { BackendService } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
 import { loadMonaco, type MonacoApi } from '../shared/monaco';
+import { fileName, relativeTo } from '../shared/paths';
 
 /** Monaco language ids we look for a server for. */
 const LANGUAGES = ['typescript', 'javascript', 'rust', 'python', 'go', 'php', 'csharp'];
@@ -162,11 +163,12 @@ export class LspService {
 		monaco.editor.registerEditorOpener({
 			openCodeEditor: (source, resource, target) => {
 				const at = this.root();
-				const path = resource.fsPath;
-				if (!at || !path.startsWith(`${at.root}/`)) {
+				// Not startsWith: on Windows fsPath is `c:\…` where the root is `C:\…`.
+				const path = at ? relativeTo(at.root, resource.fsPath) : null;
+				if (!path) {
 					return false;
 				}
-				Injector.get(ExplorerStore).open(path.slice(at.root.length + 1), true);
+				Injector.get(ExplorerStore).open(path, true);
 				this.reveal(source, resource, target);
 				return true;
 			},
@@ -238,7 +240,7 @@ export class LspService {
 				processId: null,
 				clientInfo: { name: 'Melodic Studio' },
 				rootUri,
-				workspaceFolders: [{ uri: rootUri, name: started.root.split('/').pop() ?? 'workspace' }],
+				workspaceFolders: [{ uri: rootUri, name: fileName(started.root) || 'workspace' }],
 				capabilities: {
 					workspace: { configuration: true, workspaceFolders: true },
 					textDocument: {
@@ -284,7 +286,7 @@ export class LspService {
 	private async opened(model: Monaco.editor.ITextModel): Promise<void> {
 		const language = model.getLanguageId();
 		const at = this.root();
-		if (model.uri.scheme !== 'file' || !LANGUAGES.includes(language) || !at || !model.uri.fsPath.startsWith(`${at.root}/`)) {
+		if (model.uri.scheme !== 'file' || !LANGUAGES.includes(language) || !at || !relativeTo(at.root, model.uri.fsPath)) {
 			return;
 		}
 		const client = await this.client(language);

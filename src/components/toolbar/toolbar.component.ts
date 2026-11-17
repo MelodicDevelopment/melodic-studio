@@ -2,7 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
-import { isDesktop, isMac, type Branch, type OpenTarget, type RepoSummary } from '../../services/backend.service';
+import { isDesktop, isMac, isWindows, type Branch, type OpenTarget, type RepoSummary } from '../../services/backend.service';
 import { toolbarTemplate } from './toolbar.template';
 import { toolbarStyles } from './toolbar.styles';
 
@@ -26,6 +26,8 @@ export class ToolbarComponent {
 	branchFilter = '';
 	/** Leave room for the traffic lights the overlay title bar draws over us. */
 	readonly mac = isDesktop() && isMac();
+	/** What this platform calls opening a folder in its file manager. */
+	readonly reveal = isMac() ? 'Reveal in Finder' : isWindows() ? 'Show in File Explorer' : 'Show in file manager';
 
 	get repos(): RepoSummary[] {
 		const q = this.repoFilter.trim().toLowerCase();
@@ -171,7 +173,8 @@ export class ToolbarComponent {
 	}
 
 	readonly drag = (e: MouseEvent): void => {
-		if (e.button !== 0 || !isDesktop() || !(e.target as HTMLElement).classList?.contains('drag')) {
+		// Only macOS draws the toolbar under the title bar; Windows and Linux have a real one to drag.
+		if (e.button !== 0 || !this.mac || !(e.target as HTMLElement).classList?.contains('drag')) {
 			return;
 		}
 		void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => (e.detail === 2 ? getCurrentWindow().toggleMaximize() : getCurrentWindow().startDragging()));

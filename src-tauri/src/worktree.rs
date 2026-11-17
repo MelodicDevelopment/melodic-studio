@@ -5,6 +5,7 @@
 use crate::commands::{main_repo, save_worktree};
 use crate::error::{AppError, Result};
 use crate::git::Git;
+use crate::paths;
 use crate::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,8 @@ use tauri::State;
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Worktree {
+    /// As git lists it, in the platform's spelling (`paths::native`). This exact string is
+    /// what `worktree_add` returns, so the window can match the two.
     pub path: String,
     pub branch: Option<String>,
     pub head: String,
@@ -24,7 +27,8 @@ pub struct Worktree {
     pub changes: usize,
 }
 
-pub fn list(git: &Git) -> Result<Vec<Worktree>> {
+/// The checkouts git knows, main one first, without counting their changes.
+fn entries(git: &Git) -> Result<Vec<Worktree>> {
     let out = git.run(&["worktree", "list", "--porcelain"])?;
     let mut trees = vec![];
     for block in out.split("\n\n") {
@@ -34,7 +38,8 @@ pub fn list(git: &Git) -> Result<Vec<Worktree>> {
         let mut usable = true;
         for line in block.lines() {
             if let Some(p) = line.strip_prefix("worktree ") {
-                path = Some(p.to_string());
+                // Git prints `C:/Users/...` on Windows; everything else here uses `C:\Users\...`.
+                path = Some(paths::native(p).to_string_lossy().to_string());
             } else if let Some(h) = line.strip_prefix("HEAD ") {
                 head = h.to_string();
             } else if let Some(b) = line.strip_prefix("branch ") {
@@ -44,22 +49,37 @@ pub fn list(git: &Git) -> Result<Vec<Worktree>> {
             }
         }
         if let (Some(path), true) = (path, usable) {
-            let changes = Git::at(&path).run(&["status", "--porcelain"]).map(|s| s.lines().count()).unwrap_or(0);
-            trees.push(Worktree { path, branch, head, is_main: trees.is_empty(), active: false, changes });
+            trees.push(Worktree { path, branch, head, is_main: trees.is_empty(), active: false, changes: 0 });
         }
+    }
+    Ok(trees)
+}
+
+pub fn list(git: &Git) -> Result<Vec<Worktree>> {
+    let mut trees = entries(git)?;
+    for tree in trees.iter_mut() {
+        tree.changes = Git::at(&tree.path).run(&["status", "--porcelain"]).map(|s| s.lines().count()).unwrap_or(0);
     }
     Ok(trees)
 }
 
 /// Is `dir` the main checkout or one of its worktrees?
 pub fn belongs(git: &Git, dir: &Path) -> bool {
-    let want = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    list(git).map(|trees| trees.iter().any(|t| Path::new(&t.path).canonicalize().map(|p| p == want).unwrap_or(false))).unwrap_or(false)
+    dir.is_dir() && entries(git).map(|trees| trees.iter().any(|t| paths::same(&t.path, dir))).unwrap_or(false)
 }
 
+/// The folder name for a branch's worktree: one path segment that every platform accepts.
 fn slug(branch: &str) -> String {
     let s: String = branch.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '-' }).collect();
-    s.trim_matches('-').to_string()
+    // Windows drops trailing dots from names and reserves a handful of device names.
+    let s = s.trim_matches(['-', '.']).to_string();
+    let stem = s.split('.').next().unwrap_or_default().to_ascii_lowercase();
+    let reserved = matches!(stem.as_str(), "con" | "prn" | "aux" | "nul") || (stem.len() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem.ends_with(|c: char| c.is_ascii_digit()));
+    if s.is_empty() || reserved {
+        format!("branch-{s}").trim_end_matches('-').to_string()
+    } else {
+        s
+    }
 }
 
 fn check_name(name: &str) -> Result<()> {
@@ -91,15 +111,15 @@ pub fn add(git: &Git, branch: &str, base: Option<&str>) -> Result<PathBuf> {
         }
         git.run(&args)?;
     }
-    Ok(dest)
+    // Hand back git's own name for it, so it matches what `list` reports from now on.
+    let listed = entries(git).ok().and_then(|trees| trees.into_iter().find(|t| paths::same(&t.path, &dest)));
+    Ok(listed.map(|t| PathBuf::from(t.path)).unwrap_or_else(|| paths::native(&dest)))
 }
 
 pub fn remove(git: &Git, path: &str, force: bool, delete_branch: bool) -> Result<()> {
-    let trees = list(git)?;
-    // Compare real paths: /var and /private/var are the same folder on macOS.
-    let real = |p: &str| Path::new(p).canonicalize().unwrap_or_else(|_| PathBuf::from(p));
-    let want = real(path);
-    let tree = trees.iter().find(|t| real(&t.path) == want).ok_or_else(|| AppError::msg("That worktree is not part of this repository"))?;
+    let trees = entries(git)?;
+    // Not as strings: /var and /private/var are one folder on macOS, C:/x and C:\x on Windows.
+    let tree = trees.iter().find(|t| paths::same(&t.path, path)).ok_or_else(|| AppError::msg("That worktree is not part of this repository"))?;
     let path = tree.path.as_str();
     if tree.is_main {
         return Err(AppError::msg("The main checkout cannot be removed"));
@@ -122,10 +142,9 @@ pub fn remove(git: &Git, path: &str, force: bool, delete_branch: bool) -> Result
 pub async fn worktree_list(state: State<'_, AppState>, id: String) -> Result<Vec<Worktree>> {
     let (git, active) = main_repo(&state, &id)?;
     let mut trees = list(&git)?;
-    let active = active.map(|p| p.to_string_lossy().to_string());
     for t in trees.iter_mut() {
         t.active = match &active {
-            Some(a) => &t.path == a,
+            Some(a) => paths::same(&t.path, a),
             None => t.is_main,
         };
     }
@@ -149,7 +168,7 @@ pub async fn worktree_select(state: State<'_, AppState>, id: String, path: Optio
     let (git, _) = main_repo(&state, &id)?;
     let target = match path {
         Some(p) => {
-            let tree = list(&git)?.into_iter().find(|t| t.path == p).ok_or_else(|| AppError::msg("That worktree is not part of this repository"))?;
+            let tree = entries(&git)?.into_iter().find(|t| paths::same(&t.path, &p)).ok_or_else(|| AppError::msg("That worktree is not part of this repository"))?;
             (!tree.is_main).then(|| PathBuf::from(tree.path))
         }
         None => None,
@@ -160,8 +179,10 @@ pub async fn worktree_select(state: State<'_, AppState>, id: String, path: Optio
 #[tauri::command]
 pub async fn worktree_remove(state: State<'_, AppState>, id: String, path: String, force: bool, delete_branch: bool) -> Result<()> {
     let (git, active) = main_repo(&state, &id)?;
+    // Asked before it is gone: afterwards there is no folder left to compare.
+    let was_active = active.is_some_and(|a| paths::same(a, &path));
     remove(&git, &path, force, delete_branch)?;
-    if active.is_some_and(|a| a.to_string_lossy() == path) {
+    if was_active {
         save_worktree(&state, &id, None)?;
     }
     Ok(())
@@ -177,17 +198,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("proj");
         let g = Git::init(&dir).unwrap();
-        for (k, v) in [("user.name", "Test"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+        for (k, v) in [("user.name", "Test"), ("user.email", "t@example.com"), ("commit.gpgsign", "false"), ("core.autocrlf", "false")] {
             g.run(&["config", k, v]).unwrap();
         }
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
         g.commit(&["a.txt".into()], "One", "", false).unwrap();
 
         let path = add(&g, "agent/fix thing".replace(' ', "-").as_str(), None).unwrap();
-        assert!(path.ends_with("proj.worktrees/agent-fix-thing"));
+        assert!(path.ends_with(Path::new("proj.worktrees").join("agent-fix-thing")));
         assert!(path.join("a.txt").exists());
         assert!(belongs(&g, &path));
+        assert!(belongs(&g, &dir));
         assert!(!belongs(&g, &base));
+        // However the folder is spelled when it comes back from the window.
+        assert!(belongs(&g, &base.join("proj.worktrees").join("agent-fix-thing")));
+        assert!(belongs(&g, Path::new(&format!("{}/", path.display()))));
+
+        // A worktree's `.git` is a file; what git keeps per repository is still found from there.
+        assert!(path.join(".git").is_file());
+        assert!(Git::at(&path).status().unwrap().last_fetched.is_none());
+        std::fs::write(dir.join(".git").join("FETCH_HEAD"), "").unwrap();
+        let in_tree = Git::at(&path).status().unwrap();
+        assert!(in_tree.last_fetched.is_some(), "the last fetch is the repository's, not the worktree's");
+        assert_eq!(in_tree.branch, "agent/fix-thing");
 
         std::fs::write(path.join("b.txt"), "two\n").unwrap();
         let trees = list(&g).unwrap();
@@ -195,6 +228,12 @@ mod tests {
         assert!(trees[0].is_main && !trees[1].is_main);
         assert_eq!(trees[1].branch.as_deref(), Some("agent/fix-thing"));
         assert_eq!(trees[1].changes, 1);
+        // What `add` returned is, to the character, what `list` shows: the window matches them as strings.
+        assert_eq!(trees[1].path, path.to_string_lossy());
+        assert!(paths::same(&trees[0].path, &dir));
+        for tree in &trees {
+            assert_eq!(tree.path.contains('/'), !cfg!(windows), "{} uses the platform's separators", tree.path);
+        }
 
         let p = path.to_string_lossy().to_string();
         assert!(remove(&g, &p, false, false).is_err(), "dirty worktrees need force");
@@ -204,6 +243,26 @@ mod tests {
         assert_eq!(g.branches().unwrap().len(), 1);
         assert!(add(&g, "-bad", None).is_err());
 
+        // A second one, removed by a differently spelled path, as the main checkout sees it.
+        let other = add(&g, "topic", None).unwrap();
+        remove(&g, &format!("{}/", base.join("proj.worktrees").join("topic").display()), false, true).unwrap();
+        assert!(!other.exists());
+        assert_eq!(list(&g).unwrap().len(), 1);
+
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn folder_names() {
+        assert_eq!(slug("agent/fix-the-seek-bug"), "agent-fix-the-seek-bug");
+        assert_eq!(slug("release/1.4"), "release-1.4");
+        assert_eq!(slug("feature/ünï"), "feature--n", "only ASCII, so the name is the same on every file system");
+        // Names Windows cannot create, or would silently rename.
+        assert_eq!(slug("con"), "branch-con");
+        assert_eq!(slug("NUL.txt"), "branch-NUL.txt");
+        assert_eq!(slug("com1"), "branch-com1");
+        assert_eq!(slug("common"), "common");
+        assert_eq!(slug("wip..."), "wip");
+        assert_eq!(slug("///"), "branch");
     }
 }

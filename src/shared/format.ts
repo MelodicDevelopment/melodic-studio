@@ -1,14 +1,7 @@
 import type { FileStatus } from '../services/backend.service';
 
-export function fileName(path: string): string {
-	const i = path.lastIndexOf('/');
-	return i < 0 ? path : path.slice(i + 1);
-}
-
-export function dirName(path: string): string {
-	const i = path.lastIndexOf('/');
-	return i < 0 ? '' : path.slice(0, i + 1);
-}
+// These live with the other path helpers; they understand `C:\…` as well as `/…`.
+export { fileName, dirName } from './paths';
 
 export function relativeTime(iso: string | number | null | undefined): string {
 	if (!iso) {

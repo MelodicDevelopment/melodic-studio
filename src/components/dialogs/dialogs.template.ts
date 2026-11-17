@@ -2,6 +2,7 @@ import { html } from '@melodicdev/core/template';
 import type { AddTab, DialogsComponent } from './dialogs.component';
 import type { ThemeMode } from '../../shared/theme';
 import { plural } from '../../shared/format';
+import { isWindows } from '../../services/backend.service';
 
 const RESET_MODES = [
 	{ value: 'soft', label: 'Soft: keep the later changes staged' },
@@ -44,17 +45,17 @@ export function dialogsTemplate(self: DialogsComponent) {
 				${self.addTab === 'add'
 					? html`
 						<p>Point Melodic Studio at a git repository that is already on this computer.</p>
-						${folderField(self, 'Local path', 'addPath', '/path/to/repository')}
+						${folderField(self, 'Local path', 'addPath', isWindows() ? 'C:\\path\\to\\repository' : '/path/to/repository')}
 					`
 					: self.addTab === 'clone'
 						? html`
 							<p>Clone uses your own git setup, so SSH keys and credential helpers work as they do in a terminal.</p>
 							<ml-input label="Repository URL" placeholder="git@github.com:owner/repo.git" .value=${self.cloneUrl} @ml:input=${(e: CustomEvent) => (self.cloneUrl = e.detail.value)}></ml-input>
-							${folderField(self, 'Clone into', 'cloneParent', '/path/to/parent/folder')}
+							${folderField(self, 'Clone into', 'cloneParent', isWindows() ? 'C:\\path\\to\\parent\\folder' : '/path/to/parent/folder')}
 						`
 						: html`
 							<ml-input label="Name" placeholder="my-project" .value=${self.createName} @ml:input=${(e: CustomEvent) => (self.createName = e.detail.value)}></ml-input>
-							${folderField(self, 'Create in', 'createParent', '/path/to/parent/folder')}
+							${folderField(self, 'Create in', 'createParent', isWindows() ? 'C:\\path\\to\\parent\\folder' : '/path/to/parent/folder')}
 							<ml-checkbox label="Start with a README and an initial commit" .checked=${self.createReadme} @ml:change=${(e: CustomEvent) => (self.createReadme = e.detail.checked)}></ml-checkbox>
 						`}
 			</div>

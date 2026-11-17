@@ -123,9 +123,10 @@ fn base_command() -> Command {
         .env("GIT_LITERAL_PATHSPECS", "1")
         // Status polls must not fight a git command the user runs in a terminal.
         .env("GIT_OPTIONAL_LOCKS", "0")
-        // Nothing here can answer an editor; accept the message git proposes.
-        .env("GIT_EDITOR", "true")
-        .env("GIT_SEQUENCE_EDITOR", "true");
+        // Nothing here can answer an editor; accept the message git proposes. `:` is git's own
+        // "no editor" (it never starts a program), where `true` only exists on Unix.
+        .env("GIT_EDITOR", ":")
+        .env("GIT_SEQUENCE_EDITOR", ":");
     c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     c
 }
@@ -136,12 +137,19 @@ fn exec(mut c: Command, stdin: Option<&[u8]>, ok_codes: &[i32]) -> Result<String
         c.stdin(Stdio::piped());
     }
     let mut child = c.spawn().map_err(|e| AppError::Git(format!("could not run git: {e}")))?;
-    if let Some(input) = stdin {
-        if let Some(mut pipe) = child.stdin.take() {
-            pipe.write_all(input)?;
+    let pipe = child.stdin.take();
+    // Feed stdin while the output is being read. Written first, a long input stalls for good
+    // once git has filled its output pipe and stopped reading (a pipe holds 64 KB on Linux,
+    // as little as 4 KB on Windows).
+    let out = std::thread::scope(|scope| {
+        if let (Some(input), Some(mut pipe)) = (stdin, pipe) {
+            scope.spawn(move || {
+                // If git exits early its own error is the one worth reporting.
+                let _ = pipe.write_all(input);
+            });
         }
-    }
-    let out = child.wait_with_output()?;
+        child.wait_with_output()
+    })?;
     if out.status.success() || out.status.code().is_some_and(|code| ok_codes.contains(&code)) {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -188,17 +196,13 @@ impl Git {
     /// refuses literal pathspecs, so the guard comes off; the names go in on stdin, never
     /// the command line. Best effort: nothing is marked if git fails.
     pub fn ignored(&self, paths: &[String]) -> Vec<String> {
-        let mut out = Vec::new();
-        // Small batches: `exec` writes all of stdin before reading any output.
-        for chunk in paths.chunks(200) {
-            let mut c = base_command();
-            c.env_remove("GIT_LITERAL_PATHSPECS").current_dir(&self.dir).args(["check-ignore", "-z", "--stdin"]);
-            // Exit code 1 only means none of them is ignored.
-            if let Ok(text) = exec(c, Some(chunk.join("\0").as_bytes()), &[1]) {
-                out.extend(text.split('\0').filter(|p| !p.is_empty()).map(str::to_string));
-            }
+        if paths.is_empty() {
+            return Vec::new();
         }
-        out
+        let mut c = base_command();
+        c.env_remove("GIT_LITERAL_PATHSPECS").current_dir(&self.dir).args(["check-ignore", "-z", "--stdin"]);
+        // Exit code 1 only means none of them is ignored.
+        exec(c, Some(paths.join("\0").as_bytes()), &[1]).map(|text| text.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect()).unwrap_or_default()
     }
 
     fn run_ok(&self, args: &[&str], ok_codes: &[i32]) -> Result<String> {
@@ -222,13 +226,14 @@ impl Git {
         Git::run_global(&["config", "--global", "--get", key]).map(|s| s.trim().to_string()).unwrap_or_default()
     }
 
-    /// The top-level directory of the repository containing `dir`.
+    /// The top-level directory of the repository containing `dir`, in the platform's own
+    /// spelling (git prints `C:/Users/...` on Windows).
     pub fn toplevel(dir: &Path) -> Result<PathBuf> {
         if !dir.is_dir() {
             return Err(AppError::msg("That folder does not exist"));
         }
         let out = Git::at(dir).run(&["rev-parse", "--show-toplevel"]).map_err(|_| AppError::msg("That folder is not a git repository"))?;
-        Ok(PathBuf::from(out.trim()))
+        Ok(crate::paths::native(out.trim_end_matches(['\r', '\n'])))
     }
 
     pub fn init(dir: &Path) -> Result<Git> {
@@ -372,7 +377,10 @@ impl Git {
         }
         .map(String::from);
         st.stashes = self.stashes();
-        st.last_fetched = std::fs::metadata(git_dir.join("FETCH_HEAD"))
+        // In a linked worktree `.git` is a file and the git dir is `<main>/.git/worktrees/<name>`;
+        // FETCH_HEAD stays in the shared one, which `commondir` points at.
+        let common_dir = std::fs::read_to_string(git_dir.join("commondir")).map(|rel| git_dir.join(rel.trim())).unwrap_or_else(|_| git_dir.clone());
+        st.last_fetched = std::fs::metadata(common_dir.join("FETCH_HEAD"))
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -415,7 +423,8 @@ impl Git {
     /// Working tree (and index) against HEAD for one file.
     pub fn diff_worktree(&self, path: &str, old_path: Option<&str>, status: &str) -> Result<DiffResult> {
         let text = if status == "untracked" || !self.has_commits() {
-            // `--no-index` exits 1 when the files differ, which is always.
+            // `--no-index` exits 1 when the files differ, which is always. Git reads the
+            // literal name `/dev/null` as "no file" on every platform, Windows included.
             self.run_ok(&["diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", path], &[1])?
         } else {
             let mut args = vec!["diff", "--no-color", "--no-ext-diff", "-M", "HEAD", "--"];
@@ -923,7 +932,8 @@ fn split_remote(remote: &str) -> Option<(String, String)> {
     } else {
         // scp style: user@host:path
         let (left, path) = r.split_once(':')?;
-        if left.contains('/') {
+        // `C:\repos\thing` and `C:/repos/thing` are folders on Windows, not a host called "c".
+        if left.contains('/') || (left.len() == 1 && left.chars().all(|c| c.is_ascii_alphabetic())) {
             return None;
         }
         (left.rsplit_once('@').map(|(_, h)| h).unwrap_or(left), path)
@@ -991,9 +1001,9 @@ pub fn host(remote: &str) -> Option<Host> {
 
 /// The folder name a clone of `url` gets.
 pub fn repo_name(url: &str) -> String {
-    let u = url.trim().trim_end_matches('/');
+    let u = url.trim().trim_end_matches(['/', '\\']);
     let u = u.strip_suffix(".git").unwrap_or(u);
-    u.rsplit(['/', ':']).next().unwrap_or("repository").to_string()
+    u.rsplit(['/', ':', '\\']).next().unwrap_or("repository").to_string()
 }
 
 #[cfg(test)]
@@ -1011,8 +1021,13 @@ mod tests {
         git(&dir, &["config", "user.name", "Test"]);
         git(&dir, &["config", "user.email", "test@example.com"]);
         git(&dir, &["config", "commit.gpgsign", "false"]);
+        // Git for Windows turns LF into CRLF on checkout by default; the tests compare file contents.
+        git(&dir, &["config", "core.autocrlf", "false"]);
         dir
     }
+
+    /// A file name full of pathspec magic. `*` cannot be in a file name on Windows; brackets can.
+    const ODD: &str = if cfg!(windows) { "b [1].txt" } else { "b *.txt" };
 
     #[test]
     fn web_urls() {
@@ -1038,8 +1053,13 @@ mod tests {
         let other = host("ssh://git@host.example:2222/owner/repo.git").unwrap();
         assert_eq!((other.provider.as_str(), other.web.as_str(), other.issues.is_none()), ("other", "https://host.example/owner/repo", true));
         assert_eq!(host("/local/path"), None);
+        assert_eq!(host(r"C:\repos\thing.git"), None, "a drive letter is not a host");
+        assert_eq!(host("C:/repos/thing.git"), None);
+        assert_eq!(host("file:///srv/git/thing.git"), None);
         assert_eq!(repo_name("git@github.com:owner/repo.git"), "repo");
         assert_eq!(repo_name("https://github.com/owner/thing/"), "thing");
+        assert_eq!(repo_name(r"C:\repos\thing.git"), "thing");
+        assert_eq!(repo_name(r"C:\repos\thing\"), "thing");
     }
 
     #[test]
@@ -1047,7 +1067,7 @@ mod tests {
         let dir = scratch("flow");
         let g = Git::at(&dir);
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
-        std::fs::write(dir.join("b *.txt"), "two\n").unwrap();
+        std::fs::write(dir.join(ODD), "two\n").unwrap();
 
         let st = g.status().unwrap();
         assert!(!st.has_commits);
@@ -1059,10 +1079,10 @@ mod tests {
         let st = g.status().unwrap();
         assert!(st.has_commits);
         assert_eq!(st.files.len(), 1, "only the unselected file is left");
-        assert_eq!(st.files[0].path, "b *.txt");
+        assert_eq!(st.files[0].path, ODD);
         assert_eq!(st.undo.as_ref().map(|u| u.summary.as_str()), Some("Add a"));
 
-        g.commit(&["b *.txt".into()], "Add b", "Body text", false).unwrap();
+        g.commit(&[ODD.into()], "Add b", "Body text", false).unwrap();
         let log = g.log(0, 10).unwrap();
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].summary, "Add b");
@@ -1071,7 +1091,7 @@ mod tests {
         let files = g.commit_files(&log[0].hash).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].status, "added");
-        assert!(g.diff_commit(&log[0].hash, "b *.txt", None).unwrap().text.contains("+two"));
+        assert!(g.diff_commit(&log[0].hash, ODD, None).unwrap().text.contains("+two"));
         assert_eq!(g.commit_files(&log[1].hash).unwrap()[0].path, "a.txt", "root commit lists its files");
 
         let undone = g.undo_commit().unwrap();
@@ -1084,11 +1104,42 @@ mod tests {
         let st = g.status().unwrap();
         assert_eq!(st.files.len(), 2);
         assert!(g.diff_worktree("a.txt", None, "modified").unwrap().text.contains("+changed"));
-        g.discard(&[FileRef { path: "a.txt".into(), old_path: None }, FileRef { path: "b *.txt".into(), old_path: None }]).unwrap();
+        g.discard(&[FileRef { path: "a.txt".into(), old_path: None }, FileRef { path: ODD.into(), old_path: None }]).unwrap();
         assert!(g.status().unwrap().files.is_empty());
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
-        assert!(!dir.join("b *.txt").exists());
+        assert!(!dir.join(ODD).exists());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn toplevel_is_spelled_natively() {
+        let dir = scratch("toplevel");
+        std::fs::create_dir_all(dir.join("deep").join("er")).unwrap();
+        let top = Git::toplevel(&dir.join("deep").join("er")).unwrap();
+        // Git prints its own idea of the path (forward slashes on Windows, the real path
+        // behind a symlinked temp dir on macOS); it must name the same folder all the same.
+        assert!(crate::paths::same(&top, &dir), "{} is {}", top.display(), dir.display());
+        let text = top.to_string_lossy();
+        assert_eq!(text.contains('/'), !cfg!(windows), "{text}");
+        assert_eq!(crate::paths::native(&top), top);
+        assert!(Git::toplevel(&std::env::temp_dir().join("studio-test-no-such-folder")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn long_stdin_does_not_stall() {
+        let dir = scratch("stdin");
+        let g = Git::at(&dir);
+        std::fs::write(dir.join(".gitignore"), "*.tmp\n").unwrap();
+        // About a megabyte in and as much out: far more than any pipe holds, so this only
+        // finishes if input is written while output is read.
+        let paths: Vec<String> = (0..20_000).map(|i| format!("some/folder/with/a/long/name/file-number-{i}.tmp")).collect();
+        let ignored = g.ignored(&paths);
+        assert_eq!(ignored.len(), paths.len());
+        assert_eq!(ignored[19_999], paths[19_999]);
+        assert!(g.ignored(&["kept.txt".to_string()]).is_empty());
+        assert!(g.ignored(&[]).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -31,6 +31,15 @@ pub struct FileContent {
     pub size: u64,
 }
 
+/// Whether a file name is `.git`, or one of the other names Windows opens `.git` by:
+/// trailing dots and spaces are dropped there, `name:stream` reaches the same file, and
+/// `GIT~1` is its 8.3 short name. Git refuses all of these as well (`core.protectNTFS`).
+fn is_dot_git(name: &str) -> bool {
+    let name = name.split(':').next().unwrap_or_default().trim_end_matches(['.', ' ']);
+    let short_name = matches!((name.get(..4), name.get(4..)), (Some(head), Some(tail)) if head.eq_ignore_ascii_case("git~") && !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()));
+    name.eq_ignore_ascii_case(".git") || short_name
+}
+
 /// Turn a repository-relative path into a real one, refusing anything that is not
 /// plainly inside the repository (absolute paths, `..`, `.git`, symlinks leading out).
 fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
@@ -40,7 +49,7 @@ fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
     for part in rel_path.components() {
         match part {
             Component::Normal(name) => {
-                if first && name.to_string_lossy().eq_ignore_ascii_case(".git") {
+                if first && is_dot_git(&name.to_string_lossy()) {
                     return Err(outside());
                 }
                 first = false;
@@ -192,10 +201,19 @@ mod tests {
         std::fs::write(&outside, "secret").unwrap();
         std::fs::write(g.dir.join("ok.txt"), "ok").unwrap();
 
-        for bad in ["../x", "/etc/passwd", ".git/config", ".GIT/config", "a/../../x", "./ok.txt"] {
+        // The last few are other names for `.git` on Windows; they are refused everywhere, as git does.
+        for bad in ["../x", "/etc/passwd", ".git/config", ".GIT/config", "a/../../x", "./ok.txt", ".git./config", ".git /config", ".git::$INDEX_ALLOCATION/config", "GIT~1/config", "git~1/config"] {
             assert!(read_file(&g, bad).is_err(), "{bad}");
             assert!(write_file(&g, bad, "x").is_err(), "{bad}");
         }
+        // Windows-only ways out of the folder, harmless names elsewhere.
+        #[cfg(windows)]
+        for bad in [r"..\x", r"C:\Windows\win.ini", "C:ok.txt", r"\\?\C:\Windows\win.ini", r"sub\..\..\x"] {
+            assert!(read_file(&g, bad).is_err(), "{bad}");
+            assert!(write_file(&g, bad, "x").is_err(), "{bad}");
+        }
+        assert!(!is_dot_git(".gitignore") && !is_dot_git(".github") && !is_dot_git("git~x") && !is_dot_git("git") && !is_dot_git("gitélan"));
+        assert_eq!(read_file(&g, "ok.txt").unwrap().text, "ok");
         assert!(list_dir(&g, ".git").is_err());
         assert!(list_dir(&g, "..").is_err());
 

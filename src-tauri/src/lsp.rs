@@ -146,7 +146,7 @@ pub async fn lsp_send(lsp: State<'_, Lsp>, key: String, message: serde_json::Val
 #[tauri::command]
 pub async fn lsp_stop(lsp: State<'_, Lsp>, key: String) -> Result<()> {
     if let Some(mut server) = lsp.servers.lock().unwrap().remove(&key) {
-        let _ = server.child.kill();
+        crate::proc::kill_tree(&mut server.child);
     }
     Ok(())
 }
