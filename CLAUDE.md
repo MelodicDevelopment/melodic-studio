@@ -16,6 +16,9 @@ src-tauri/src/
   worktree.rs   git worktrees (`<repo>.worktrees/<branch>` beside the repository) + the "active checkout" commands
   agent.rs      agent sessions: runs the user's `claude` CLI headless in a checkout, streams its stream-json events
   lsp.rs        starts an installed language server in the active checkout and relays its JSON-RPC messages
+  host_cli.rs   the host through the user's own gh / az (+ azure-devops extension) / glab: tool status, issues and work
+                items, pull request context/create, new remote repositories. Every call has a timeout. Tests parse
+                captured CLI output; `cargo test live_read_only -- --ignored` runs read-only calls against the real tools.
 src/
   services/backend.service.ts   the ONLY place that calls invoke(); in-memory demo backend for the browser preview
   services/repo.store.ts        all app state as signals + every action; components read signals in templates
@@ -32,12 +35,18 @@ src/
   services/lsp.service.ts       LSP client; attaches itself to Monaco when the Files tab first opens
   components/agents     sidebar "Agents" tab, the session transcript pane, the worktree banner, their dialogs
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
+  services/host.store.ts        issues list, "start agent on this", the pull request draft; opens the two dialogs below
+  components/host       Issues / work items dialog and the Create pull request dialog (HostStore.openIssues() / openPr())
+  services/demo-host.ts         demo issues, pull request and host tools for the browser preview (?host=missing|signed-out)
   styles/global.css     theme: --ml-* overrides + --ms-* tokens, light on :root, dark on :root[data-theme='dark']
 ```
 
 ## Decisions (do not regress)
 
-- All git work shells out to the user's `git`, so SSH agent, credential helpers, hooks and signing just work. No host API calls, no stored tokens. Web links (issues, pull requests, commits) are built from the remote URL and opened in the browser.
+- All git work shells out to the user's `git`, so SSH agent, credential helpers, hooks and signing just work. No stored tokens, and the app itself calls no host API. Web links (issues, pull requests, commits) are built from the remote URL and opened in the browser.
+- Host data (issues, work items, pull requests, new repositories) comes only through the command-line tool the user has signed in to: `gh`, `az` with the azure-devops extension, `glab` (`host_cli.rs`). When the tool is missing or signed out the UI says exactly what to install or run and falls back to the web page. Arguments are separate argv entries in `--flag=value` form (never a shell line); long text goes on stdin (`gh --body-file=-`) or through a temp file (`az --flag=@file`, which also keeps `az.cmd` quoting out of it); names starting with `-` or `@` are refused. Nothing is installed for the user (`AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no`).
+- Text from the host (issue bodies, titles, labels) is untrusted: shown as plain text only (work item HTML is reduced to text in Rust), never as HTML. In an agent's task it is fenced and labelled as a description, and the user edits the task before starting.
+- Publishing happens only on an explicit click: `pr_create` from the Create button of the pull request dialog (which refuses until the branch is fully pushed), `host_repo_create` from the new-repository flow. Never as a side effect of anything else. `host_open` opens only https pages on the repository's own host.
 - `GIT_LITERAL_PATHSPECS=1` on every call so file names are never read as globs. `git stash` breaks under it; those calls use `run_magic`.
 - Commit model is GitHub Desktop's: the checked files are the commit. `commit()` resets the index (except mid-merge), adds exactly the selected paths via `--pathspec-from-file`, then commits.
 - Undo/amend are only offered while the tip commit is on no remote. Force push is `--force-with-lease`, offered only after a rejected push.
@@ -57,6 +66,7 @@ src/
 - Never import `@tauri-apps/*` at module top level; lazy-import inside `isDesktop()` checks.
 - No hard-coded colors in component styles; use `--ml-*` or `--ms-*`.
 - New backend command: add to `git.rs` (with a test), `commands.rs`, the handler list in `lib.rs`, `backend.service.ts` (plus a demo case), then a store action.
+- AI one-shots: the pull request draft is `AiService.ask` with tag `[pull-request]`, no tools, input cut to size in Rust (`pr_changes`); it must answer `{"title","body"}` and falls back to a draft from the commit subjects when Claude is unavailable.
 - Commits: author as Rick only. No AI attribution trailers.
 
 ## Run
@@ -71,4 +81,6 @@ npm run icon            # regenerate icons from icon-source.svg
 
 ## Status / next
 
-Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+
+Host integration: the GitHub path was run against the real `gh` (status, issue list and search, default branch, owners; `gh pr create --dry-run` for the arguments). Azure DevOps was exercised only as far as a signed-out `az` allows (status and the sign-in hint); its work item, pull request and repository output is parsed from the extension's source and documented shapes. `glab` was not installed, so GitLab is parsed from the documented API output only. No pull request or repository has been created for real on any host.

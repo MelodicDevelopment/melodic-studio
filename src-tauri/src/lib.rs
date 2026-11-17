@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod files;
 mod git;
+mod host_cli;
 mod lsp;
 mod paths;
 mod proc;
@@ -91,6 +92,17 @@ pub fn run() {
             commands::list_dir,
             commands::read_file,
             commands::write_file,
+            host_cli::issues_status,
+            host_cli::issues_list,
+            host_cli::pr_context,
+            host_cli::pr_changes,
+            host_cli::pr_existing,
+            host_cli::pr_create,
+            host_cli::pr_web_url,
+            host_cli::host_open,
+            host_cli::host_clis,
+            host_cli::host_owners,
+            host_cli::host_repo_create,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Melodic Studio");

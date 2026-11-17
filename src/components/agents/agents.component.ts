@@ -4,6 +4,7 @@ import { html, css } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
 import { AgentsStore, branchFor, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
+import { HostStore } from '../../services/host.store';
 import type { AgentMode, Worktree } from '../../services/backend.service';
 import { fileName, plural, relativeTime } from '../../shared/format';
 
@@ -27,6 +28,7 @@ export const AGENT_MODES = [
 		return html`
 			<div class="head">
 				<span class="grow">${plural(sessions.length, 'agent')}</span>
+				${self.repos.status()?.host?.issues ? html`<ml-button variant="outline" size="xs" title="Start an agent on an issue from the host" @ml:click=${() => self.host.openIssues()}><ml-icon slot="icon-start" icon="list-checks"></ml-icon>${self.repos.status()?.host?.issuesLabel ?? 'Issues'}</ml-button>` : ''}
 				<ml-button variant="primary" size="xs" ?disabled=${agents.cli() === null} @ml:click=${() => self.openNew()}><ml-icon slot="icon-start" icon="plus"></ml-icon>New task</ml-button>
 			</div>
 			<div class="list">
@@ -286,6 +288,7 @@ export const AGENT_MODES = [
 export class AgentsComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
+	@Service(HostStore) readonly host!: HostStore;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
 
 	task = '';

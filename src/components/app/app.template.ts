@@ -96,12 +96,15 @@ function noChanges(self: AppComponent) {
 								<button class="card" @click=${() => store.openIn('issues')}>
 									<ml-icon icon="list-checks" size="md"></ml-icon><span><b>Open ${st.host.issuesLabel.toLowerCase()}</b><small>See what is waiting on ${st.host.name}</small></span>
 								</button>
+								<button class="card" @click=${() => self.host.openIssues()}>
+									<ml-icon icon="robot" size="md"></ml-icon><span><b>Start an agent on one of the ${st.host.issuesLabel.toLowerCase()}</b><small>Pick one here and Claude works on it in its own branch</small></span>
+								</button>
 							`
 							: ''}
 						${st.host.pulls && st.upstream && !st.detached
 							? html`
-								<button class="card" @click=${() => store.openIn('new-pull')}>
-									<ml-icon icon="git-pull-request" size="md"></ml-icon><span><b>Create a ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')}</b><small>From ${st.branch}</small></span>
+								<button class="card ${self.host.suggestPr() === st.branch ? 'primary' : ''}" @click=${() => self.host.openPr()}>
+									<ml-icon icon="git-pull-request" size="md"></ml-icon><span><b>Create a ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')}</b><small>${self.host.suggestPr() === st.branch ? `${st.branch} is pushed and has none yet` : `From ${st.branch}, with a description drafted by Claude`}</small></span>
 								</button>
 							`
 							: ''}
@@ -228,5 +231,6 @@ export function appTemplate(self: AppComponent) {
 							</div>
 						`}
 		<ms-dialogs></ms-dialogs>
+		<ms-host-dialogs></ms-host-dialogs>
 	`;
 }

@@ -5,6 +5,7 @@
  */
 import { Injectable } from '@melodicdev/core/injection';
 import { demoListDir, demoReadFile, demoWriteFile } from './demo-files';
+import { demoHost, demoPullRequestAnswer } from './demo-host';
 
 export function isDesktop(): boolean {
 	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -141,6 +142,77 @@ export interface FileContent {
 	tooLarge: boolean;
 	size: number;
 }
+/** The command-line tool that serves the remote's host (gh, az, glab) and whether it can be used right now. */
+export interface HostCliStatus {
+	provider: Host['provider'];
+	hostName: string;
+	issuesLabel: string;
+	pullsLabel: string;
+	tool: 'gh' | 'az' | 'glab' | null;
+	installed: boolean;
+	/** Installed, complete and signed in. */
+	signedIn: boolean;
+	/** What to install or run when it cannot be used. */
+	hint: string | null;
+}
+/** An issue (GitHub, GitLab) or work item (Azure DevOps). `body` is untrusted text: show it as text, never as HTML. */
+export interface HostIssue {
+	id: string;
+	title: string;
+	body: string;
+	url: string;
+	labels: string[];
+	assignee: string | null;
+	state: string;
+	updated: string;
+	/** `issue`, or the work item type (Bug, Task, User Story). */
+	kind: string;
+}
+export interface PrContext {
+	/** Empty on a detached HEAD. */
+	branch: string;
+	base: string;
+	bases: string[];
+	/** The branch is on the remote under its own name. */
+	onRemote: boolean;
+	unpushed: number;
+}
+export interface PrChanges {
+	count: number;
+	subjects: string[];
+	log: string;
+	stat: string;
+}
+export interface PullRequestRef {
+	id: string;
+	title: string;
+	url: string;
+}
+/** The host's "new pull request" page, and how much of the draft its address carries. */
+export interface PrWebUrl {
+	url: string;
+	title: boolean;
+	body: boolean;
+}
+/** One host's command-line tool, for creating a repository before any exists locally. */
+export interface HostCli {
+	provider: 'github' | 'azure' | 'gitlab';
+	name: string;
+	cli: string;
+	installed: boolean;
+	signedIn: boolean;
+	account: string | null;
+	hint: string | null;
+}
+/** Where a new repository can go: an account, organization, group or Azure DevOps project. */
+export interface HostOwner {
+	id: string;
+	label: string;
+}
+export interface HostRepo {
+	webUrl: string;
+	remoteUrl: string;
+}
 export type OpenTarget = 'finder' | 'editor' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
 export type ResetMode = 'soft' | 'mixed' | 'hard';
 export interface AppError {
@@ -239,6 +311,23 @@ export class BackendService {
 	readFile(id: string, path: string) { return this.call<FileContent>('read_file', { id, path }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
 	writeFile(id: string, path: string, text: string, root: string) { return this.call<void>('write_file', { id, path, text, root }); }
+
+	// ---- the host, through the user's own gh / az / glab ----
+	issuesStatus(id: string) { return this.call<HostCliStatus>('issues_status', { id }); }
+	issuesList(id: string, query: string) { return this.call<HostIssue[]>('issues_list', { id, query }); }
+	prContext(id: string) { return this.call<PrContext>('pr_context', { id }); }
+	prChanges(id: string, base: string) { return this.call<PrChanges>('pr_changes', { id, base }); }
+	async prExisting(id: string) { return (await this.call<PullRequestRef | null | undefined>('pr_existing', { id })) ?? null; }
+	/** Publishes a pull request. Only the dialog's Create button calls this. */
+	prCreate(id: string, title: string, body: string, base: string, draft: boolean) { return this.call<PullRequestRef>('pr_create', { id, title, body, base, draft }); }
+	prWebUrl(id: string, title: string, body: string, base: string) { return this.call<PrWebUrl>('pr_web_url', { id, title, body, base }); }
+	/** Open an issue or pull request page; the native side only opens pages on the repository's own host. */
+	hostOpen(id: string, url: string) { return this.call<void>('host_open', { id, url }); }
+	hostClis() { return this.call<HostCli[]>('host_clis'); }
+	/** `org` is the Azure DevOps organization (name or URL); the other hosts ignore it. */
+	hostOwners(provider: HostCli['provider'], org: string | null = null) { return this.call<HostOwner[]>('host_owners', { provider, org }); }
+	/** Creates the remote repository only: nothing is pushed and no local repository changes. For Azure DevOps `owner` is the project. */
+	hostRepoCreate(provider: HostCli['provider'], name: string, owner: string | null, isPrivate: boolean, org: string | null = null) { return this.call<HostRepo>('host_repo_create', { provider, name, owner, private: isPrivate, org }); }
 }
 
 // ---- browser-only stand-in --------------------------------------------------
@@ -333,6 +422,8 @@ function demoCommit(n: number, summary: string, minutesAgo: number, extra: Parti
 function demoAnswer(prompt: string): string {
 	const tag = /^\[([a-z-]+)\]/.exec(prompt)?.[1] ?? '';
 	switch (tag) {
+		case 'pull-request':
+			return demoPullRequestAnswer();
 		default:
 			return 'This is the browser preview, so there is no Claude here. In the desktop app the answer appears in this spot.';
 	}
@@ -599,6 +690,18 @@ class DemoBackend {
 				return demoReadFile(String(args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
+			case 'issues_status':
+			case 'issues_list':
+			case 'pr_context':
+			case 'pr_changes':
+			case 'pr_existing':
+			case 'pr_create':
+			case 'pr_web_url':
+			case 'host_open':
+			case 'host_clis':
+			case 'host_owners':
+			case 'host_repo_create':
+				return demoHost(cmd, args, { empty, branch: this.branch, unpushed: this.ahead, onRemote: !!this.branchList.find((b) => b.isCurrent)?.upstream, remoteBranches: this.branchList.filter((b) => b.isRemote).map((b) => b.name.replace(/^[^/]+\//, '')), subjects: this.commits.filter((c) => c.unpushed || c.refs.some((r) => r.startsWith('origin/feature'))).map((c) => c.summary) });
 			default:
 				return;
 		}
