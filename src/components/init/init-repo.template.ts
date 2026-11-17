@@ -76,7 +76,7 @@ function remote(self: InitRepoComponent) {
 					${self.where === 'azure' ? '' : html`<ml-checkbox label="Private" hint="Only you and people you invite can see it." .checked=${self.isPrivate} @ml:change=${(e: CustomEvent) => (self.isPrivate = e.detail.checked)}></ml-checkbox>`}
 				`
 				: html`
-					${cli?.hint ? html`<p class="warn"><ml-icon icon="info" size="sm"></ml-icon><span>To create it from here: ${cli.hint}. Until then, create it on ${host.label} and paste its URL.</span></p>` : ''}
+					${cli?.hint ? html`<p class="warn"><ml-icon icon="info" size="sm"></ml-icon><span>To create it from here: ${cli.hint} Until then, create it on ${host.label} and paste its URL.</span></p>` : ''}
 					${host.createPage
 						? html`<ml-button variant="outline" @ml:click=${() => self.openCreatePage(host.createPage!)}><ml-icon slot="icon-start" icon="arrow-square-out"></ml-icon>Create it on ${host.label}</ml-button>`
 						: html`<p class="hint">Create an empty repository on your git host, then paste its URL.</p>`}
