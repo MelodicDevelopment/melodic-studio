@@ -14,7 +14,8 @@ src-tauri/src/
   error.rs      AppError -> {kind, message, paths}; kind: conflict | auth | git | error
   init.rs       turning a plain folder into a repository: inspect it, then git init with the wizard's choices
                 (default branch, .gitignore templates, README, first commit, per-repository identity)
-  dev.rs        debug builds only: STUDIO_DEV_EVAL runs a script file in the window, dev_log sends lines back
+  dev.rs        debug builds only: STUDIO_DEV_EVAL runs a script file in the window, dev_log sends lines back;
+                `server` starts Vite when a dev build is opened without it (cfg(dev)) and stops it on exit
   paths.rs      how absolute paths are spelled and compared (native / same / typed), and the PATH fix for
                 GUI-launched apps so git, ssh and claude resolve
   proc.rs       the only way to start a process (command), stop one (kill_tree), or hand off to the user's
@@ -99,6 +100,7 @@ src/
 - Repository tabs (`RepoStore.repoTabs`, localStorage `studio.repo-tabs`): `selectRepo(id)` switches in the current tab, `selectRepo(id, true)` / `openRepoTab` opens another. Each tab's view (sidebar tab, selected file, pinned diff tabs, unchecked files, draft message) is kept in memory by `keepView`/`restoreView`. The strip, not the toolbar, takes the macOS traffic-light padding while it is visible.
 - Opening a folder always goes through `InitService.open(path)`: a repository is added, anything else starts the setup wizard. The wizard never overwrites: .gitignore is appended to, an existing README is kept, and a folder inside another repository is refused. Creating the remote uses `host_repo_create` (the user's gh / az / glab), then the normal publish.
 - macOS dev builds run from `target/debug/Melodic Studio.app` (cargo runner `scripts/dev-app.sh`, set in `src-tauri/.cargo/config.toml`), because a bare binary shows in the Dock under its file name. The runner passes everything except the app binary straight through, so `cargo test` is unaffected.
+- A dev build (`cfg(dev)`) has no pages of its own, only `build.devUrl`. Opened without `npm run desktop:dev` (that bundle's Dock icon, Finder, `cargo run`) it used to be a white window; now `dev.rs` checks the address at startup and, when nothing answers, runs `node node_modules/vite/bin/vite.js` in the project (found through `CARGO_MANIFEST_DIR`), shows a plain page meanwhile or the reason it failed, and navigates to the app once the port answers. Vite is stopped on `RunEvent::Exit`, not a window event: quitting from the Dock or with Cmd+Q sends no `Destroyed`. Release builds contain none of this.
 - A component's first render must not be a bare ``html`` `` if it will ever show something else (Melodic never leaves an empty first template): render a hidden placeholder, or `nothing()` from `components/ai/ai-entry.ts`.
 
 - `[profile.release.build-override] strip = false` in Cargo.toml is load-bearing: with a macOS deployment target of 13+ (ours is 14) recent Xcode's `strip` corrupts proc-macro libraries and the release build fails with "mis-aligned LINKEDIT string pool".
@@ -196,7 +198,7 @@ npm run icon            # regenerate icons from icon-source.svg
 
 ## Status / next
 
-Checked on macOS three ways: unit and integration tests (57 Rust tests against real git and ptys, 8 more ignored ones against real language servers and host CLIs, 5 TypeScript tests), the browser preview with the demo backend, and the real desktop window driven by script (`STUDIO_DEV_EVAL`, see `src-tauri/src/dev.rs`) with screenshots.
+Checked on macOS three ways: unit and integration tests (59 Rust tests against real git and ptys, 8 more ignored ones against real language servers and host CLIs, 5 TypeScript tests), the browser preview with the demo backend, and the real desktop window driven by script (`STUDIO_DEV_EVAL`, see `src-tauri/src/dev.rs`) with screenshots.
 
 Run for real in the desktop window: add repository, status, diff, commit, push, history, branches, stash, worktrees, Files tab, the setup wizard through to a push, repository tabs, the terminal against a real shell, an agent session end to end (task, edit in its worktree, review, commit, merge, cleanup), one-shot AI (commit message, explain, review before push), Ask the repository, TypeScript hover and go-to-definition through the managed server, host tools (gh sign-in, owners, live issue list).
 

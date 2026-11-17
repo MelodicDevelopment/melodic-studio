@@ -136,6 +136,12 @@ pub fn run() {
             host_cli::host_repo_create,
         ])
         .on_window_event(terminal::on_window_event)
-        .run(tauri::generate_context!())
-        .expect("error while running Melodic Studio");
+        .build(tauri::generate_context!())
+        .expect("error while running Melodic Studio")
+        .run(|app, event| {
+            // Quitting (Cmd+Q, the Dock) ends the app without a window event, so this is the one place every exit passes.
+            if matches!(event, tauri::RunEvent::Exit) {
+                dev::stop(app);
+            }
+        });
 }
