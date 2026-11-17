@@ -165,7 +165,8 @@ pub async fn agent_start(
 #[tauri::command]
 pub async fn agent_stop(agents: State<'_, Agents>, key: String) -> Result<()> {
     if let Some(child) = agents.running.lock().unwrap().get(&key) {
-        let _ = child.lock().unwrap().kill();
+        // The whole tree: on Windows `claude` is a .cmd shim, and killing that leaves node running.
+        crate::proc::kill_tree(&mut child.lock().unwrap());
     }
     Ok(())
 }

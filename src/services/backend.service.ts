@@ -13,7 +13,11 @@ export function isDesktop(): boolean {
 }
 
 export function isMac(): boolean {
-	return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+	return typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
+}
+
+export function isWindows(): boolean {
+	return typeof navigator !== 'undefined' && /Win(dows|32|64)/i.test(navigator.platform || navigator.userAgent);
 }
 
 export interface RepoSummary {

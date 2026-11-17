@@ -1,0 +1,7 @@
+# One set of line endings in every checkout. Git for Windows would otherwise hand out CRLF,
+# which changes multi-line strings in the source and the files the tests compare.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary

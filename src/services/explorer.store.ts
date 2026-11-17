@@ -9,6 +9,7 @@ import { signal, computed } from '@melodicdev/core/signals';
 import { BackendService, type FileContent, type TreeEntry } from './backend.service';
 import { RepoStore } from './repo.store';
 import { loadMonaco } from '../shared/monaco';
+import { joinPath } from '../shared/paths';
 
 export interface OpenFile {
 	path: string;
@@ -273,7 +274,7 @@ export class ExplorerStore {
 			}
 			if (!buf.model) {
 				// The real path gives Monaco the file's language, and keeps two repositories' files apart.
-				const uri = monaco.Uri.file(`${id}/${path}`);
+				const uri = monaco.Uri.file(joinPath(id, path));
 				const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(buf.disk, undefined, uri);
 				buf.model = model;
 				buf.savedVersion = model.getAlternativeVersionId();

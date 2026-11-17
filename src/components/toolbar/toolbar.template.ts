@@ -59,7 +59,7 @@ function contextMenu(self: ToolbarComponent) {
 					<div class="ctx-sep"></div>
 					${current && !host ? '' : html`<div class="ctx-item" @click=${() => store.openIn('remote', null, r.id)}><ml-icon icon=${current ? hostIcon(host!.provider) : 'globe'} size="sm"></ml-icon>${current ? `View on ${host!.name}` : 'View in browser'}</div>`}
 					<div class="ctx-item" @click=${() => store.openIn('terminal', null, r.id)}><ml-icon icon="terminal-window" size="sm"></ml-icon>Open in terminal</div>
-					<div class="ctx-item" @click=${() => store.openIn('finder', null, r.id)}><ml-icon icon="folder-open" size="sm"></ml-icon>${self.mac ? 'Reveal in Finder' : 'Show in file manager'}</div>
+					<div class="ctx-item" @click=${() => store.openIn('finder', null, r.id)}><ml-icon icon="folder-open" size="sm"></ml-icon>${self.reveal}</div>
 					<div class="ctx-item" @click=${() => store.openIn('editor', null, r.id)}><ml-icon icon="code" size="sm"></ml-icon>Open in editor</div>
 				`}
 			<div class="ctx-sep"></div>
