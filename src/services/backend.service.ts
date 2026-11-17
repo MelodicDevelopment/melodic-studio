@@ -79,8 +79,17 @@ export interface AppStatus {
 	gitVersion: string | null;
 	authorName: string;
 	authorEmail: string;
-	editor: string;
 	appVersion: string;
+}
+/** Who commits: git's user.name and user.email at one level of its config. */
+export interface Identity {
+	name: string;
+	email: string;
+}
+export interface Identities {
+	global: Identity;
+	/** The repository's own identity, when it overrides the global one. */
+	repo: Identity | null;
 }
 export type FileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
 export interface FileChange {
@@ -103,7 +112,14 @@ export interface Stash {
 	message: string;
 	date: string;
 }
-export type Operation = 'merge' | 'rebase' | 'cherry-pick' | 'revert';
+export type Operation = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'squash';
+export type RebaseAction = 'pick' | 'reword' | 'squash' | 'fixup' | 'drop';
+/** One line of an interactive rebase. `message` replaces the message of the commit a pick/reword starts (with the squash/fixup lines after it). */
+export interface RebaseStep {
+	hash: string;
+	action: RebaseAction;
+	message: string | null;
+}
 export interface RepoStatus {
 	branch: string;
 	detached: boolean;
@@ -114,6 +130,8 @@ export interface RepoStatus {
 	behind: number;
 	remote: string | null;
 	remoteUrl: string | null;
+	/** The remote's default branch (no remote prefix), when known. */
+	defaultBranch: string | null;
 	host: Host | null;
 	files: FileChange[];
 	mergeInProgress: boolean;
@@ -141,6 +159,12 @@ export interface Branch {
 	isCurrent: boolean;
 	upstream: string | null;
 	date: string;
+}
+/** How the current branch stands against another: commits only it has (`ahead`) and only the other has (`behind`). */
+export interface BranchCompare {
+	name: string;
+	ahead: number;
+	behind: number;
 }
 export interface DiffResult {
 	text: string;
@@ -280,7 +304,7 @@ export interface LanguageServer {
 	/** For servers the app cannot install: the command that does. */
 	hint: string | null;
 }
-export type OpenTarget = 'finder' | 'editor' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
+export type OpenTarget = 'finder' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
 export type ResetMode = 'soft' | 'mixed' | 'hard';
 export interface AppError {
 	kind: 'conflict' | 'auth' | 'git' | 'error';
@@ -329,7 +353,11 @@ export class BackendService {
 	opContinue(id: string) { return this.call<void>('op_continue', { id }); }
 	opAbort(id: string) { return this.call<void>('op_abort', { id }); }
 	revertCommit(id: string, hash: string) { return this.call<void>('revert_commit', { id, hash }); }
-	cherryPick(id: string, hash: string) { return this.call<void>('cherry_pick', { id, hash }); }
+	/** Oldest first. */
+	cherryPick(id: string, hashes: string[]) { return this.call<void>('cherry_pick', { id, hashes }); }
+	/** Commits an interactive rebase on `upstream` would replay, oldest first; `null` is the whole branch. */
+	rebasePlan(id: string, upstream: string | null) { return this.call<Commit[]>('rebase_plan', { id, upstream }); }
+	rebaseInteractive(id: string, upstream: string | null, steps: RebaseStep[]) { return this.call<void>('rebase_interactive', { id, upstream, steps }); }
 	resetTo(id: string, hash: string, mode: ResetMode) { return this.call<void>('reset_to', { id, hash, mode }); }
 	checkoutCommit(id: string, hash: string) { return this.call<void>('checkout_commit', { id, hash }); }
 	createTag(id: string, name: string, hash: string, push: boolean) { return this.call<void>('tag_create', { id, name, hash, push }); }
@@ -339,6 +367,9 @@ export class BackendService {
 	discard(id: string, files: FileChange[]) { return this.call<void>('discard_changes', { id, files: files.map((f) => ({ path: f.path, oldPath: f.oldPath })) }); }
 	undoCommit(id: string) { return this.call<UndoneCommit>('undo_commit', { id }); }
 	history(id: string, skip: number, limit: number) { return this.call<Commit[]>('history', { id, skip, limit }); }
+	/** `ahead` false: commits `branch` has that HEAD lacks (what merging it brings in); true: the other way round. */
+	compareHistory(id: string, branch: string, ahead: boolean, skip: number, limit: number) { return this.call<Commit[]>('compare_history', { id, branch, ahead, skip, limit }); }
+	compareCounts(id: string, branches: string[]) { return this.call<BranchCompare[]>('compare_counts', { id, branches }); }
 	commitFiles(id: string, hash: string) { return this.call<FileChange[]>('commit_files', { id, hash }); }
 	commitDiff(id: string, hash: string, file: FileChange) { return this.call<DiffResult>('commit_diff', { id, hash, path: file.path, oldPath: file.oldPath }); }
 	branches(id: string) { return this.call<Branch[]>('branches', { id }); }
@@ -347,12 +378,17 @@ export class BackendService {
 	deleteBranch(id: string, name: string, force: boolean) { return this.call<void>('branch_delete', { id, name, force }); }
 	renameBranch(id: string, from: string, to: string) { return this.call<void>('branch_rename', { id, from, to }); }
 	merge(id: string, from: string) { return this.call<string>('merge_branch', { id, from }); }
+	/** Everything `from` brings, as one new commit with `message`. */
+	mergeSquash(id: string, from: string, message: string) { return this.call<void>('merge_squash', { id, from, message }); }
 	fetch(id: string) { return this.call<void>('fetch', { id }); }
 	pull(id: string) { return this.call<void>('pull', { id }); }
 	push(id: string, force = false) { return this.call<void>('push', { id, force }); }
 	setRemote(id: string, url: string) { return this.call<void>('remote_set', { id, url }); }
+	/** The global identity, plus repository `id`'s override. */
+	identity(id: string | null) { return this.call<Identities>('identity_get', { id }); }
+	/** No `id`: the global identity. With `id`: that repository's override, `null` removes it. */
+	setIdentity(id: string | null, identity: Identity | null) { return this.call<void>('identity_set', { id, identity }); }
 	openIn(id: string, target: OpenTarget, arg: string | null = null) { return this.call<void>('open_in', { id, target, arg }); }
-	setEditor(editor: string) { return this.call<void>('set_editor', { editor }); }
 	pickFolder() { return this.call<string | null>('pick_folder'); }
 	worktrees(id: string) { return this.call<Worktree[]>('worktree_list', { id }); }
 	addWorktree(id: string, branch: string, base: string | null) { return this.call<string>('worktree_add', { id, branch, base }); }
@@ -711,7 +747,8 @@ class DemoBackend {
 		{ id: '/Users/demo/Source/cadence', name: 'cadence', path: '/Users/demo/Source/cadence', missing: false },
 	];
 	private current: string | null = DEMO_ID;
-	private editor = 'code';
+	private globalIdentity: Identity = { name: 'Demo Author', email: 'demo@example.com' };
+	private repoIdentity = new Map<string, Identity>();
 	private branch = 'feature/repeat-mode';
 	private branchList: Branch[] = [
 		{ name: 'feature/repeat-mode', isRemote: false, isCurrent: true, upstream: 'origin/feature/repeat-mode', date: new Date(Date.now() - 3_600_000).toISOString() },
@@ -738,6 +775,22 @@ class DemoBackend {
 		demoCommit(2, 'Queue: keyboard reordering', 7000),
 		demoCommit(1, 'Initial commit', 20000),
 	];
+	/** Branches merged in the preview, so comparing with them again shows nothing to bring in. */
+	private merged = new Set<string>();
+	/** Pretend commits another branch has that this one lacks. */
+	/** Commits after `upstream` (a hash, else the unpushed ones), oldest first. */
+	private demoPlan(upstream: string | null): Commit[] {
+		const at = upstream ? this.commits.findIndex((c) => c.hash === upstream) : this.commits.length;
+		const list = at >= 0 ? this.commits.slice(0, at) : this.commits.filter((c) => c.unpushed);
+		return [...list].reverse();
+	}
+	private demoIncoming(branch: string): Commit[] {
+		if (this.merged.has(branch) || branch.endsWith('feature/repeat-mode')) {
+			return [];
+		}
+		const n = branch.endsWith('main') ? 2 : branch.includes('release') ? 3 : 1;
+		return Array.from({ length: n }, (_, i) => demoCommit(100 + i + branch.length * 7, [`Bump dependencies on ${branch}`, 'Tidy the settings page', 'Release notes'][i], 600 + i * 240));
+	}
 	private ahead = 1;
 	private behind = 0;
 	private lastFetched = Date.now() - 12 * 60_000;
@@ -785,7 +838,7 @@ class DemoBackend {
 		const empty = this.current !== DEMO_ID;
 		switch (cmd) {
 			case 'app_status':
-				return { repos: this.repos, current: this.current, gitVersion: '2.47.0 (demo)', authorName: 'Demo Author', authorEmail: 'demo@example.com', editor: this.editor, appVersion: '0.1.0' } satisfies AppStatus;
+				return { repos: this.repos, current: this.current, gitVersion: '2.47.0 (demo)', authorName: this.globalIdentity.name, authorEmail: this.globalIdentity.email, appVersion: '0.1.0' } satisfies AppStatus;
 			case 'repo_add':
 			case 'repo_create':
 			case 'repo_clone': {
@@ -818,6 +871,7 @@ class DemoBackend {
 					behind: empty ? 0 : this.behind,
 					remote: empty ? null : 'origin',
 					remoteUrl: empty ? null : 'git@github.com:demo/harmony.git',
+					defaultBranch: empty ? null : 'main',
 					host: empty
 						? null
 						: { provider: 'github', name: 'GitHub', web: 'https://github.com/demo/harmony', issues: 'https://github.com/demo/harmony/issues', issuesLabel: 'Issues', pulls: 'https://github.com/demo/harmony/pulls', pullsLabel: 'Pull requests' },
@@ -868,6 +922,42 @@ class DemoBackend {
 				this.commits = [demoCommit(this.commits.length + 1, `Revert "${this.commits.find((c) => c.hash === args.hash)?.summary ?? ''}"`, 0, { unpushed: true }), ...this.commits];
 				this.ahead++;
 				return;
+			case 'cherry_pick': {
+				const incoming = this.branchList.flatMap((b) => this.demoIncoming(b.name));
+				for (const hash of args.hashes as string[]) {
+					const c = incoming.find((x) => x.hash === hash);
+					this.commits = [demoCommit(this.commits.length + 1, c?.summary ?? 'Cherry-picked commit', 0, { unpushed: true, body: c?.body ?? '' }), ...this.commits];
+					this.ahead++;
+				}
+				return;
+			}
+			case 'merge_squash': {
+				this.merged.add(String(args.from));
+				const [summary, ...rest] = String(args.message).trim().split('\n');
+				this.commits = [demoCommit(this.commits.length + 1, summary, 0, { unpushed: true, body: rest.join('\n').trim() }), ...this.commits];
+				this.ahead++;
+				return;
+			}
+			case 'rebase_plan':
+				return this.demoPlan(args.upstream as string | null);
+			case 'rebase_interactive': {
+				const plan = this.demoPlan(args.upstream as string | null);
+				const out: Commit[] = [];
+				for (const step of args.steps as RebaseStep[]) {
+					const c = plan.find((x) => x.hash === step.hash)!;
+					if (step.action === 'drop') {
+						continue;
+					}
+					if (step.action === 'squash' || step.action === 'fixup') {
+						continue;
+					}
+					const [summary, ...rest] = (step.message ?? `${c.summary}\n\n${c.body}`).trim().split('\n');
+					out.push({ ...c, summary, body: rest.join('\n').trim(), unpushed: true });
+				}
+				this.commits = [...out.reverse(), ...this.commits.slice(plan.length)];
+				this.ahead = this.commits.filter((c) => c.unpushed).length;
+				return;
+			}
 			case 'reset_to': {
 				const at = this.commits.findIndex((c) => c.hash === args.hash);
 				this.commits = this.commits.slice(Math.max(0, at));
@@ -889,6 +979,17 @@ class DemoBackend {
 			}
 			case 'history':
 				return empty ? [] : this.commits.slice(Number(args.skip ?? 0), Number(args.skip ?? 0) + Number(args.limit ?? 100));
+			case 'compare_history': {
+				if (empty) {
+					return [];
+				}
+				const list = args.ahead ? this.commits.filter((c) => c.unpushed) : this.demoIncoming(String(args.branch));
+				return list.slice(Number(args.skip ?? 0), Number(args.skip ?? 0) + Number(args.limit ?? 100));
+			}
+			case 'compare_counts':
+				return empty
+					? []
+					: (args.branches as string[]).map((name) => ({ name, ahead: this.commits.filter((c) => c.unpushed).length, behind: this.demoIncoming(name).length })) satisfies BranchCompare[];
 			case 'commit_files':
 				return [
 					{ path: 'src/player/queue.ts', oldPath: null, status: 'modified' },
@@ -919,6 +1020,7 @@ class DemoBackend {
 				}
 				return;
 			case 'merge_branch':
+				this.merged.add(String(args.from));
 				this.commits = [demoCommit(this.commits.length + 1, `Merge branch '${String(args.from)}' into ${this.branch}`, 0, { unpushed: true }), ...this.commits];
 				this.ahead++;
 				return '';
@@ -934,9 +1036,19 @@ class DemoBackend {
 				this.commits = this.commits.map((c) => ({ ...c, unpushed: false }));
 				this.branchList = this.branchList.map((b) => (b.isCurrent && !b.upstream ? { ...b, upstream: `origin/${b.name}` } : b));
 				return;
-			case 'set_editor':
-				this.editor = String(args.editor);
+			case 'identity_get':
+				return { global: this.globalIdentity, repo: args.id ? (this.repoIdentity.get(String(args.id)) ?? null) : null } satisfies Identities;
+			case 'identity_set': {
+				const who = args.identity as Identity | null;
+				if (!args.id) {
+					this.globalIdentity = who!;
+				} else if (who) {
+					this.repoIdentity.set(String(args.id), who);
+				} else {
+					this.repoIdentity.delete(String(args.id));
+				}
 				return;
+			}
 			case 'worktree_list':
 				return this.worktreeList;
 			case 'worktree_add': {

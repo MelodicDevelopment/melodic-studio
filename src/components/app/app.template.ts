@@ -80,8 +80,8 @@ function noChanges(self: AppComponent) {
 					`
 					: ''}
 				${reviewCard()}
-				<button class="card" @click=${() => store.openIn('editor')}>
-					<ml-icon icon="code" size="md"></ml-icon><span><b>Open in your editor</b><small>${store.app()?.editor ?? 'code'}</small></span>
+				<button class="card" @click=${() => store.setTab('files')}>
+					<ml-icon icon="code" size="md"></ml-icon><span><b>Browse the files</b><small>Read and edit them right here</small></span>
 				</button>
 				<button class="card" @click=${() => store.openIn('finder')}>
 					<ml-icon icon="folder-open" size="md"></ml-icon><span><b>Show in file manager</b><small>${store.repo()?.path ?? ''}</small></span>
@@ -96,15 +96,12 @@ function noChanges(self: AppComponent) {
 						</button>
 						${st.host.issues
 							? html`
-								<button class="card" @click=${() => store.openIn('issues')}>
-									<ml-icon icon="list-checks" size="md"></ml-icon><span><b>Open ${st.host.issuesLabel.toLowerCase()}</b><small>See what is waiting on ${st.host.name}</small></span>
-								</button>
 								<button class="card" @click=${() => self.host.openIssues()}>
-									<ml-icon icon="robot" size="md"></ml-icon><span><b>Start an agent on one of the ${st.host.issuesLabel.toLowerCase()}</b><small>Pick one here and Claude works on it in its own branch</small></span>
+									<ml-icon icon="list-checks" size="md"></ml-icon><span><b>${st.host.issuesLabel}</b><small>See what is open on ${st.host.name} and start an agent on one</small></span>
 								</button>
 							`
 							: ''}
-						${st.host.pulls && st.upstream && !st.detached
+						${st.host.pulls && st.upstream && !st.detached && st.branch !== st.defaultBranch
 							? html`
 								<button class="card ${self.host.suggestPr() === st.branch ? 'primary' : ''}" @click=${() => self.host.openPr()}>
 									<ml-icon icon="git-pull-request" size="md"></ml-icon><span><b>Create a ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')}</b><small>${self.host.suggestPr() === st.branch ? `${st.branch} is pushed and has none yet` : `From ${st.branch}, with a description drafted by Claude`}</small></span>
@@ -156,6 +153,9 @@ function historyPane(self: AppComponent) {
 	const finding = reviewPane();
 	if (finding) {
 		return finding;
+	}
+	if (self.agents.docked()?.open) {
+		return html`<ms-agent-session></ms-agent-session>`;
 	}
 	const commit = store.selectedCommit();
 	if (!commit) {
@@ -247,6 +247,7 @@ export function appTemplate(self: AppComponent) {
 							</div>
 						`}
 		<ms-dialogs></ms-dialogs>
+		<ms-git-ops></ms-git-ops>
 		<ms-init-repo></ms-init-repo>
 		<ms-host-dialogs></ms-host-dialogs>
 	`;

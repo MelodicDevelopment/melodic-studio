@@ -3,7 +3,7 @@
 
 use crate::config::RepoRef;
 use crate::error::{AppError, Result};
-use crate::git::{self, Branch, Commit, DiffResult, FileChange, FileRef, Git, RepoStatus, UndoneCommit};
+use crate::git::{self, Branch, Commit, DiffResult, FileChange, FileRef, Git, Identity, RebaseStep, RepoStatus, UndoneCommit};
 use crate::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,6 @@ pub struct AppStatus {
     pub git_version: Option<String>,
     pub author_name: String,
     pub author_email: String,
-    pub editor: String,
     pub app_version: String,
 }
 
@@ -73,9 +72,9 @@ pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoS
 
 #[tauri::command]
 pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<AppStatus> {
-    let (repos, current, editor) = {
+    let (repos, current) = {
         let config = state.config.lock().unwrap();
-        (config.repos.iter().map(summary).collect(), config.current.clone(), config.editor())
+        (config.repos.iter().map(summary).collect(), config.current.clone())
     };
     Ok(AppStatus {
         repos,
@@ -83,7 +82,6 @@ pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
         git_version: Git::version(),
         author_name: Git::global_config("user.name"),
         author_email: Git::global_config("user.email"),
-        editor,
         app_version: app.package_info().version.to_string(),
     })
 }
@@ -209,8 +207,18 @@ pub async fn revert_commit(state: State<'_, AppState>, id: String, hash: String)
 }
 
 #[tauri::command]
-pub async fn cherry_pick(state: State<'_, AppState>, id: String, hash: String) -> Result<()> {
-    repo(&state, &id)?.cherry_pick(&hash)
+pub async fn cherry_pick(state: State<'_, AppState>, id: String, hashes: Vec<String>) -> Result<()> {
+    repo(&state, &id)?.cherry_pick(&hashes)
+}
+
+#[tauri::command]
+pub async fn rebase_plan(state: State<'_, AppState>, id: String, upstream: Option<String>) -> Result<Vec<Commit>> {
+    repo(&state, &id)?.rebase_plan(upstream.as_deref())
+}
+
+#[tauri::command]
+pub async fn rebase_interactive(state: State<'_, AppState>, id: String, upstream: Option<String>, steps: Vec<RebaseStep>) -> Result<()> {
+    repo(&state, &id)?.rebase_interactive(upstream.as_deref(), &steps)
 }
 
 #[tauri::command]
@@ -261,6 +269,30 @@ pub async fn history(state: State<'_, AppState>, id: String, skip: usize, limit:
 }
 
 #[tauri::command]
+pub async fn compare_history(state: State<'_, AppState>, id: String, branch: String, ahead: bool, skip: usize, limit: usize) -> Result<Vec<Commit>> {
+    repo(&state, &id)?.compare_log(&branch, ahead, skip, limit.clamp(1, 500))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchCompare {
+    pub name: String,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+/// Ahead/behind counts of the current branch against each of `branches` (at most 100; ones git cannot count are left out).
+#[tauri::command]
+pub async fn compare_counts(state: State<'_, AppState>, id: String, branches: Vec<String>) -> Result<Vec<BranchCompare>> {
+    let g = repo(&state, &id)?;
+    Ok(branches
+        .into_iter()
+        .take(100)
+        .filter_map(|name| g.ahead_behind(&name).ok().map(|(ahead, behind)| BranchCompare { name, ahead, behind }))
+        .collect())
+}
+
+#[tauri::command]
 pub async fn commit_files(state: State<'_, AppState>, id: String, hash: String) -> Result<Vec<FileChange>> {
     repo(&state, &id)?.commit_files(&hash)
 }
@@ -303,6 +335,11 @@ pub async fn merge_branch(state: State<'_, AppState>, id: String, from: String) 
 }
 
 #[tauri::command]
+pub async fn merge_squash(state: State<'_, AppState>, id: String, from: String, message: String) -> Result<()> {
+    repo(&state, &id)?.merge_squash(&from, &message)
+}
+
+#[tauri::command]
 pub async fn merge_abort(state: State<'_, AppState>, id: String) -> Result<()> {
     repo(&state, &id)?.op_abort()
 }
@@ -331,7 +368,7 @@ pub async fn remote_set(state: State<'_, AppState>, id: String, url: String) -> 
 
 // ---- the world outside ------------------------------------------------------
 
-/// Open the repository somewhere else: `finder`, `editor`, `terminal`, or a page on its
+/// Open the repository somewhere else: `finder`, `terminal`, or a page on its
 /// host: `remote` (the repository), `issues`, `pulls`, `new-pull` (for the current branch)
 /// or `commit` (with `arg` the hash).
 #[tauri::command]
@@ -357,20 +394,39 @@ pub async fn open_in(app: tauri::AppHandle, state: State<'_, AppState>, id: Stri
             .ok_or_else(|| AppError::msg(format!("Melodic Studio does not know that page on {}", host.name)))?;
             app.opener().open_url(url, None::<&str>).map_err(|e| AppError::msg(e.to_string()))
         }
-        "editor" => {
-            let editor = state.config.lock().unwrap().editor();
-            crate::proc::open_editor(&editor, &dir)
-        }
         "terminal" => crate::proc::open_terminal(&dir),
         _ => Err(AppError::msg("Unknown target")),
     }
 }
 
+// ---- who commits ------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Identities {
+    pub global: Identity,
+    /// The repository's own identity, when it overrides the global one.
+    pub repo: Option<Identity>,
+}
+
+/// The global identity, plus repository `id`'s override when one is given.
 #[tauri::command]
-pub async fn set_editor(state: State<'_, AppState>, editor: String) -> Result<()> {
-    let mut config = state.config.lock().unwrap();
-    config.editor = Some(editor.trim().to_string()).filter(|e| !e.is_empty());
-    config.save(&state.config_path)
+pub async fn identity_get(state: State<'_, AppState>, id: Option<String>) -> Result<Identities> {
+    let repo = match id {
+        Some(id) => main_repo(&state, &id)?.0.local_identity(),
+        None => None,
+    };
+    Ok(Identities { global: Git::global_identity(), repo })
+}
+
+/// Without `id`, set the global identity (`identity` required). With `id`, set that
+/// repository's override, or remove it with `identity: null`.
+#[tauri::command]
+pub async fn identity_set(state: State<'_, AppState>, id: Option<String>, identity: Option<Identity>) -> Result<()> {
+    match id {
+        Some(id) => main_repo(&state, &id)?.0.set_local_identity(identity.as_ref()),
+        None => Git::set_global_identity(&identity.ok_or_else(|| AppError::msg("Give both a name and an email"))?),
+    }
 }
 
 // ---- files (the Files tab) ---------------------------------------------------

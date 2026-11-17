@@ -49,5 +49,6 @@ import './components/agents/ask.component';
 import './components/agents/attempts.component';
 import './components/agents/agent-board.component';
 import './components/dialogs/dialogs.component';
+import './components/dialogs/git-ops.component';
 import './components/host/host-dialogs.component';
 import './components/app/app.component';

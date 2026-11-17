@@ -80,7 +80,7 @@ pub fn kill_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-/// Start a program the user carries on with by themselves (an editor, a terminal):
+/// Start a program the user carries on with by themselves (a terminal):
 /// nothing is piped to or from it, and it is reaped when it exits so no zombie is left.
 pub fn launch(mut c: Command) -> std::io::Result<()> {
     let mut child = c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
@@ -92,6 +92,8 @@ pub fn launch(mut c: Command) -> std::io::Result<()> {
 
 /// Split a command line the way a person writes one: on spaces, with "double" or 'single'
 /// quotes around anything that contains them. No escapes, so Windows backslashes stay as they are.
+/// Used for `$TERMINAL` on Linux.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 pub fn split_command(line: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut current = String::new();
@@ -121,56 +123,6 @@ pub fn split_command(line: &str) -> Vec<String> {
         parts.push(current);
     }
     parts
-}
-
-// ---- the user's editor ----------------------------------------------------------
-
-/// Where Visual Studio Code lives when its `code` command is not on PATH.
-fn vscode_fallbacks(dir: &str) -> Vec<Command> {
-    let mut found = Vec::new();
-    #[cfg(target_os = "macos")]
-    {
-        let mut c = command("open");
-        c.args(["-a", "Visual Studio Code", dir]);
-        found.push(c);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        #[cfg(windows)]
-        let places: Vec<PathBuf> = [("LOCALAPPDATA", "Programs"), ("ProgramFiles", ""), ("ProgramFiles(x86)", "")]
-            .iter()
-            .filter_map(|(var, sub)| std::env::var_os(var).map(|base| PathBuf::from(base).join(sub).join("Microsoft VS Code").join("bin").join("code.cmd")))
-            .collect();
-        #[cfg(not(windows))]
-        let places: Vec<PathBuf> = ["/snap/bin/code", "/usr/share/code/bin/code", "/var/lib/flatpak/exports/bin/com.visualstudio.code"].iter().map(PathBuf::from).collect();
-        for place in places.into_iter().filter(|p| is_program(p)) {
-            let mut c = command(place);
-            c.arg(dir);
-            found.push(c);
-        }
-    }
-    found
-}
-
-/// Open `dir` in the editor the user configured (a command line such as `code`,
-/// `cursor --reuse-window` or `"C:\Program Files\Editor\editor.exe" -n`).
-pub fn open_editor(editor: &str, dir: &str) -> Result<()> {
-    let editor = editor.trim();
-    // A plain path to the program needs no quoting, even with spaces in it.
-    let mut parts = if Path::new(editor).is_file() { vec![editor.to_string()] } else { split_command(editor) };
-    if parts.is_empty() {
-        parts.push("code".into());
-    }
-    let program = parts.remove(0);
-    let mut c = command(&program);
-    c.args(&parts).arg(dir);
-    if launch(c).is_ok() {
-        return Ok(());
-    }
-    if program == "code" && vscode_fallbacks(dir).into_iter().any(|c| launch(c).is_ok()) {
-        return Ok(());
-    }
-    Err(AppError::msg(format!("Could not start \"{editor}\". Set your editor command in Settings.")))
 }
 
 // ---- a terminal -----------------------------------------------------------------

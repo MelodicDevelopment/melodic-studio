@@ -3,7 +3,7 @@ import { Service } from '@melodicdev/core/injection';
 import { html } from '@melodicdev/core/template';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
-import type { FileChange } from '../../services/backend.service';
+import type { FileChange, Operation } from '../../services/backend.service';
 import { dirName, fileName, plural, statusMark } from '../../shared/format';
 import { changesStyles } from './changes.styles';
 import { proposeMenuItem } from '../ai/ai-entry';
@@ -59,6 +59,14 @@ export class ChangesComponent {
 	};
 }
 
+const OP_LABEL: Record<Operation, string> = {
+	merge: 'Merge',
+	rebase: 'Rebase',
+	'cherry-pick': 'Cherry-pick',
+	revert: 'Revert',
+	squash: 'Squash merge',
+};
+
 function changesTemplate(self: ChangesComponent) {
 	const store = self.store;
 	const st = store.status();
@@ -111,7 +119,7 @@ function changesTemplate(self: ChangesComponent) {
 			? html`
 				<div class="banner">
 					<ml-icon icon="git-merge" size="sm"></ml-icon>
-					<span class="grow">${conflicts ? `${op[0].toUpperCase()}${op.slice(1)} stopped: ${plural(conflicts, 'conflicted file')} to resolve.` : `${op[0].toUpperCase()}${op.slice(1)} in progress.`}</span>
+					<span class="grow">${conflicts ? `${OP_LABEL[op]} stopped: ${plural(conflicts, 'conflicted file')} to resolve.` : `${OP_LABEL[op]} in progress.`}</span>
 					<a @click=${() => store.continueOperation()}>Continue</a>
 					<a @click=${() => store.abortOperation()}>Abort</a>
 				</div>

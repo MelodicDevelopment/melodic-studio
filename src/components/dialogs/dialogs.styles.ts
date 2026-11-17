@@ -49,6 +49,30 @@ export const dialogsStyles = () => css`
 		gap: 8px;
 		width: 100%;
 	}
+	.who {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.who h4 {
+		margin: 0;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--ml-color-text);
+	}
+	.who small {
+		margin-top: -2px;
+		font-size: 12px;
+		color: var(--ml-color-text-muted);
+	}
+	.pair {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
+	}
+	.pair ml-input {
+		min-width: 0;
+	}
 	dl {
 		display: grid;
 		grid-template-columns: max-content 1fr;

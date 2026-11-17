@@ -217,8 +217,10 @@ let scrolledTo = 0;
 		self.agents.commitShown();
 		const history = self.scope === 'history';
 		const title = history ? 'Ask when and why something changed: a read-only chat that can read the git history' : 'Ask about this code: a read-only chat, nothing is changed';
+		const chat = history ? self.agents.docked() : null;
+		const back = chat?.id && !chat.open ? html`<button class="back" title="Show the conversation again" @click=${() => self.agents.showHistoryChat()}><ml-icon icon="arrow-u-up-left" size="sm"></ml-icon>Back to conversation</button>` : '';
 		return self.look === 'bar'
-			? html`<button class="bar" title=${title} @click=${() => self.open()}><ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span>${history ? 'Ask about this history…' : 'Ask about this code…'}</span></button>`
+			? html`<div class="row"><button class="bar" title=${title} @click=${() => self.open()}><ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span>${history ? 'Ask about this history…' : 'Ask about this code…'}</span></button>${back}</div>`
 			: html`<button class="icon" title=${title} @click=${() => self.open()}><ml-icon icon="chat-circle-dots" size="sm"></ml-icon></button>`;
 	},
 	styles: () => css`
@@ -246,14 +248,32 @@ let scrolledTo = 0;
 			background: var(--ms-hover);
 			color: var(--ml-color-text);
 		}
+		.row {
+			display: flex;
+			border-bottom: 1px solid var(--ml-color-border);
+		}
+		.back {
+			flex: none;
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 0 12px;
+			font-size: 12px;
+			color: var(--ml-color-primary);
+			border-left: 1px solid var(--ml-color-border);
+		}
+		.back:hover {
+			background: var(--ms-hover);
+		}
 		.bar {
+			flex: 1;
+			min-width: 0;
 			display: flex;
 			align-items: center;
 			gap: 8px;
 			width: 100%;
 			height: 34px;
 			padding: 0 12px;
-			border-bottom: 1px solid var(--ml-color-border);
 			color: var(--ml-color-text-secondary);
 		}
 		.bar:hover {

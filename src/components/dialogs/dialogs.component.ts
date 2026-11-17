@@ -34,8 +34,13 @@ export class DialogsComponent {
 	tagPush = false;
 	resetMode: ResetMode = 'mixed';
 	remoteUrl = '';
-	editor = '';
 	theme: ThemeMode = savedTheme();
+	/** Settings: who commits everywhere, and in the current repository when it differs. */
+	globalName = '';
+	globalEmail = '';
+	override = false;
+	repoName = '';
+	repoEmail = '';
 
 	get branch(): string {
 		return this.store.prompt().branch ?? '';
@@ -123,15 +128,6 @@ export class DialogsComponent {
 		}
 	}
 
-	async merge(): Promise<void> {
-		this.store.closeDialog('merge-branch');
-		if (this.store.prompt().rebase) {
-			await this.store.rebaseOnto(this.branch);
-		} else {
-			await this.store.merge(this.branch);
-		}
-	}
-
 	setTagName(value: string): void {
 		this.tagName = value.replace(/\s+/g, '-');
 	}
@@ -179,18 +175,44 @@ export class DialogsComponent {
 	}
 
 	openedSettings(): void {
-		this.editor = this.store.app()?.editor ?? 'code';
 		this.theme = savedTheme();
+		const app = this.store.app();
+		this.globalName = app?.authorName ?? '';
+		this.globalEmail = app?.authorEmail ?? '';
+		this.override = false;
+		this.repoName = this.repoEmail = '';
+		void this.store.identities().then((ids) => {
+			if (!ids) {
+				return;
+			}
+			this.globalName = ids.global.name;
+			this.globalEmail = ids.global.email;
+			this.override = !!ids.repo;
+			this.repoName = ids.repo?.name ?? ids.global.name;
+			this.repoEmail = ids.repo?.email ?? ids.global.email;
+		});
+	}
+
+	toggleOverride(on: boolean): void {
+		this.override = on;
+		if (on && !this.repoName && !this.repoEmail) {
+			this.repoName = this.globalName;
+			this.repoEmail = this.globalEmail;
+		}
+	}
+
+	/** Saves both identities; the dialog stays open when git refuses one. */
+	async doneSettings(): Promise<void> {
+		const global = { name: this.globalName, email: this.globalEmail };
+		const blankGlobal = !global.name.trim() && !global.email.trim() && !this.store.app()?.authorName;
+		const ok = await this.store.saveIdentities(blankGlobal ? null : global, this.override ? { name: this.repoName, email: this.repoEmail } : null);
+		if (ok) {
+			this.store.closeDialog('settings');
+		}
 	}
 
 	pickTheme(mode: ThemeMode): void {
 		this.theme = mode;
 		setTheme(mode);
-	}
-
-	saveEditor(): void {
-		if (this.editor.trim() !== (this.store.app()?.editor ?? '')) {
-			void this.store.setEditor(this.editor);
-		}
 	}
 }

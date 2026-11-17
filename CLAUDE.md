@@ -10,7 +10,7 @@ src-tauri/src/
                 branches, merge/rebase/revert/reset, tags, fetch/pull/push; host() recognises GitHub, Azure DevOps,
                 GitLab, Bitbucket from the remote URL. Tests run real git in temp repos.
   commands.rs   Tauri commands (thin, all async, camelCase DTOs). Only repositories in the config can be operated on.
-  config.rs     registry of added repositories (app config dir, repositories.json) + editor command
+  config.rs     registry of added repositories (app config dir, repositories.json)
   error.rs      AppError -> {kind, message, paths}; kind: conflict | auth | git | error
   init.rs       turning a plain folder into a repository: inspect it, then git init with the wizard's choices
                 (default branch, .gitignore templates, README, first commit, per-repository identity)
@@ -19,7 +19,7 @@ src-tauri/src/
   paths.rs      how absolute paths are spelled and compared (native / same / typed), and the PATH fix for
                 GUI-launched apps so git, ssh and claude resolve
   proc.rs       the only way to start a process (command), stop one (kill_tree), or hand off to the user's
-                editor and terminal (open_editor / open_terminal)
+                terminal (open_terminal)
   worktree.rs   git worktrees (`<repo>.worktrees/<branch>` beside the repository) + the "active checkout" commands
   agent.rs      agent sessions: runs the user's `claude` CLI headless in a checkout, streams its stream-json events
   lsp.rs        starts an installed language server in the active checkout and relays its JSON-RPC messages
@@ -62,7 +62,8 @@ src/
   components/init       setup wizard for a folder that is not a repository yet + InitService.open(path), the one way to open a folder
   services/ai.service.ts        AiService.ask(): one-shot questions to the user's `claude` CLI (no MCP servers or skills, named tools only)
   dev/hooks.ts          dev builds only: window.__studio (stores, q() through shadow roots, log()) for scripts run via STUDIO_DEV_EVAL
-  components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
+  components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt); git-ops.* holds the merge
+                        (merge / squash / rebase), cherry-pick and interactive-rebase dialogs
   services/host.store.ts        issues list, "start agent on this", the pull request draft; opens the two dialogs below
   components/host       Issues / work items dialog and the Create pull request dialog (HostStore.openIssues() / openPr())
   services/demo-host.ts         demo issues, pull request and host tools for the browser preview (?host=missing|signed-out)
@@ -77,7 +78,9 @@ src/
 - Publishing happens only on an explicit click: `pr_create` from the Create button of the pull request dialog (which refuses until the branch is fully pushed), `host_repo_create` from the new-repository flow. Never as a side effect of anything else. `host_open` opens only https pages on the repository's own host.
 - `GIT_LITERAL_PATHSPECS=1` on every call so file names are never read as globs. `git stash` breaks under it; those calls use `run_magic`.
 - Commit model is GitHub Desktop's: the checked files are the commit. `commit()` resets the index (except mid-merge), adds exactly the selected paths via `--pathspec-from-file`, then commits.
+- History operations (`git.rs`, `ms-git-ops`): cherry-pick takes several commits, oldest first, in one `git cherry-pick`. Squash merge is `merge --squash` then a commit with the dialog's message on stdin; on conflicts the message is written to SQUASH_MSG and the operation shows as `squash` (only while files are conflicted: SQUASH_MSG outlives a squash finished in a terminal), Continue commits from it, Abort is `reset --merge`. Interactive rebase is git's own `rebase -i --autostash` with `GIT_SEQUENCE_EDITOR` set to `cp '<our todo file>'` (git starts the editor through its shell; Git for Windows brings one); the todo and new messages live in `<git dir>/studio-rebase/`, and a new message is an `exec git commit --amend --no-verify -F <file>` after the commit's last squash/fixup, so a stop for conflicts in between keeps it. The list sent must be exactly the commits of `upstream..HEAD` (re-read in Rust), merges in the range are refused, and the first kept line cannot be squash/fixup. Rows are reordered with pointer events, not HTML drag and drop (the window's file-drop handling).
 - Undo/amend are only offered while the tip commit is on no remote. Force push is `--force-with-lease`, offered only after a rejected push.
+- Commit identity is git's own config, nothing stored by us: Settings edits `--global` user.name/email, and "Use a different name and email in <repo>" writes `--local` (the main checkout's `.git/config`, so its worktrees and agents share it); unticking unsets it. `identity_get` / `identity_set` in commands.rs. There is no external-editor setting: editing happens in the Files tab.
 - Discard restores tracked files from HEAD and moves untracked ones to the OS trash.
 - Branch/ref/hash arguments go through `check_ref` (nothing starting with `-`).
 - Files tab (`files.rs`): paths are repo-relative and resolved through `resolve()`, which refuses absolute paths, `..`, `.git` and symlinks leading out. Saving never creates a file, and a file that changed on disk since it was read is not overwritten without asking. `Git::ignored` drops `GIT_LITERAL_PATHSPECS` because `check-ignore` rejects it.
@@ -202,6 +205,6 @@ Checked on macOS three ways: unit and integration tests (59 Rust tests against r
 
 Run for real in the desktop window: add repository, status, diff, commit, push, history, branches, stash, worktrees, Files tab, the setup wizard through to a push, repository tabs, the terminal against a real shell, an agent session end to end (task, edit in its worktree, review, commit, merge, cleanup), one-shot AI (commit message, explain, review before push), Ask the repository, TypeScript hover and go-to-definition through the managed server, host tools (gh sign-in, owners, live issue list).
 
-Not run for real: anything on Windows or Linux (written to the Platforms rules, linted for Windows in part; the first CI run is the proof), creating a pull request or a remote repository (unit tests and `gh --dry-run` only), Azure DevOps and GitLab beyond their signed-out / not-installed paths, parallel attempts and the agent board with real agents (preview only), conflict proposals in the window (Rust tests + preview + one real prompt), C# and PHP servers in the window (end-to-end tests only).
+Not run for real: cherry-pick, squash merge and interactive rebase in the desktop window (Rust tests against real git, including conflicts mid-rebase, plus the browser preview), anything on Windows or Linux (written to the Platforms rules, linted for Windows in part; the first CI run is the proof), creating a pull request or a remote repository (unit tests and `gh --dry-run` only), Azure DevOps and GitLab beyond their signed-out / not-installed paths, parallel attempts and the agent board with real agents (preview only), conflict proposals in the window (Rust tests + preview + one real prompt), C# and PHP servers in the window (end-to-end tests only).
 
-Not done: cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, dragging repository tabs to reorder, restoring the selected commit when returning to a tab, background auto-fetch, renaming the folder. In-app updates (`UpdatesService`, toolbar pill, Settings row; tauri-plugin-updater) are wired but have never been exercised: that needs two published releases. The release workflow itself has never run: the repository has no GitHub remote yet.
+Not done: partial (line/hunk) commits, image diffs, dragging repository tabs to reorder, restoring the selected commit when returning to a tab, background auto-fetch, renaming the folder. In-app updates (`UpdatesService`, toolbar pill, Settings row; tauri-plugin-updater) are wired but have never been exercised: that needs two published releases. The release workflow itself has never run: the repository has no GitHub remote yet.

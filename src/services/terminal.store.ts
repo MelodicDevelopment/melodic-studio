@@ -351,6 +351,17 @@ export class TerminalStore {
 		});
 		const fit = new xterm.FitAddon();
 		term.loadAddon(fit);
+		// Addresses in the output open in the browser on Cmd+click (Ctrl+click off the Mac), like VS Code:
+		// a plain click stays free for selecting text. Output is untrusted, so only http(s) is opened.
+		term.loadAddon(
+			new xterm.WebLinksAddon((event, uri) => {
+				if (!(isMac() ? event.metaKey : event.ctrlKey) || !/^https?:\/\//i.test(uri)) {
+					return;
+				}
+				event.preventDefault();
+				void this.backend.openUrl(uri).catch(() => undefined);
+			}),
+		);
 		const host = document.createElement('div');
 		host.className = 'screen';
 		const screen: Screen = { term, fit, host, key: null, opened: false, ended: false, started: Date.now(), outbox: '', sending: false };

@@ -105,20 +105,6 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #merge-branch style="--ml-dialog-max-width: 420px">
-			<h3 slot="dialog-header">${prompt.rebase ? 'Rebase branch' : 'Merge branch'}</h3>
-			<div class="dlg">
-				${prompt.rebase
-					? html`<p>Replay the commits of <b>${st?.branch ?? ''}</b> on top of <b>${self.branch}</b>? This rewrites them, so a branch that is already pushed will need a force push afterwards.</p>`
-					: html`<p>Merge <b>${self.branch}</b> into <b>${st?.branch ?? ''}</b>?</p>`}
-				${st?.files.length ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>You have uncommitted changes. Git may refuse until they are committed or stashed.</span></p>` : ''}
-			</div>
-			<div slot="dialog-footer" class="foot">
-				<ml-button variant="outline" @ml:click=${() => store.closeDialog('merge-branch')}>Cancel</ml-button>
-				<ml-button variant="primary" @ml:click=${() => self.merge()}>${prompt.rebase ? 'Rebase' : 'Merge'}</ml-button>
-			</div>
-		</ml-dialog>
-
 		<ml-dialog #new-tag style="--ml-dialog-max-width: 420px" @ml:open=${() => ((self.tagName = ''), (self.tagPush = false))}>
 			<h3 slot="dialog-header">Create tag</h3>
 			<div class="dlg">
@@ -196,11 +182,29 @@ export function dialogsTemplate(self: DialogsComponent) {
 			<h3 slot="dialog-header">Settings</h3>
 			<div class="dlg">
 				<ml-select label="Appearance" .options=${THEMES} .value=${self.theme} @ml:change=${(e: CustomEvent) => self.pickTheme(e.detail.value as ThemeMode)}></ml-select>
-				<ml-input label="Editor command" hint="Run with the repository folder, for example: code, cursor, zed, subl" .value=${self.editor} @ml:input=${(e: CustomEvent) => (self.editor = e.detail.value)} @ml:blur=${() => self.saveEditor()}></ml-input>
+				<section class="who">
+					<h4>Commits as</h4>
+					<div class="pair">
+						<ml-input label="Name" .value=${self.globalName} @ml:input=${(e: CustomEvent) => (self.globalName = e.detail.value)}></ml-input>
+						<ml-input label="Email" type="email" .value=${self.globalEmail} @ml:input=${(e: CustomEvent) => (self.globalEmail = e.detail.value)}></ml-input>
+					</div>
+					<small>Every repository, through git's global config.</small>
+					${store.repo()
+						? html`
+							<ml-checkbox label=${`Use a different name and email in ${store.repo()!.name}`} .checked=${self.override} @ml:change=${(e: CustomEvent) => self.toggleOverride(e.detail.checked)}></ml-checkbox>
+							${self.override
+								? html`
+									<div class="pair">
+										<ml-input label="Name" .value=${self.repoName} @ml:input=${(e: CustomEvent) => (self.repoName = e.detail.value)}></ml-input>
+										<ml-input label="Email" type="email" .value=${self.repoEmail} @ml:input=${(e: CustomEvent) => (self.repoEmail = e.detail.value)}></ml-input>
+									</div>
+								`
+								: ''}
+						`
+						: ''}
+				</section>
 				<ms-language-servers></ms-language-servers>
 				<dl>
-					<dt>Commits as</dt>
-					<dd>${app?.authorName ? `${app.authorName} <${app.authorEmail}>` : 'No git identity set. Run git config --global user.name and user.email.'}</dd>
 					<dt>Git</dt>
 					<dd>${app?.gitVersion ?? 'Not found on this computer'}</dd>
 					<dt>Melodic Studio</dt>
@@ -209,7 +213,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 				<ms-update-status></ms-update-status>
 			</div>
 			<div slot="dialog-footer" class="foot">
-				<ml-button variant="primary" @ml:click=${() => (self.saveEditor(), store.closeDialog('settings'))}>Done</ml-button>
+				<ml-button variant="primary" @ml:click=${() => void self.doneSettings()}>Done</ml-button>
 			</div>
 		</ml-dialog>
 	`;

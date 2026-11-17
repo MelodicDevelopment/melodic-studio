@@ -7,3 +7,5 @@ src-tauri/gen/schemas
 .env.local
 .claude/worktrees/
 .claude/settings.local.json
+src-tauri/tests/fixtures/*/obj/
+src-tauri/tests/fixtures/*/bin/

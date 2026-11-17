@@ -5,10 +5,12 @@
  */
 import type { ITheme, Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
+import type { WebLinksAddon } from '@xterm/addon-web-links';
 
 export interface XtermApi {
 	Terminal: typeof Terminal;
 	FitAddon: typeof FitAddon;
+	WebLinksAddon: typeof WebLinksAddon;
 }
 
 let _loading: Promise<XtermApi> | null = null;
@@ -19,10 +21,15 @@ export function loadXterm(): Promise<XtermApi> {
 }
 
 async function load(): Promise<XtermApi> {
-	const [xterm, fit, css] = await Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit'), import('@xterm/xterm/css/xterm.css?inline')]);
+	const [xterm, fit, links, css] = await Promise.all([
+		import('@xterm/xterm'),
+		import('@xterm/addon-fit'),
+		import('@xterm/addon-web-links'),
+		import('@xterm/xterm/css/xterm.css?inline'),
+	]);
 	_sheet = new CSSStyleSheet();
 	_sheet.replaceSync(css.default);
-	return { Terminal: xterm.Terminal, FitAddon: fit.FitAddon };
+	return { Terminal: xterm.Terminal, FitAddon: fit.FitAddon, WebLinksAddon: links.WebLinksAddon };
 }
 
 /** xterm's CSS does not reach into a shadow root from <head>, so the root adopts it. Call after loadXterm(). */

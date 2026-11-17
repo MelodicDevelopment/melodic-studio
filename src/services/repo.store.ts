@@ -6,13 +6,13 @@ import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
 import { DialogService } from '@melodicdev/components/dialog';
-import { BackendService, asAppError, type AppStatus, type Branch, type Commit, type FileChange, type OpenTarget, type RepoStatus, type RepoSummary, type ResetMode } from './backend.service';
+import { BackendService, asAppError, type AppStatus, type Branch, type BranchCompare, type Commit, type FileChange, type RebaseStep, type Identities, type Identity, type OpenTarget, type RepoStatus, type RepoSummary, type ResetMode } from './backend.service';
 import { parseDiff, type ParsedDiff } from '../shared/diff';
 import { fileName, plural } from '../shared/format';
 
 export type Busy = '' | 'fetch' | 'pull' | 'push' | 'commit' | 'checkout' | 'branch' | 'repo' | 'discard' | 'undo' | 'merge' | 'stash' | 'history';
 export type Tab = 'changes' | 'history' | 'files' | 'agents';
-export type DialogName = 'add-repo' | 'new-branch' | 'rename-branch' | 'delete-branch' | 'merge-branch' | 'publish' | 'discard' | 'remove-repo' | 'settings' | 'new-tag' | 'reset' | 'force-push';
+export type DialogName = 'add-repo' | 'new-branch' | 'rename-branch' | 'delete-branch' | 'merge-branch' | 'publish' | 'discard' | 'remove-repo' | 'settings' | 'new-tag' | 'reset' | 'force-push' | 'cherry-pick' | 'rebase-interactive';
 
 /** What a confirmation dialog is about. */
 export interface Prompt {
@@ -29,6 +29,12 @@ export interface Prompt {
 	remote?: boolean;
 	/** Merge dialog: rebase onto the branch instead of merging it in. */
 	rebase?: boolean;
+	/** Merge dialog: open on "Squash and merge". */
+	squash?: boolean;
+	/** Interactive rebase: replay the commits after this ref (a branch, or the parent of `commit`); null is the whole branch. */
+	upstream?: string | null;
+	/** Commits to start with selected (cherry-pick), or to start as reword (interactive rebase). */
+	hashes?: string[];
 }
 
 export interface SyncAction {
@@ -97,6 +103,17 @@ export class RepoStore {
 
 	readonly branches = signal<Branch[]>([]);
 
+	// ---- comparing with another branch (History tab) ----
+	/** The branch the History tab compares the current one with; null shows the plain history. */
+	readonly compareBranch = signal<string | null>(null);
+	/** Which side of the comparison is listed: false = behind (what merging it would bring in), true = ahead. */
+	readonly compareAhead = signal(false);
+	readonly compareCommits = signal<Commit[]>([]);
+	readonly compareLoaded = signal(false);
+	readonly compareEnd = signal(false);
+	/** Ahead/behind of the current branch against others, by branch name, as far as they have been counted. */
+	readonly compareCounts = signal<Map<string, BranchCompare>>(new Map());
+
 	/** Ids of the repositories open as tabs across the top, in order (see `repoTabList`). */
 	readonly repoTabs = signal<string[]>(loadRepoTabs());
 	/** The open tabs as repositories. The current repository is always one of them. */
@@ -118,7 +135,10 @@ export class RepoStore {
 	});
 	readonly selectedFile = computed<FileChange | null>(() => this.status()?.files.find((f) => f.path === this.selectedPath()) ?? null);
 	readonly includedFiles = computed<FileChange[]>(() => (this.status()?.files ?? []).filter((f) => !this.excluded().has(f.path)));
-	readonly selectedCommit = computed<Commit | null>(() => this.commits().find((c) => c.hash === this.selectedHash()) ?? null);
+	readonly selectedCommit = computed<Commit | null>(() => {
+		const hash = this.selectedHash();
+		return (this.compareBranch() ? this.compareCommits() : this.commits()).find((c) => c.hash === hash) ?? null;
+	});
 	readonly selectedCommitFile = computed<FileChange | null>(() => this.commitFiles().find((f) => f.path === this.selectedCommitPath()) ?? null);
 
 	/** The one toolbar button that fetches, pulls, pushes or publishes, whichever is next. */
@@ -147,6 +167,7 @@ export class RepoStore {
 	private _statusToken = 0;
 	private _diffToken = 0;
 	private _historyToken = 0;
+	private _compareToken = 0;
 	private _commitToken = 0;
 	private _started = false;
 	/** What each open repository was showing, so coming back to its tab picks up where it left off. */
@@ -229,6 +250,13 @@ export class RepoStore {
 		this.selectedCommitPath.set(null);
 		this.commitDiff.set(null);
 		this.branches.set([]);
+		this._compareToken++;
+		this.compareBranch.set(null);
+		this.compareAhead.set(false);
+		this.compareCommits.set([]);
+		this.compareLoaded.set(false);
+		this.compareEnd.set(false);
+		this.compareCounts.set(new Map());
 		this.tab.set('changes');
 	}
 
@@ -283,6 +311,7 @@ export class RepoStore {
 			if (this.historyLoaded()) {
 				void this.loadHistory(true);
 			}
+			this.reloadCompare();
 		}
 	}
 
@@ -292,6 +321,7 @@ export class RepoStore {
 		if (this.historyLoaded()) {
 			void this.loadHistory(true);
 		}
+		this.reloadCompare();
 	}
 
 	// ---- errors -------------------------------------------------------------
@@ -305,7 +335,7 @@ export class RepoStore {
 		}
 		if (err.kind === 'conflict') {
 			this.tab.set('changes');
-			this.toast.warning('Merge conflicts', `${plural(err.paths?.length ?? 0, 'file')} need resolving. Fix them in your editor, then commit.`);
+			this.toast.warning('Merge conflicts', `${plural(err.paths?.length ?? 0, 'file')} need resolving. Resolve them, then press Continue in the Changes tab.`);
 		} else if (err.kind === 'auth') {
 			this.toast.error('Authentication failed', 'Git could not sign in to the remote. Check your SSH key or credential helper, then try again.');
 		} else {
@@ -523,12 +553,32 @@ export class RepoStore {
 		}
 	}
 
-	async setEditor(editor: string): Promise<void> {
+	/** The global identity and the current repository's override. */
+	async identities(): Promise<Identities | null> {
 		try {
-			await this.backend.setEditor(editor);
-			await this.reloadApp();
+			return await this.backend.identity(this.id);
 		} catch (e) {
 			this.fail(e);
+			return null;
+		}
+	}
+
+	/** Save who commits: `global` everywhere (null: leave it alone), `repo` (null: none) for the current repository only. */
+	async saveIdentities(global: Identity | null, repo: Identity | null): Promise<boolean> {
+		try {
+			const was = await this.backend.identity(this.id);
+			const same = (a: Identity | null, b: Identity | null) => a?.name.trim() === b?.name.trim() && a?.email.trim() === b?.email.trim();
+			if (global && !same(global, was.global)) {
+				await this.backend.setIdentity(null, global);
+				await this.reloadApp();
+			}
+			if (this.id && !same(repo, was.repo)) {
+				await this.backend.setIdentity(this.id, repo);
+			}
+			return true;
+		} catch (e) {
+			this.fail(e);
+			return false;
 		}
 	}
 
@@ -730,7 +780,7 @@ export class RepoStore {
 			this.historyEnd.set(page.length < PAGE);
 			this.historyLoaded.set(true);
 			const selected = this.selectedHash();
-			if (!selected || !commits.some((c) => c.hash === selected)) {
+			if (!this.compareBranch() && (!selected || !commits.some((c) => c.hash === selected))) {
 				if (commits[0]) {
 					this.selectCommit(commits[0].hash);
 				} else {
@@ -744,6 +794,99 @@ export class RepoStore {
 				this.historyLoaded.set(true);
 				this.fail(e);
 			}
+		}
+	}
+
+	// ---- comparing with another branch ---------------------------------------
+
+	/** Compare the current branch with `branch` (null goes back to the plain history). Starts on whichever side has commits. */
+	async setCompare(branch: string | null): Promise<void> {
+		this._compareToken++;
+		this.compareBranch.set(branch);
+		this.compareCommits.set([]);
+		this.compareLoaded.set(false);
+		this.compareEnd.set(false);
+		if (!branch) {
+			const first = this.commits()[0];
+			const selected = this.selectedHash();
+			if (first && !this.commits().some((c) => c.hash === selected)) {
+				this.selectCommit(first.hash);
+			}
+			return;
+		}
+		const known = this.compareCounts().get(branch);
+		this.compareAhead.set(!!known && known.behind === 0 && known.ahead > 0);
+		await Promise.all([this.loadCompare(true), this.loadCompareCounts([branch])]);
+	}
+
+	setCompareAhead(ahead: boolean): void {
+		if (ahead !== this.compareAhead()) {
+			this.compareAhead.set(ahead);
+			void this.loadCompare(true);
+		}
+	}
+
+	async loadCompare(reset: boolean): Promise<void> {
+		const id = this.id;
+		const branch = this.compareBranch();
+		if (!id || !branch) {
+			return;
+		}
+		const token = ++this._compareToken;
+		const skip = reset ? 0 : this.compareCommits().length;
+		try {
+			const page = await this.backend.compareHistory(id, branch, this.compareAhead(), skip, PAGE);
+			if (token !== this._compareToken) {
+				return;
+			}
+			const commits = reset ? page : [...this.compareCommits(), ...page];
+			this.compareCommits.set(commits);
+			this.compareEnd.set(page.length < PAGE);
+			this.compareLoaded.set(true);
+			const selected = this.selectedHash();
+			if (commits[0] && !commits.some((c) => c.hash === selected)) {
+				this.selectCommit(commits[0].hash);
+			} else if (!commits.length) {
+				this.selectedHash.set(null);
+				this.commitFiles.set([]);
+				this.commitDiff.set(null);
+			}
+		} catch {
+			if (token === this._compareToken) {
+				// The branch is gone (deleted, pruned by a fetch): back to the plain history.
+				void this.setCompare(null);
+			}
+		}
+	}
+
+	/** Count ahead/behind for the branches a list is about to show. */
+	async loadCompareCounts(names: string[]): Promise<void> {
+		const id = this.id;
+		if (!id || !names.length) {
+			return;
+		}
+		try {
+			const counts = await this.backend.compareCounts(id, names.slice(0, 100));
+			if (id !== this.id) {
+				return;
+			}
+			const next = new Map(this.compareCounts());
+			for (const c of counts) {
+				next.set(c.name, c);
+			}
+			this.compareCounts.set(next);
+		} catch {
+			/* the counts are a hint; the list works without them */
+		}
+	}
+
+	/** HEAD moved (commit, merge, pull, checkout): counts are stale, and the comparison is re-read. */
+	private reloadCompare(): void {
+		this.compareCounts.set(new Map());
+		const branch = this.compareBranch();
+		if (branch) {
+			void this.loadCompare(true);
+			void this.loadCompareCounts([branch]);
 		}
 	}
 
@@ -884,6 +1027,63 @@ export class RepoStore {
 			this.busy.set('');
 			void this.reloadEverything();
 		}
+	}
+
+	/** Commits `branch` has that HEAD lacks, newest first (what merging or cherry-picking could bring in). */
+	async incoming(branch: string): Promise<Commit[]> {
+		const id = this.id;
+		if (!id) {
+			return [];
+		}
+		try {
+			return await this.backend.compareHistory(id, branch, false, 0, 500);
+		} catch (e) {
+			this.fail(e);
+			return [];
+		}
+	}
+
+	/** Copy commits onto the current branch, oldest first. */
+	cherryPick(hashes: string[]): Promise<boolean> {
+		return this.act('merge', (id) => this.backend.cherryPick(id, hashes), hashes.length === 1 ? 'Commit cherry-picked' : `Cherry-picked ${plural(hashes.length, 'commit')}`);
+	}
+
+	/** Everything `from` brings as one commit. On conflicts the message waits in the commit form as well. */
+	mergeSquash(from: string, message: string): Promise<boolean> {
+		return this.act(
+			'merge',
+			async (id) => {
+				try {
+					await this.backend.mergeSquash(id, from, message);
+				} catch (e) {
+					if (asAppError(e).kind === 'conflict') {
+						const [summary, ...rest] = message.trim().split('\n');
+						this.summary.set(summary);
+						this.description.set(rest.join('\n').trim());
+					}
+					throw e;
+				}
+			},
+			`Squashed ${from} into one commit`,
+		);
+	}
+
+	/** The commits an interactive rebase on `upstream` would replay, oldest first. Null when git refused. */
+	async rebasePlan(upstream: string | null): Promise<Commit[] | null> {
+		const id = this.id;
+		if (!id) {
+			return null;
+		}
+		try {
+			return await this.backend.rebasePlan(id, upstream);
+		} catch (e) {
+			this.fail(e);
+			return null;
+		}
+	}
+
+	rebaseInteractive(upstream: string | null, steps: RebaseStep[]): Promise<boolean> {
+		return this.act('merge', (id) => this.backend.rebaseInteractive(id, upstream, steps), 'History rewritten');
 	}
 
 	merge(from: string): Promise<boolean> {

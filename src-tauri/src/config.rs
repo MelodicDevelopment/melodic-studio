@@ -29,8 +29,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub repos: Vec<RepoRef>,
     pub current: Option<String>,
-    /// Command used for "Open in editor" (default `code`).
-    pub editor: Option<String>,
 }
 
 impl AppConfig {
@@ -51,9 +49,5 @@ impl AppConfig {
 
     pub fn find(&self, id: &str) -> Option<&RepoRef> {
         self.repos.iter().find(|r| r.id == id)
-    }
-
-    pub fn editor(&self) -> String {
-        self.editor.clone().filter(|e| !e.trim().is_empty()).unwrap_or_else(|| "code".into())
     }
 }

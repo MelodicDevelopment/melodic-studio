@@ -237,6 +237,20 @@ export class AgentsStore {
 	readonly asking = signal<{ scope: AskScope; seed: string } | null>(null);
 	/** The group whose attempts the main pane is comparing, if any. */
 	readonly comparing = signal<string | null>(null);
+	/**
+	 * A history question asked from the History tab stays there: its main pane shows the question box,
+	 * then the session (`id`), instead of switching to the Agents tab. `open` is false while a commit is shown instead.
+	 */
+	readonly historyChat = signal<{ id: string | null; open: boolean } | null>(null);
+	/** `historyChat` while it belongs to the repository on screen. */
+	readonly docked = computed(() => {
+		const chat = this.historyChat();
+		const repo = this.repos.repo()?.id;
+		if (!chat || !repo) {
+			return null;
+		}
+		return chat.id ? (this.sessions().some((s) => s.id === chat.id && s.repoId === repo) ? chat : null) : chat;
+	});
 	/** Bumped when a link selects a commit, so the History list can scroll to it. */
 	readonly commitShown = signal(0);
 
@@ -333,7 +347,8 @@ export class AgentsStore {
 
 	/** Is this session what the window is showing right now? */
 	private watching(s: AgentSession): boolean {
-		if (document.visibilityState !== 'visible' || this.repos.repo()?.id !== s.repoId || this.repos.tab() !== 'agents' || this.asking()) {
+		const docked = this.repos.tab() === 'history' && this.docked()?.open;
+		if (document.visibilityState !== 'visible' || this.repos.repo()?.id !== s.repoId || (this.repos.tab() !== 'agents' && !docked) || this.asking()) {
 			return false;
 		}
 		const comparing = this.comparing();
@@ -442,6 +457,10 @@ export class AgentsStore {
 
 	/** Show a session of the open repository in the main pane. */
 	select(id: string | null): void {
+		const chat = this.historyChat();
+		if (chat?.open && chat.id !== id) {
+			this.historyChat.set(chat.id ? { ...chat, open: false } : null);
+		}
 		this.asking.set(null);
 		this.comparing.set(null);
 		this.selectedId.set(id);
@@ -570,7 +589,12 @@ export class AgentsStore {
 
 	/** Show the box for a new read-only question (on the Agents tab), optionally with a question already in it. */
 	openAsk(scope: AskScope = 'code', seed = ''): void {
-		this.repos.setTab('agents');
+		if (scope === 'history' && this.repos.tab() === 'history') {
+			this.historyChat.set({ id: null, open: true });
+		} else {
+			this.hideHistoryChat();
+			this.repos.setTab('agents');
+		}
 		this.comparing.set(null);
 		this.selectedId.set(null);
 		this.asking.set({ scope, seed });
@@ -590,6 +614,9 @@ export class AgentsStore {
 		const session = this.newSession(repo.id, text, repo.worktree ?? repo.path, this.repos.status()?.branch ?? null, { kind: 'ask', mode: 'default', tools: ASK_TOOLS[scope], base: this.repos.status()?.head ?? null });
 		this.save([...this.sessions(), session]);
 		this.select(session.id);
+		if (scope === 'history' && this.historyChat()?.open) {
+			this.historyChat.set({ id: session.id, open: true });
+		}
 		await this.send(session.id, text);
 		return this.find(session.id)?.status !== 'failed';
 	}
@@ -733,6 +760,26 @@ export class AgentsStore {
 			.sort((a, b) => a.attempt - b.attempt);
 	}
 
+	/** The History tab's main pane goes back to the selected commit; the docked question can be reopened. */
+	hideHistoryChat(): void {
+		const chat = this.historyChat();
+		if (chat?.open) {
+			this.historyChat.set(chat.id && this.find(chat.id) ? { id: chat.id, open: false } : null);
+			if (!chat.id) {
+				this.asking.set(null);
+			}
+		}
+	}
+
+	/** Bring the History tab's docked question back into its main pane. */
+	showHistoryChat(): void {
+		const id = this.historyChat()?.id;
+		if (id && this.find(id)) {
+			this.select(id);
+			this.historyChat.set({ id, open: true });
+		}
+	}
+
 	/** Show a group's attempts side by side in the main pane. */
 	compare(group: string): void {
 		this.asking.set(null);
@@ -824,6 +871,9 @@ export class AgentsStore {
 		}
 		const repos = this.repos;
 		repos.tab.set('history');
+		if (repos.compareBranch()) {
+			await repos.setCompare(null); // the links point into the branch's own history
+		}
 		if (!repos.historyLoaded()) {
 			await repos.loadHistory(true);
 		}
@@ -842,6 +892,7 @@ export class AgentsStore {
 			return false;
 		}
 		repos.selectCommit(commit.hash);
+		this.hideHistoryChat();
 		this.commitShown.set(this.commitShown() + 1);
 		return true;
 	}
