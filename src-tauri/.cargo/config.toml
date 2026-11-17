@@ -1,4 +1,4 @@
-# The Dock labels an unbundled app with its executable's file name, and cargo cannot name a binary
-# "Melodic Studio". So on macOS `cargo run` (which is what `tauri dev` does) goes through dev-runner.sh.
+# macOS only: run dev builds from inside a small app bundle, so the Dock shows
+# "Melodic Studio" and the app icon instead of the bare binary name. See scripts/dev-app.sh.
 [target.'cfg(target_os = "macos")']
-runner = "./dev-runner.sh"
+runner = "scripts/dev-app.sh"
