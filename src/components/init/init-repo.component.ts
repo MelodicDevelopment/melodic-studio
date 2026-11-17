@@ -47,7 +47,7 @@ export const HOSTS: { id: Where; label: string; icon: string; createPage?: strin
 	{ id: 'github', label: 'GitHub', icon: 'github-logo', createPage: 'https://github.com/new' },
 	{ id: 'azure', label: 'Azure DevOps', icon: 'windows-logo', createPage: 'https://dev.azure.com/' },
 	{ id: 'gitlab', label: 'GitLab', icon: 'gitlab-logo', createPage: 'https://gitlab.com/projects/new' },
-	{ id: 'bitbucket', label: 'Bitbucket', icon: 'bucket', createPage: 'https://bitbucket.org/repo/create' },
+	{ id: 'bitbucket', label: 'Bitbucket', icon: 'cloud', createPage: 'https://bitbucket.org/repo/create' },
 	{ id: 'other', label: 'Another host', icon: 'link' },
 ];
 
