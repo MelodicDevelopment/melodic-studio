@@ -2,6 +2,7 @@ import { html } from '@melodicdev/core/template';
 import type { ToolbarComponent } from './toolbar.component';
 import { relativeTime } from '../../shared/format';
 import type { Branch } from '../../services/backend.service';
+import { terminals } from '../../services/terminal.store';
 
 function hostIcon(provider: string): string {
 	return provider === 'github' ? 'github-logo' : provider === 'gitlab' ? 'gitlab-logo' : provider === 'azure' ? 'windows-logo' : 'globe';
@@ -185,6 +186,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 					</ml-popover>
 				`
 				: ''}
+			${repo && st ? html`<button class="tool" title="Terminal (Ctrl+\`)" style=${terminals().open() ? 'color: var(--ms-toolbar-fg)' : ''} @click=${() => terminals().toggle()}><ml-icon icon="terminal-window" size="md"></ml-icon></button>` : ''}
 			<button class="tool" title="Settings" @click=${() => store.ask('settings')}><ml-icon icon="gear" size="md"></ml-icon></button>
 		</div>
 		<div class="ctx" popover="manual" style="left: ${self.menu?.x ?? 0}px; top: ${self.menu?.y ?? 0}px" @contextmenu=${(e: Event) => e.preventDefault()}>${contextMenu(self)}</div>

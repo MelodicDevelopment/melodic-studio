@@ -5,6 +5,7 @@
  */
 import { Injectable } from '@melodicdev/core/injection';
 import { demoListDir, demoReadFile, demoWriteFile } from './demo-files';
+import { demoTerminal } from './demo-terminal';
 
 export function isDesktop(): boolean {
 	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -226,6 +227,11 @@ export class BackendService {
 	async lspStart(id: string, language: string) { return (await this.call<{ key: string; root: string; fresh: boolean } | null | undefined>('lsp_start', { id, language })) ?? null; }
 	lspSend(key: string, message: unknown) { return this.call<void>('lsp_send', { key, message }); }
 	lspStop(key: string) { return this.call<void>('lsp_stop', { key }); }
+	/** Start the user's shell in the active checkout. Its output arrives as `term-data` events ({ key, data: base64 }), its end as `term-exit` ({ key, code }). */
+	termOpen(id: string, cols: number, rows: number) { return this.call<string>('term_open', { id, cols, rows }); }
+	termWrite(key: string, data: string) { return this.call<void>('term_write', { key, data }); }
+	termResize(key: string, cols: number, rows: number) { return this.call<void>('term_resize', { key, cols, rows }); }
+	termClose(key: string) { return this.call<void>('term_close', { key }); }
 
 	/** Subscribe to an event the native side emits. Resolves to an unsubscribe function. */
 	async listen<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
@@ -612,6 +618,11 @@ class DemoBackend {
 			}
 			case 'repo_init':
 				return this.handle('repo_add', { path: args.path });
+			case 'term_open':
+			case 'term_write':
+			case 'term_resize':
+			case 'term_close':
+				return demoTerminal(cmd, args, empty ? String(this.current) : this.worktreeList.find((w) => w.active)?.path ?? DEMO_ID, (event, payload) => this.emit(event, payload, 0));
 			case 'pick_folder':
 				return '/Users/demo/Source';
 			case 'list_dir':

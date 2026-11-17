@@ -57,6 +57,16 @@ export const appStyles = () => css`
 		flex: 1;
 		height: auto;
 	}
+	/* The main pane with the terminal panel docked under it; the sidebar keeps the full height. */
+	.maincol {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+	}
+	.maincol > main {
+		min-height: 0;
+	}
 
 	/* ---- sidebar tabs ---- */
 	.tabs {
