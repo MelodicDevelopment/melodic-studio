@@ -1,6 +1,6 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { html, css } from '@melodicdev/core/template';
-import type { ParsedDiff, DiffLine } from '../../shared/diff';
+import type { ParsedDiff, DiffLine, DiffNote } from '../../shared/diff';
 
 const SIGN: Record<DiffLine['kind'], string> = { add: '+', del: '−', ctx: '', hunk: '', note: '' };
 
@@ -8,7 +8,17 @@ function message(icon: string, text: string) {
 	return html`<div class="state"><ml-icon icon=${icon} size="lg"></ml-icon><div>${text}</div></div>`;
 }
 
-/** Renders one parsed unified diff. `.diff` is null while it loads. */
+/** A note in place: under its line, or above the diff when its line is not shown. */
+function noteRow(n: DiffNote, focus: number | null) {
+	return html`
+		<div class="fnote ${n.tone} ${n.line !== null && n.line === focus ? 'focus' : ''}" data-line=${n.line ?? ''}>
+			<div><span class="sev">${n.label}</span><b>${n.title}</b>${n.line !== null ? html`<span class="at">line ${n.line}</span>` : ''}</div>
+			${n.detail ? html`<p>${n.detail}</p>` : ''}
+		</div>
+	`;
+}
+
+/** Renders one parsed unified diff. `.diff` is null while it loads. `.notes` are shown under the new-file lines they name. */
 @MelodicComponent({
 	selector: 'ms-diff',
 	template: (self: DiffViewComponent) => {
@@ -25,13 +35,16 @@ function message(icon: string, text: string) {
 		if (!d.lines.length) {
 			return message('file', self.emptyText);
 		}
+		const shown = new Set(d.lines.map((l) => l.newNo));
+		const notesAt = (no: number | null) => (no === null || !self.notes.length ? [] : self.notes.filter((n) => n.line === no));
 		return html`
 			<div class="scroll">
 				<div class="rows">
+					${self.notes.filter((n) => n.line === null || !shown.has(n.line)).map((n) => noteRow(n, self.focusLine))}
 					${d.lines.map((l) =>
 						l.kind === 'hunk'
 							? html`<div class="row hunk"><span class="no"></span><span class="no"></span><span class="sign"></span><span class="code">${l.text}</span></div>`
-							: html`<div class="row ${l.kind}"><span class="no">${l.oldNo ?? ''}</span><span class="no">${l.newNo ?? ''}</span><span class="sign">${SIGN[l.kind]}</span><span class="code">${l.text}</span></div>`
+							: html`<div class="row ${l.kind}"><span class="no">${l.oldNo ?? ''}</span><span class="no">${l.newNo ?? ''}</span><span class="sign">${SIGN[l.kind]}</span><span class="code">${l.text}</span></div>${notesAt(l.newNo).map((n) => noteRow(n, self.focusLine))}`
 					)}
 					${d.truncated ? html`<div class="row note"><span class="no"></span><span class="no"></span><span class="sign"></span><span class="code">Diff truncated. Open the file in your editor to see the rest.</span></div>` : ''}
 				</div>
@@ -123,9 +136,84 @@ function message(icon: string, text: string) {
 			color: var(--ml-color-text-muted);
 			font-style: italic;
 		}
+		/* ---- notes (review findings) ---- */
+		.scroll {
+			container-type: inline-size;
+		}
+		.fnote {
+			position: sticky;
+			left: 0;
+			box-sizing: border-box;
+			width: 620px;
+			width: min(100cqw, 860px);
+			padding: 7px 16px 8px 13px;
+			border-left: 3px solid var(--ml-color-border-strong);
+			border-top: 1px solid var(--ml-color-border);
+			border-bottom: 1px solid var(--ml-color-border);
+			background: var(--ml-color-background);
+			font-family: var(--ml-font-sans);
+			font-size: 12.5px;
+			line-height: 1.45;
+			white-space: normal;
+			user-select: text;
+			-webkit-user-select: text;
+		}
+		.fnote.bug {
+			border-left-color: var(--ms-del);
+		}
+		.fnote.risk {
+			border-left-color: var(--ms-mod);
+		}
+		.fnote.focus {
+			background: var(--ml-color-primary-subtle);
+		}
+		.fnote .sev {
+			margin-right: 8px;
+			font-size: 10px;
+			font-weight: 700;
+			letter-spacing: 0.05em;
+			text-transform: uppercase;
+			color: var(--ml-color-text-muted);
+		}
+		.fnote.bug .sev {
+			color: var(--ms-del);
+		}
+		.fnote.risk .sev {
+			color: var(--ms-mod);
+		}
+		.fnote b {
+			font-weight: 600;
+		}
+		.fnote .at {
+			margin-left: 8px;
+			color: var(--ml-color-text-muted);
+			font-size: 11px;
+		}
+		.fnote p {
+			margin: 3px 0 0;
+			color: var(--ml-color-text-secondary);
+		}
 	`,
 })
 export class DiffViewComponent {
 	diff: ParsedDiff | null = null;
 	emptyText = 'No content changes.';
+	/** Remarks to show inside the diff, keyed by new-file line number. */
+	notes: DiffNote[] = [];
+	/** The note line to bring into view (once, each time it or the diff changes). */
+	focusLine: number | null = null;
+	elementRef!: HTMLElement;
+	private _focused = '';
+
+	onRender(): void {
+		const key = this.diff && this.focusLine !== null ? `${this.focusLine}:${this.diff.raw.length}` : '';
+		if (key !== this._focused) {
+			// The note may be set a render after the diff: only count the scroll as done once it is there.
+			const note = key ? this.elementRef.shadowRoot?.querySelector(`.fnote[data-line="${this.focusLine}"]`) : null;
+			if (note || !key) {
+				this._focused = key;
+				note?.scrollIntoView({ block: 'center' });
+			}
+		}
+	}
 }

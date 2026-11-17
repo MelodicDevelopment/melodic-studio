@@ -130,6 +130,30 @@ export interface UndoneCommit {
 	summary: string;
 	description: string;
 }
+/** A diff prepared for a prompt: capped, with a note in `text` wherever something was left out. */
+export interface AiDiff {
+	text: string;
+	truncated: boolean;
+	/** Subjects of the latest commits, newest first. */
+	recent: string[];
+}
+/** Everything a push would send: `base`..`head`, measured against `against` (the upstream, or the default branch). */
+export interface PushDiff {
+	/** The diff with new-file line numbers written in, capped. */
+	text: string;
+	truncated: boolean;
+	base: string;
+	head: string;
+	against: string;
+	commits: { hash: string; summary: string }[];
+	files: FileChange[];
+}
+/** A conflicted file as it sits in the working tree, markers included. */
+export interface ConflictFile {
+	text: string;
+	binary: boolean;
+	tooLarge: boolean;
+}
 /** One row of the Files tab. `path` is repository-relative, `/` separated. */
 export interface TreeEntry {
 	name: string;
@@ -334,6 +358,18 @@ export class BackendService {
 	hostOwners(provider: HostCli['provider'], org: string | null = null) { return this.call<HostOwner[]>('host_owners', { provider, org }); }
 	/** Creates the remote repository only: nothing is pushed and no local repository changes. For Azure DevOps `owner` is the project. */
 	hostRepoCreate(provider: HostCli['provider'], name: string, owner: string | null, isPrivate: boolean, org: string | null = null) { return this.call<HostRepo>('host_repo_create', { provider, name, owner, private: isPrivate, org }); }
+	// ---- AI features around changes (src-tauri/src/ai_git.rs) ----
+	/** The combined working-tree diff of these files, capped for a prompt. */
+	aiSelectedDiff(id: string, files: FileChange[]) { return this.call<AiDiff>('ai_selected_diff', { id, files: files.map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status })) }); }
+	/** One whole commit (message, stat, patch), capped. */
+	aiCommitPatch(id: string, hash: string) { return this.call<AiDiff>('ai_commit_patch', { id, hash }); }
+	aiPushDiff(id: string) { return this.call<PushDiff>('ai_push_diff', { id }); }
+	aiRangeFileDiff(id: string, base: string, head: string, path: string) { return this.call<DiffResult>('ai_range_file_diff', { id, base, head, path }); }
+	aiConflictFile(id: string, path: string) { return this.call<ConflictFile>('ai_conflict_file', { id, path }); }
+	/** The diff from the file as it is to `text`; nothing is written. */
+	aiResolutionPreview(id: string, path: string, text: string) { return this.call<DiffResult>('ai_resolution_preview', { id, path, text }); }
+	/** Write `text` over the conflicted file and stage it. Refused when the file is no longer `original`, or the checkout no longer `root`. */
+	aiResolutionApply(id: string, path: string, text: string, original: string, root: string) { return this.call<void>('ai_resolution_apply', { id, path, text, original, root }); }
 }
 
 // ---- browser-only stand-in --------------------------------------------------
@@ -404,6 +440,77 @@ Binary files a/public/cover.png and b/public/cover.png differ
 `,
 };
 
+/** A file left conflicted by a merge, so the preview has something to propose a resolution for. */
+const DEMO_CONFLICT_PATH = 'src/player/shuffle.ts';
+const DEMO_CONFLICT_TEXT = `import type { Track } from './track';
+
+<<<<<<< HEAD
+export function shuffle(tracks: Track[], seed = Date.now()): Track[] {
+	const random = mulberry32(seed);
+=======
+export function shuffle(tracks: readonly Track[]): Track[] {
+	const random = Math.random;
+>>>>>>> origin/main
+	const out = [...tracks];
+	for (let i = out.length - 1; i > 0; i--) {
+		const j = Math.floor(random() * (i + 1));
+		[out[i], out[j]] = [out[j], out[i]];
+	}
+	return out;
+}
+`;
+DEMO_DIFFS[DEMO_CONFLICT_PATH] = `diff --git a/src/player/shuffle.ts b/src/player/shuffle.ts
+index 4c1d2e3..0000000 100644
+--- a/src/player/shuffle.ts
++++ b/src/player/shuffle.ts
+@@ -1,6 +1,11 @@
+ import type { Track } from './track';
+
++<<<<<<< HEAD
+ export function shuffle(tracks: Track[], seed = Date.now()): Track[] {
+ 	const random = mulberry32(seed);
++=======
++export function shuffle(tracks: readonly Track[]): Track[] {
++	const random = Math.random;
++>>>>>>> origin/main
+ 	const out = [...tracks];
+ 	for (let i = out.length - 1; i > 0; i--) {
+ 		const j = Math.floor(random() * (i + 1));
+`;
+/** What accepting the canned resolution (demoAnswer, `resolve-conflict`) does to the conflicted file. */
+const DEMO_RESOLUTION_DIFF = `diff --git a/src/player/shuffle.ts b/src/player/shuffle.ts
+--- a/src/player/shuffle.ts
++++ b/src/player/shuffle.ts
+@@ -1,12 +1,7 @@
+ import type { Track } from './track';
+
+-<<<<<<< HEAD
+-export function shuffle(tracks: Track[], seed = Date.now()): Track[] {
+-	const random = mulberry32(seed);
+-=======
+-export function shuffle(tracks: readonly Track[]): Track[] {
+-	const random = Math.random;
+->>>>>>> origin/main
++export function shuffle(tracks: readonly Track[], seed = Date.now()): Track[] {
++	const random = mulberry32(seed);
+ 	const out = [...tracks];
+ 	for (let i = out.length - 1; i > 0; i--) {
+ 		const j = Math.floor(random() * (i + 1));
+`;
+const DEMO_RESOLVED_DIFF = `diff --git a/src/player/shuffle.ts b/src/player/shuffle.ts
+index 4c1d2e3..8a9b0c1 100644
+--- a/src/player/shuffle.ts
++++ b/src/player/shuffle.ts
+@@ -1,6 +1,6 @@
+ import type { Track } from './track';
+
+-export function shuffle(tracks: Track[], seed = Date.now()): Track[] {
++export function shuffle(tracks: readonly Track[], seed = Date.now()): Track[] {
+ 	const random = mulberry32(seed);
+ 	const out = [...tracks];
+ 	for (let i = out.length - 1; i > 0; i--) {
+`;
+
 function demoCommit(n: number, summary: string, minutesAgo: number, extra: Partial<Commit> = {}): Commit {
 	const hash = (n.toString(16).padStart(4, '0') + 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678').slice(0, 40);
 	return {
@@ -430,6 +537,50 @@ function demoAnswer(prompt: string): string {
 	switch (tag) {
 		case 'pull-request':
 			return demoPullRequestAnswer();
+		case 'commit-message':
+			return JSON.stringify({
+				summary: 'Wrap the queue when repeat is on',
+				description: '- next() takes a repeat flag and starts over at the end of the queue\n- Add nextRepeatMode() to cycle off, all, one\n- Expose the queue length and drop the old notes',
+			});
+		case 'explain-diff':
+		case 'explain-commit':
+			return [
+				'## What changed',
+				'- `Queue.next()` takes a `repeat` flag. At the end of the queue it now returns `null` when repeat is off, and starts over from the first track when it is on.',
+				'- The cursor is only advanced when there is a track to move to, so it no longer runs past the end.',
+				'- A `length` getter exposes how many tracks are queued.',
+				'',
+				'## Why it probably changed',
+				'This looks like groundwork for a repeat mode in the player: the transport needs the queue to wrap, and probably uses `length` to decide whether there is anything to repeat.',
+				'',
+				'## Worth a second look',
+				'- `next()` used to move the cursor even at the end. Code that calls `previous()` right after hitting the end now gets a different track.',
+				'- With repeat on and an empty queue the cursor ends up at `0`:',
+				'',
+				'```ts',
+				'this._cursor = -1;',
+				'return this._items[++this._cursor] ?? null;',
+				'```',
+			].join('\n');
+		case 'review-push':
+			return JSON.stringify({
+				summary: 'The wrap-around works, but next() changed what happens at the end of the queue in a way callers may not expect.',
+				findings: [
+					{ file: 'src/player/queue.ts', line: 17, severity: 'bug', title: 'next() no longer advances past the last track', detail: 'Before this change the cursor moved even when there was nothing left, and previous() relied on that to return the last track. Now previous() after reaching the end skips one track back too far. Keep the old cursor position or adjust previous().' },
+					{ file: 'src/player/queue.ts', line: 21, severity: 'risk', title: 'Repeat on an empty queue leaves the cursor at 0', detail: 'With no items the cursor is reset to -1 and then incremented, so it points at a slot that does not exist. Return null before touching the cursor when the queue is empty.' },
+					{ file: 'src/player/repeat.ts', line: 6, severity: 'nit', title: 'An unknown mode silently becomes "off"', detail: 'indexOf returns -1 for a value outside ORDER, which wraps to the first entry. Fine for typed callers, surprising for a value read from storage.' },
+				],
+			});
+		case 'resolve-conflict':
+			return [
+				'<resolution conflict="1">',
+				'export function shuffle(tracks: readonly Track[], seed = Date.now()): Track[] {',
+				'\tconst random = mulberry32(seed);',
+				'</resolution>',
+				'<summary>',
+				'Kept the seeded generator from your side and the `readonly` parameter from origin/main; the two changes do not depend on each other. Check that every caller is happy to pass a readonly array.',
+				'</summary>',
+			].join('\n');
 		default:
 			return 'This is the browser preview, so there is no Claude here. In the desktop app the answer appears in this spot.';
 	}
@@ -457,7 +608,10 @@ class DemoBackend {
 		{ path: 'public/cover.png', oldPath: null, status: 'modified' },
 		{ path: 'src/player/queue.ts', oldPath: null, status: 'modified' },
 		{ path: 'src/player/repeat.ts', oldPath: null, status: 'untracked' },
+		{ path: DEMO_CONFLICT_PATH, oldPath: null, status: 'conflicted' },
 	];
+	/** The conflicted file's proposal was accepted (ai_resolution_apply). */
+	private resolved = false;
 	private commits: Commit[] = [
 		demoCommit(6, 'Wrap the queue when repeat is on', 55, { unpushed: true, refs: ['HEAD -> feature/repeat-mode'], body: 'The cursor resets instead of running off the end.' }),
 		demoCommit(5, 'Add a repeat toggle to the transport bar', 180, { refs: ['origin/feature/repeat-mode'] }),
@@ -541,7 +695,7 @@ class DemoBackend {
 				} satisfies RepoStatus;
 			case 'file_diff':
 			case 'commit_diff':
-				return { text: DEMO_DIFFS[String(args.path)] ?? '', tooLarge: false } satisfies DiffResult;
+				return { text: (this.resolved && cmd === 'file_diff' && args.path === DEMO_CONFLICT_PATH ? DEMO_RESOLVED_DIFF : DEMO_DIFFS[String(args.path)]) ?? '', tooLarge: false } satisfies DiffResult;
 			case 'commit_changes': {
 				const paths = args.paths as string[];
 				this.files = this.files.filter((f) => !paths.includes(f.path));
@@ -734,6 +888,44 @@ class DemoBackend {
 			case 'host_owners':
 			case 'host_repo_create':
 				return demoHost(cmd, args, { empty, branch: this.branch, unpushed: this.ahead, onRemote: !!this.branchList.find((b) => b.isCurrent)?.upstream, remoteBranches: this.branchList.filter((b) => b.isRemote).map((b) => b.name.replace(/^[^/]+\//, '')), subjects: this.commits.filter((c) => c.unpushed || c.refs.some((r) => r.startsWith('origin/feature'))).map((c) => c.summary) });
+			case 'ai_selected_diff': {
+				const paths = (args.files as { path: string }[]).map((f) => f.path);
+				return { text: paths.map((p) => DEMO_DIFFS[p] ?? '').join(''), truncated: false, recent: this.commits.slice(0, 8).map((c) => c.summary) } satisfies AiDiff;
+			}
+			case 'ai_commit_patch': {
+				const c = this.commits.find((x) => x.hash === args.hash);
+				return { text: `commit ${c?.shortHash ?? ''}\n\n${c?.summary ?? ''}\n\n${c?.body ?? ''}\n\n${DEMO_DIFFS['src/player/queue.ts']}${DEMO_DIFFS['src/player/repeat.ts']}`, truncated: false, recent: [] } satisfies AiDiff;
+			}
+			case 'ai_push_diff': {
+				const unpushed = this.commits.filter((c) => c.unpushed).map((c) => ({ hash: c.hash, summary: c.summary }));
+				const base = this.commits.find((c) => !c.unpushed)?.hash ?? 'b'.repeat(40);
+				const against = this.branchList.find((b) => b.isCurrent)?.upstream ?? 'origin/main';
+				if (empty || !unpushed.length) {
+					return { text: '', truncated: false, base, head: base, against, commits: [], files: [] } satisfies PushDiff;
+				}
+				return {
+					text: DEMO_DIFFS['src/player/queue.ts'] + DEMO_DIFFS['src/player/repeat.ts'],
+					truncated: false,
+					base,
+					head: this.commits[0].hash,
+					against,
+					commits: unpushed,
+					files: [
+						{ path: 'src/player/queue.ts', oldPath: null, status: 'modified' },
+						{ path: 'src/player/repeat.ts', oldPath: null, status: 'added' },
+					],
+				} satisfies PushDiff;
+			}
+			case 'ai_range_file_diff':
+				return { text: DEMO_DIFFS[String(args.path)] ?? '', tooLarge: false } satisfies DiffResult;
+			case 'ai_conflict_file':
+				return { text: args.path === DEMO_CONFLICT_PATH ? DEMO_CONFLICT_TEXT : '', binary: false, tooLarge: false } satisfies ConflictFile;
+			case 'ai_resolution_preview':
+				return { text: DEMO_RESOLUTION_DIFF, tooLarge: false } satisfies DiffResult;
+			case 'ai_resolution_apply':
+				this.resolved = true;
+				this.files = this.files.map((f) => (f.path === args.path ? { ...f, status: 'modified' } : f));
+				return;
 			default:
 				return;
 		}

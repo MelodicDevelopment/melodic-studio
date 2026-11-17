@@ -6,6 +6,7 @@ import { RepoStore } from '../../services/repo.store';
 import type { FileChange } from '../../services/backend.service';
 import { dirName, fileName, plural, statusMark } from '../../shared/format';
 import { changesStyles } from './changes.styles';
+import { proposeMenuItem } from '../ai/ai-entry';
 
 /** Sidebar "Changes" tab: the checked file list and the commit form under it. */
 @MelodicComponent({
@@ -117,8 +118,9 @@ function changesTemplate(self: ChangesComponent) {
 			`
 			: ''}
 
+		<ms-ai-commit-suggestion></ms-ai-commit-suggestion>
 		<div class="commit" @keydown=${self.keydown}>
-			<ml-input size="sm" placeholder=${placeholder || 'Summary (required)'} .value=${store.summary()} @ml:input=${(e: CustomEvent) => store.summary.set(e.detail.value)}></ml-input>
+			<ml-input size="sm" placeholder=${placeholder || 'Summary (required)'} .value=${store.summary()} @ml:input=${(e: CustomEvent) => store.summary.set(e.detail.value)}><ms-ai-commit-button slot="suffix"></ms-ai-commit-button></ml-input>
 			<ml-textarea size="sm" rows="3" placeholder="Description" .value=${store.description()} @ml:input=${(e: CustomEvent) => store.description.set(e.detail.value)}></ml-textarea>
 			<ml-button variant="primary" full-width ?disabled=${!canCommit} ?loading=${busy === 'commit'} @ml:click=${() => store.commit()}>
 				${amend ? 'Amend last commit' : included ? html`Commit ${plural(included, 'file')} to <b>${st?.branch ?? ''}</b>` : 'Select files to commit'}
@@ -126,6 +128,7 @@ function changesTemplate(self: ChangesComponent) {
 			${st?.undo ? html`<ml-checkbox size="sm" label="Amend last commit" .checked=${amend} @ml:change=${(e: CustomEvent) => store.setAmend(e.detail.checked)}></ml-checkbox>` : ''}
 		</div>
 
+		<ms-ai-review-banner></ms-ai-review-banner>
 		${st?.undo
 			? html`
 				<div class="undo">
@@ -143,6 +146,7 @@ function changesTemplate(self: ChangesComponent) {
 						? html`
 							<div class="ctx-item" @click=${() => store.resolveFile(m.path, 'mine')}><ml-icon icon="user" size="sm"></ml-icon>Resolve using my version</div>
 							<div class="ctx-item" @click=${() => store.resolveFile(m.path, 'theirs')}><ml-icon icon="users" size="sm"></ml-icon>Resolve using their version</div>
+							${proposeMenuItem(m)}
 						`
 						: ''}
 					<div class="ctx-sep"></div>

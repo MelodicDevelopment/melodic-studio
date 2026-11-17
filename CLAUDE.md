@@ -19,6 +19,8 @@ src-tauri/src/
   host_cli.rs   the host through the user's own gh / az (+ azure-devops extension) / glab: tool status, issues and work
                 items, pull request context/create, new remote repositories. Every call has a timeout. Tests parse
                 captured CLI output; `cargo test live_read_only -- --ignored` runs read-only calls against the real tools.
+  ai_git.rs     git for the AI features around changes (`ai_*` commands): capped diffs for prompts (checked files, one
+                commit, what a push would send), and the preview/apply of a proposed conflict resolution
 src/
   services/backend.service.ts   the ONLY place that calls invoke(); in-memory demo backend for the browser preview
   services/repo.store.ts        all app state as signals + every action; components read signals in templates
@@ -34,6 +36,10 @@ src/
   services/agents.store.ts      agent sessions (persisted in localStorage), worktrees, review/merge/remove
   services/lsp.service.ts       LSP client; attaches itself to Monaco when the Files tab first opens
   components/agents     sidebar "Agents" tab, the session transcript pane, the worktree banner, their dialogs
+  services/ai-prompts.ts        every prompt of the AI change features, the parser for its answer, model and tools per feature
+  services/ai-features.store.ts commit message, explain, review before push, conflict proposal: one stoppable run each, state as signals
+  components/ai         ai-entry.ts (the hooks app/changes/history call), side panel (explanation, review findings), review
+                        diff and proposal panes for the main pane, commit-form sparkle, review strip, markdown renderer
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
   services/host.store.ts        issues list, "start agent on this", the pull request draft; opens the two dialogs below
   components/host       Issues / work items dialog and the Create pull request dialog (HostStore.openIssues() / openPr())
@@ -59,6 +65,11 @@ src/
 - Worktrees: `RepoRef.worktree` is the active checkout. `commands::repo()` resolves every command to it, so Changes, History, Files and language servers follow a worktree switch with no per-command work; `main_repo()` is for the few commands that must act on the main checkout. The frontend calls `RepoStore.switchContext()` after any switch.
 - Agents are Claude Code, not a reimplementation: `claude -p --output-format stream-json --verbose --permission-mode <mode> [--resume <id>]`, prompt on stdin (never argv), cwd checked against the repository's worktrees. Only assistant/user/result/init events are forwarded. `total_cost_usd` is the session's running total. Agents do not commit; the user reviews in the Changes tab of the agent's worktree, commits, then merges.
 - Language servers are whatever the user has installed (a project's `node_modules/.bin` first, then PATH); nothing is bundled or downloaded. The protocol is spoken in `lsp.service.ts`; the Rust side only frames messages. The editor component knows nothing about it.
+- AI features around changes are one-shot `AiService.ask()` calls and never change the repository by themselves. What they send is bounded: `ai_git.rs` caps a diff at ~60 KB, giving every file an equal share (small files stay whole) and writing a note where something was cut. Prompts declare repository content to be data. Answers reach the page through text bindings only (`components/ai/markdown.ts`); never `unsafeHTML`.
+- Commit message (haiku, no tools): text the user typed is never replaced; the answer is then offered as a suggestion to take or dismiss.
+- Review before push covers merge-base(upstream, HEAD)..HEAD, or the merge-base with the default branch when the branch has no upstream. The diff in the prompt has new-file line numbers written in (`numbered()`), so findings name real lines; `ms-diff` shows them in place through `.notes` (keyed by new-file line). Sonnet, read-only tools (`Read`, `Grep`, `Glob`).
+- Conflict proposals: Claude answers one replacement per conflict block and the frontend splices them into the file, so nothing outside a block can change (and a long file costs no more than its conflicts). The proposal is previewed with `git diff --no-index` against a temp file. Accepting goes through `files::resolve()` and is refused when markers remain, the file is no longer conflicted, it changed since it was read, or the active checkout switched; then it is `git add`ed.
+- Two Melodic traps: a component that first renders an empty template (``html`` ``) never shows a later non-empty one, so render `nothing()` (ai-entry.ts) instead; and `computed()` created while a component renders is disposed with that component, so a store with computed fields is instantiated at module load (end of ai-features.store.ts) and its effects are created outside any component.
 
 ## Integrated terminal
 
@@ -101,3 +112,4 @@ npm run icon            # regenerate icons from icon-source.svg
 Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
 
 Host integration: the GitHub path was run against the real `gh` (status, issue list and search, default branch, owners; `gh pr create --dry-run` for the arguments). Azure DevOps was exercised only as far as a signed-out `az` allows (status and the sign-in hint); its work item, pull request and repository output is parsed from the extension's source and documented shapes. `glab` was not installed, so GitLab is parsed from the documented API output only. No pull request or repository has been created for real on any host.
+Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. The AI change features were clicked through in the browser preview with canned answers, and their four prompts were run by hand through the `claude` CLI against real diffs of this repository. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.

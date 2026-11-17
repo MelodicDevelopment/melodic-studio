@@ -23,6 +23,7 @@ import { relativeTime } from '../../shared/format';
 			return html`<div class="state">No commits yet.</div>`;
 		}
 		return html`
+			<ms-ai-review-banner></ms-ai-review-banner>
 			<div class="list">
 				${commits.map(
 					(c) => html`
