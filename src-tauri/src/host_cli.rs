@@ -1713,7 +1713,7 @@ mod tests {
         Git::at(&origin).run(&["init", "-q", "--bare", "-b", "main"]).unwrap();
         let dir = base.join("work");
         let g = Git::init(&dir).unwrap();
-        for (k, v) in [("user.name", "Test"), ("user.email", "t@example.com"), ("commit.gpgsign", "false")] {
+        for (k, v) in [("user.name", "Test"), ("user.email", "t@example.com"), ("commit.gpgsign", "false"), ("core.autocrlf", "false")] {
             g.run(&["config", k, v]).unwrap();
         }
         assert!(pr_context_of(&g).is_err(), "no remote yet");

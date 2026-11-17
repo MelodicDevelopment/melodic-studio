@@ -462,7 +462,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("studio-ai-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let g = Git::init(&dir).unwrap();
-        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")] {
+        // autocrlf off: on Windows git would otherwise check files out with CRLF and the content assertions would not hold.
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false"), ("core.autocrlf", "false")] {
             g.run(&["config", key, value]).unwrap();
         }
         g
