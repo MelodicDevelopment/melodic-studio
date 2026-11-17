@@ -193,6 +193,7 @@ export function appTemplate(self: AppComponent) {
 	const count = st?.files.length ?? 0;
 
 	return html`
+		<ms-repo-tabs></ms-repo-tabs>
 		<ms-toolbar></ms-toolbar>
 		${!store.ready()
 			? html`<div class="center"><ml-spinner size="lg"></ml-spinner></div>`

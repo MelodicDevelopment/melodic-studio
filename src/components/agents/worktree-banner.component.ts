@@ -10,7 +10,8 @@ import { RepoStore } from '../../services/repo.store';
 	template: (self: WorktreeBannerComponent) => {
 		const path = self.repos.repo()?.worktree;
 		if (!path) {
-			return html``;
+			// Not a bare html``: Melodic cannot switch a component away from a completely empty first template.
+			return html`<span hidden></span>`;
 		}
 		return html`
 			<div class="bar">

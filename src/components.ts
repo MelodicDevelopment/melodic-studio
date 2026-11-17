@@ -24,6 +24,7 @@ import './services/terminal.store';
 
 // App components
 import './components/diff/diff-view.component';
+import './components/repo-tabs/repo-tabs.component';
 import './components/toolbar/toolbar.component';
 import './components/changes/changes.component';
 import './components/history/history.component';

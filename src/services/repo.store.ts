@@ -21,6 +21,8 @@ export interface Prompt {
 	repo?: RepoSummary;
 	/** Which tab the Add repository dialog opens on. */
 	tab?: 'add' | 'clone' | 'create';
+	/** Add repository dialog: open the result in a new tab instead of replacing the current one. */
+	newTab?: boolean;
 	/** A commit the dialog acts on (branch from, tag, reset to). */
 	commit?: Commit;
 	/** The branch in `branch` is a remote one. */
@@ -39,6 +41,26 @@ export interface SyncAction {
 type DialogId = Parameters<DialogService['close']>[0];
 
 const PAGE = 100;
+const REPO_TABS_KEY = 'studio.repo-tabs';
+
+/** The part of the screen worth remembering per repository tab. */
+interface RepoView {
+	tab: Tab;
+	selectedPath: string | null;
+	openTabs: string[];
+	excluded: ReadonlySet<string>;
+	summary: string;
+	description: string;
+}
+
+function loadRepoTabs(): string[] {
+	try {
+		const ids = JSON.parse(localStorage.getItem(REPO_TABS_KEY) ?? '[]');
+		return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+	} catch {
+		return [];
+	}
+}
 const POLL_MS = 5000;
 
 @Injectable()
@@ -74,6 +96,21 @@ export class RepoStore {
 	readonly commitDiff = signal<ParsedDiff | null>(null);
 
 	readonly branches = signal<Branch[]>([]);
+
+	/** Ids of the repositories open as tabs across the top, in order (see `repoTabList`). */
+	readonly repoTabs = signal<string[]>(loadRepoTabs());
+	/** The open tabs as repositories. The current repository is always one of them. */
+	readonly repoTabList = computed<RepoSummary[]>(() => {
+		const app = this.app();
+		const repos = app?.repos ?? [];
+		const list = this.repoTabs()
+			.map((id) => repos.find((r) => r.id === id))
+			.filter((r): r is RepoSummary => !!r);
+		const current = repos.find((r) => r.id === app?.current);
+		return current && !list.includes(current) ? [...list, current] : list;
+	});
+	/** The tab strip only appears once a second repository is open. */
+	readonly showRepoTabs = computed(() => this.repoTabList().length > 1);
 
 	readonly repo = computed<RepoSummary | null>(() => {
 		const app = this.app();
@@ -112,6 +149,10 @@ export class RepoStore {
 	private _historyToken = 0;
 	private _commitToken = 0;
 	private _started = false;
+	/** What each open repository was showing, so coming back to its tab picks up where it left off. */
+	private readonly _views = new Map<string, RepoView>();
+	/** Set by the tab strip's "+": the next repository opened goes in a new tab. */
+	private _nextInNewTab = false;
 
 	private get backend(): BackendService {
 		return Injector.get(BackendService);
@@ -298,6 +339,9 @@ export class RepoStore {
 	// ---- dialogs ------------------------------------------------------------
 
 	ask(dialog: DialogName, prompt: Prompt = {}): void {
+		if (dialog === 'add-repo') {
+			this._nextInNewTab = !!prompt.newTab;
+		}
 		this.prompt.set(prompt);
 		this.dialogs.open(dialog as DialogId);
 	}
@@ -308,18 +352,107 @@ export class RepoStore {
 
 	// ---- repositories -------------------------------------------------------
 
-	async selectRepo(id: string): Promise<void> {
-		if (id === this.id) {
+	/** Switch repository: in the current tab, or (`newTab`) in a tab of its own. A repository already open in a tab is just switched to. */
+	async selectRepo(id: string, newTab = false): Promise<void> {
+		const from = this.id;
+		if (id === from) {
 			return;
 		}
 		try {
 			await this.backend.selectRepo(id);
+			this.keepView(from);
+			this.placeRepoTab(from, id, newTab);
 			this.resetRepoState();
 			await this.reloadApp();
-			await this.refresh();
+			await this.restoreView(id);
 			void this.loadBranches();
 		} catch (e) {
 			this.fail(e);
+		}
+	}
+
+	// ---- repository tabs ----------------------------------------------------
+
+	openRepoTab(id: string): Promise<void> {
+		return this.selectRepo(id, true);
+	}
+
+	/** Close a tab. The repository stays in the list; closing the one in view moves to its neighbour. */
+	async closeRepoTab(id: string): Promise<void> {
+		const tabs = this.repoTabList().map((r) => r.id);
+		const at = tabs.indexOf(id);
+		if (at < 0 || tabs.length < 2) {
+			return;
+		}
+		const rest = tabs.filter((t) => t !== id);
+		this.setRepoTabs(rest);
+		this._views.delete(id);
+		if (id === this.id) {
+			await this.selectRepo(rest[Math.min(at, rest.length - 1)]);
+		}
+	}
+
+	/** Next (1) or previous (-1) tab, wrapping round. */
+	cycleRepoTab(step: 1 | -1): void {
+		const tabs = this.repoTabList().map((r) => r.id);
+		const at = tabs.indexOf(this.id ?? '');
+		if (tabs.length > 1 && at >= 0) {
+			void this.selectRepo(tabs[(at + step + tabs.length) % tabs.length]);
+		}
+	}
+
+	private setRepoTabs(ids: string[]): void {
+		this.repoTabs.set(ids);
+		try {
+			localStorage.setItem(REPO_TABS_KEY, JSON.stringify(ids));
+		} catch {
+			/* tabs still work until the window closes */
+		}
+	}
+
+	/** Put `to` among the tabs: beside the others when asked for a new tab, otherwise in place of `from`. */
+	private placeRepoTab(from: string | null, to: string, newTab: boolean): void {
+		const tabs = this.repoTabList().map((r) => r.id);
+		if (tabs.includes(to)) {
+			return;
+		}
+		const at = from ? tabs.indexOf(from) : -1;
+		if (newTab || at < 0) {
+			this.setRepoTabs([...tabs, to]);
+		} else {
+			this._views.delete(from!);
+			this.setRepoTabs(tabs.map((t) => (t === from ? to : t)));
+		}
+	}
+
+	private keepView(id: string | null): void {
+		if (id && this.status()) {
+			this._views.set(id, {
+				tab: this.tab(),
+				selectedPath: this.selectedPath(),
+				openTabs: this.openTabs(),
+				excluded: this.excluded(),
+				summary: this.summary(),
+				description: this.description(),
+			});
+		}
+	}
+
+	/** Load the repository now current and put back what its tab was showing. Call after resetRepoState(). */
+	private async restoreView(id: string): Promise<void> {
+		const view = this._views.get(id);
+		if (view) {
+			this.excluded.set(view.excluded);
+			this.openTabs.set(view.openTabs);
+			this.summary.set(view.summary);
+			this.description.set(view.description);
+		}
+		await this.refresh();
+		if (view && id === this.id) {
+			if (view.selectedPath && this.status()?.files.some((f) => f.path === view.selectedPath)) {
+				this.selectFile(view.selectedPath);
+			}
+			this.setTab(view.tab);
 		}
 	}
 
@@ -329,8 +462,13 @@ export class RepoStore {
 			return false;
 		}
 		this.busy.set('repo');
+		const from = this.id;
+		const newTab = this._nextInNewTab;
+		this._nextInNewTab = false;
 		try {
-			await how();
+			const opened = await how();
+			this.keepView(from);
+			this.placeRepoTab(from, opened.id, newTab);
 			this.resetRepoState();
 			await this.reloadApp();
 		} catch (e) {
@@ -357,6 +495,8 @@ export class RepoStore {
 	async removeRepo(id: string): Promise<void> {
 		try {
 			await this.backend.removeRepo(id);
+			this._views.delete(id);
+			this.setRepoTabs(this.repoTabs().filter((t) => t !== id));
 			this.resetRepoState();
 			await this.reloadApp();
 			await this.refresh();

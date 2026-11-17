@@ -55,6 +55,7 @@ function contextMenu(self: ToolbarComponent) {
 			${r.missing
 				? ''
 				: html`
+					${current ? '' : html`<div class="ctx-sep"></div><div class="ctx-item" @click=${() => store.openRepoTab(r.id)}><ml-icon icon="browsers" size="sm"></ml-icon>Open in a new tab</div>`}
 					<div class="ctx-sep"></div>
 					${current && !host ? '' : html`<div class="ctx-item" @click=${() => store.openIn('remote', null, r.id)}><ml-icon icon=${current ? hostIcon(host!.provider) : 'globe'} size="sm"></ml-icon>${current ? `View on ${host!.name}` : 'View in browser'}</div>`}
 					<div class="ctx-item" @click=${() => store.openIn('terminal', null, r.id)}><ml-icon icon="terminal-window" size="sm"></ml-icon>Open in terminal</div>
@@ -94,7 +95,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 	const remote = self.remoteBranches;
 
 	return html`
-		<div class="bar drag ${self.mac ? 'mac' : ''}" @mousedown=${self.drag}>
+		<div class="bar drag ${self.mac && !store.showRepoTabs() ? 'mac' : ''}" @mousedown=${self.drag}>
 			<ml-popover id="repo-pop" placement="bottom-start" offset="0" @ml:open=${() => self.opened('repo-pop')}>
 				<button slot="trigger" class="seg" @contextmenu=${(e: MouseEvent) => self.repoMenu(e)}>
 					<ml-icon icon="folder-simple" size="md"></ml-icon>
@@ -111,10 +112,11 @@ export function toolbarTemplate(self: ToolbarComponent) {
 						${self.repos.length === 0 ? html`<div class="none">No repositories${self.repoFilter ? ' match' : ' yet'}.</div>` : ''}
 						${self.repos.map(
 							(r) => html`
-								<div class="item ${r.id === repo?.id ? 'current' : ''}" @click=${() => self.pickRepo(r)} @contextmenu=${(e: MouseEvent) => self.repoMenu(e, r)}>
+								<div class="item ${r.id === repo?.id ? 'current' : ''}" @click=${(e: MouseEvent) => self.pickRepo(r, e.metaKey || e.ctrlKey)} @contextmenu=${(e: MouseEvent) => self.repoMenu(e, r)}>
 									<ml-icon icon=${r.missing ? 'warning' : r.id === repo?.id ? 'check' : 'folder-simple'} size="sm"></ml-icon>
 									<span class="name">${r.name}<span class="path">${r.missing ? 'Folder not found' : r.path}</span></span>
 									<span class="acts">
+										${r.id === repo?.id || r.missing ? '' : html`<button title="Open in a new tab" @click=${(e: Event) => (e.stopPropagation(), self.pickRepo(r, true))}><ml-icon icon="browsers" size="sm"></ml-icon></button>`}
 										<button title="Remove from Melodic Studio" @click=${(e: Event) => self.ask('repo-pop', 'remove-repo', { repo: r }, e)}><ml-icon icon="x" size="sm"></ml-icon></button>
 									</span>
 								</div>

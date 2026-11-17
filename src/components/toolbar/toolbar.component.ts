@@ -144,10 +144,10 @@ export class ToolbarComponent {
 		requestAnimationFrame(() => (input?.shadowRoot?.querySelector('input') as HTMLInputElement | null)?.focus());
 	}
 
-	pickRepo(repo: RepoSummary): void {
+	pickRepo(repo: RepoSummary, newTab = false): void {
 		this.close('repo-pop');
 		this.repoFilter = '';
-		void this.store.selectRepo(repo.id);
+		void this.store.selectRepo(repo.id, newTab);
 	}
 
 	pickBranch(branch: Branch): void {
