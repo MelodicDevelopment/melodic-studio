@@ -265,6 +265,7 @@ function explorerTemplate(self: ExplorerComponent) {
 	return html`
 		<div class="head">
 			<span class="grow">${store.repo()?.name ?? ''}</span>
+			<ms-ask-button .scope=${'code'}></ms-ask-button>
 			<button class="icon" title="Collapse all folders" @click=${() => explorer.collapseAll()}><ml-icon icon="arrows-in-line-vertical" size="sm"></ml-icon></button>
 			<button class="icon" title="Refresh" @click=${() => explorer.rescan()}><ml-icon icon="arrows-clockwise" size="sm"></ml-icon></button>
 		</div>

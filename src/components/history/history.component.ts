@@ -23,6 +23,7 @@ import { relativeTime } from '../../shared/format';
 			return html`<div class="state">No commits yet.</div>`;
 		}
 		return html`
+			<ms-ask-button .scope=${'history'} .look=${'bar'}></ms-ask-button>
 			<div class="list">
 				${commits.map(
 					(c) => html`

@@ -1,8 +1,8 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
-import { html, css } from '@melodicdev/core/template';
+import { html, css, repeat } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
-import { AgentsStore, branchFor, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, MAX_ATTEMPTS, STATE_LABELS, attemptBranch, branchFor, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import type { AgentMode, Worktree } from '../../services/backend.service';
 import { fileName, plural, relativeTime } from '../../shared/format';
@@ -15,13 +15,50 @@ export const AGENT_MODES = [
 	{ value: 'bypassPermissions', label: 'Full auto (runs any command without asking)' },
 ];
 
+/** Sessions in list order, with the attempts of one group kept together where the newest of them falls. */
+function grouped(sessions: AgentSession[]): { group: string | null; sessions: AgentSession[] }[] {
+	const out: { group: string | null; sessions: AgentSession[] }[] = [];
+	const seen = new Set<string>();
+	for (const s of sessions) {
+		if (!s.group) {
+			out.push({ group: null, sessions: [s] });
+		} else if (!seen.has(s.group)) {
+			seen.add(s.group);
+			out.push({ group: s.group, sessions: sessions.filter((x) => x.group === s.group).sort((a, b) => a.attempt - b.attempt) });
+		}
+	}
+	return out;
+}
+
+function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
+	const agents = self.agents;
+	const state = stateOf(s);
+	const on = s.id === agents.selectedId() && !agents.comparing() && !agents.asking();
+	return html`
+		<div class="session ${on ? 'sel' : ''} ${nested ? 'nested' : ''} ${s.unread ? 'unread' : ''}" @click=${() => agents.select(s.id)}>
+			<div class="top">
+				${s.status === 'running' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state}" title=${STATE_LABELS[state]}></span>`}
+				<span class="title">${nested ? `Attempt ${s.attempt}` : s.title}</span>
+				${s.unread ? html`<span class="new" title="Finished since you last looked"></span>` : ''}
+				<button class="x" title="Remove agent…" @click=${(e: Event) => (e.stopPropagation(), self.askRemove(s))}><ml-icon icon="x" size="xs"></ml-icon></button>
+			</div>
+			<div class="meta">
+				${s.kind === 'ask'
+					? html`<ml-icon icon="chat-circle-dots" size="xs"></ml-icon><span class="branch">${scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code'}</span>`
+					: html`<ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'detached'}</span>`}
+				<span>${relativeTime(s.updated)}</span>
+			</div>
+		</div>
+	`;
+}
+
 /** Sidebar "Agents" tab: sessions for this repository, its worktrees, and the dialogs for both. */
 @MelodicComponent({
 	selector: 'ms-agents',
 	template: (self: AgentsComponent) => {
 		const agents = self.agents;
 		const sessions = agents.current();
-		const selected = agents.selectedId();
+		const comparing = agents.comparing();
 		const trees = agents.worktrees();
 		const doomed = self.doomed;
 		return html`
@@ -30,18 +67,28 @@ export const AGENT_MODES = [
 				<ml-button variant="primary" size="xs" ?disabled=${agents.cli() === null} @ml:click=${() => self.openNew()}><ml-icon slot="icon-start" icon="plus"></ml-icon>New task</ml-button>
 			</div>
 			<div class="list">
+				<div class="askrow ${agents.asking() ? 'sel' : ''}" title="A read-only chat about the code: nothing is changed" @click=${() => agents.openAsk('code')}>
+					<ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span class="title">Ask about this repository…</span>
+				</div>
 				${sessions.length === 0 ? html`<div class="none">No agents yet. Give one a task and it works on its own branch while you carry on.</div>` : ''}
-				${sessions.map(
-					(s) => html`
-						<div class="session ${s.id === selected ? 'sel' : ''}" @click=${() => agents.selectedId.set(s.id)}>
-							<div class="top">
-								${s.status === 'running' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${s.status}"></span>`}
-								<span class="title">${s.title}</span>
-								<button class="x" title="Remove agent…" @click=${(e: Event) => (e.stopPropagation(), self.askRemove(s))}><ml-icon icon="x" size="xs"></ml-icon></button>
+				${repeat(
+					grouped(sessions),
+					(g) => g.group ?? g.sessions[0].id,
+					(g) =>
+						g.group
+							? html`
+							<div class="attempts ${comparing === g.group ? 'sel' : ''}" title="Compare the attempts side by side" @click=${() => agents.compare(g.group!)}>
+								<ml-icon icon="columns" size="sm"></ml-icon>
+								<span class="title">${g.sessions[0].title}</span>
+								<span class="count">${g.sessions.length} attempts</span>
 							</div>
-							<div class="meta"><ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'detached'}</span><span>${relativeTime(s.updated)}</span></div>
-						</div>
-					`
+							${repeat(
+								g.sessions,
+								(s) => s.id,
+								(s) => sessionRow(self, s, true)
+							)}
+						`
+							: sessionRow(self, g.sessions[0], false)
 				)}
 
 				${trees.length > 1
@@ -69,12 +116,27 @@ export const AGENT_MODES = [
 					${self.isolate
 						? html`<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
 						: html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent will edit the checkout you are looking at, alongside your own uncommitted changes.</span></p>`}
+					${self.isolate
+						? html`
+							<div class="pick">
+								<span class="lbl">Attempts</span>
+								<div class="seg">
+									${Array.from({ length: MAX_ATTEMPTS }, (_, i) => i + 1).map((n) => html`<button class=${n === self.attempts ? 'on' : ''} @click=${() => (self.attempts = n)}>${n}</button>`)}
+								</div>
+								<span class="hint">
+									${self.attempts > 1
+										? `The same task runs ${self.attempts} times at once, on ${Array.from({ length: self.attempts }, (_, i) => attemptBranch(self.branch || 'branch', i + 1)).join(', ')}. Compare the results side by side and keep the best.`
+										: 'Run the task more than once to compare different results.'}
+								</span>
+							</div>
+						`
+						: ''}
 					<ml-select label="Permissions" .options=${AGENT_MODES} .value=${self.mode} @ml:change=${(e: CustomEvent) => (self.mode = e.detail.value as AgentMode)}></ml-select>
 					${self.mode === 'bypassPermissions' ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>Full auto lets the agent run any shell command on this computer, not just inside its worktree.</span></p>` : ''}
 				</div>
 				<div slot="dialog-footer" class="foot">
 					<ml-button variant="outline" @ml:click=${() => self.close('new-agent')}>Cancel</ml-button>
-					<ml-button variant="primary" ?disabled=${!self.task.trim() || (self.isolate && !self.branch)} ?loading=${agents.busy()} @ml:click=${() => self.start()}>Start agent</ml-button>
+					<ml-button variant="primary" ?disabled=${!self.task.trim() || (self.isolate && !self.branch)} ?loading=${agents.busy()} @ml:click=${() => self.start()}>${self.isolate && self.attempts > 1 ? `Start ${self.attempts} agents` : 'Start agent'}</ml-button>
 				</div>
 			</ml-dialog>
 
@@ -147,6 +209,101 @@ export const AGENT_MODES = [
 			display: flex;
 			align-items: center;
 			gap: 8px;
+		}
+		/* ---- asking, and groups of parallel attempts ---- */
+		.askrow,
+		.attempts {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			padding: 7px 8px 7px 12px;
+			border-bottom: 1px solid var(--ml-color-border-muted);
+		}
+		.askrow {
+			color: var(--ml-color-text-secondary);
+		}
+		.askrow .title {
+			font-weight: 400;
+		}
+		.askrow > ml-icon,
+		.attempts > ml-icon {
+			flex: none;
+			color: var(--ml-color-primary);
+		}
+		.askrow:hover,
+		.attempts:hover {
+			background: var(--ms-hover);
+		}
+		.askrow.sel,
+		.attempts.sel {
+			background: var(--ms-selected);
+			color: var(--ms-selected-fg);
+		}
+		.session.nested {
+			padding-left: 30px;
+		}
+		.session.unread .title {
+			font-weight: 700;
+		}
+		.new {
+			flex: none;
+			width: 7px;
+			height: 7px;
+			border-radius: 50%;
+			background: var(--ml-color-primary);
+		}
+		.session:hover .new {
+			display: none;
+		}
+		.dot.review {
+			background: var(--ms-mod);
+		}
+		.dot.stopped {
+			background: var(--ml-color-text-muted);
+		}
+		.pick {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 6px 12px;
+		}
+		.lbl {
+			font-weight: 500;
+			color: var(--ml-color-text);
+		}
+		.seg {
+			display: inline-flex;
+			border: 1px solid var(--ml-color-border);
+			border-radius: 7px;
+			overflow: hidden;
+		}
+		.seg button {
+			all: unset;
+			min-width: 34px;
+			padding: 4px 0;
+			text-align: center;
+			color: var(--ml-color-text-secondary);
+		}
+		.seg button + button {
+			border-left: 1px solid var(--ml-color-border);
+		}
+		.seg button:hover {
+			background: var(--ms-hover);
+		}
+		.seg button.on {
+			background: var(--ml-color-primary);
+			color: var(--ml-color-text-inverse);
+			font-weight: 600;
+		}
+		.seg button:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: -2px;
+		}
+		.hint {
+			flex: 1 1 100%;
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+			overflow-wrap: anywhere;
 		}
 		.title {
 			flex: 1;
@@ -292,6 +449,8 @@ export class AgentsComponent {
 	branch = '';
 	isolate = true;
 	mode: AgentMode = 'acceptEdits';
+	/** How many times to run the task in parallel, each in its own worktree. */
+	attempts = 1;
 	/** What the remove dialog is about. */
 	doomed: { session?: AgentSession; tree?: Worktree } | null = null;
 	alsoTree = false;
@@ -309,6 +468,7 @@ export class AgentsComponent {
 	openNew(): void {
 		this.task = '';
 		this.branch = '';
+		this.attempts = 1;
 		this._branchTouched = false;
 		this._dialogs.open('new-agent' as DialogId);
 	}
@@ -326,7 +486,7 @@ export class AgentsComponent {
 	}
 
 	async start(): Promise<void> {
-		if (await this.agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode })) {
+		if (await this.agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1 })) {
 			this.close('new-agent');
 		}
 	}

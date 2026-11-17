@@ -167,6 +167,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 				: ''}
 
 			<span class="spacer drag"></span>
+			<ms-agent-board></ms-agent-board>
 			${st?.host
 				? html`
 					<ml-popover id="host-pop" placement="bottom-end" offset="0">

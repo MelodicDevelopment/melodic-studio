@@ -40,6 +40,22 @@ export interface AgentRunOptions {
 	model?: string;
 	/** One-shot question: starts fast (no MCP servers or skills) and keeps no session. */
 	quick?: boolean;
+	/** Starts as fast as `quick`, but keeps the session so later turns can resume it. */
+	lean?: boolean;
+	/** The only built-in tools Claude can see (`Read`, `Grep`); leave out for the usual set. */
+	builtin?: string[];
+}
+/** One file a checkout changed since a commit, with its own unified diff. */
+export interface ChangedFile extends FileChange {
+	diff: string;
+}
+/** Everything a checkout holds that `base` does not: commits since, uncommitted edits, untracked files. */
+export interface WorktreeDiff {
+	base: string;
+	head: string;
+	files: ChangedFile[];
+	/** Some diffs were left out; the file list is still complete. */
+	tooLarge: boolean;
 }
 /** One line of Claude Code's stream-json output, for the session named `key`. */
 export interface AgentEvent {
@@ -219,6 +235,10 @@ export class BackendService {
 	addWorktree(id: string, branch: string, base: string | null) { return this.call<string>('worktree_add', { id, branch, base }); }
 	selectWorktree(id: string, path: string | null) { return this.call<void>('worktree_select', { id, path }); }
 	removeWorktree(id: string, path: string, force: boolean, deleteBranch: boolean) { return this.call<void>('worktree_remove', { id, path, force, deleteBranch }); }
+	/** `base` null: since the checkout left the main one's branch. */
+	worktreeDiff(id: string, path: string, base: string | null) { return this.call<WorktreeDiff>('worktree_diff', { id, path, base }); }
+	/** Open a web address in the user's browser. */
+	openUrl(url: string) { return this.call<void>('plugin:opener|open_url', { url }); }
 	agentAvailable() { return this.call<string | null>('agent_available'); }
 	agentStart(id: string, cwd: string, key: string, prompt: string, mode: AgentMode, resume: string | null, options: AgentRunOptions | null = null) { return this.call<void>('agent_start', { id, cwd, key, prompt, mode, resume, options }); }
 	agentStop(key: string) { return this.call<void>('agent_stop', { key }); }
@@ -338,6 +358,73 @@ function demoAnswer(prompt: string): string {
 	}
 }
 
+/** What the demo "Claude" does with a read-only question: looks around, then answers with references the app links. */
+function demoAsk(prompt: string, history: boolean, commits: Commit[]): Record<string, unknown>[] {
+	const question = (/^Question: (.*)$/m.exec(prompt)?.[1] ?? prompt).trim();
+	const tool = (name: string, input: Record<string, unknown>) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
+	const fix = commits.find((c) => /wrap/i.test(c.summary)) ?? commits[0];
+	const toggle = commits.find((c) => /toggle/i.test(c.summary)) ?? commits[1] ?? fix;
+	const answer = history
+		? [
+				`**${question}**`,
+				'',
+				`The behaviour changed in \`${fix?.shortHash ?? ''}\` ("${fix?.summary ?? ''}"). Before it, \`next()\` ran off the end of the queue and returned \`null\`; since then the cursor wraps when repeat is on.`,
+				'',
+				'How it got there:',
+				'',
+				`1. \`${toggle?.shortHash ?? ''}\` added the repeat toggle, but nothing read it yet.`,
+				`2. \`${fix?.shortHash ?? ''}\` made the queue honour it, in \`src/player/queue.ts:8\`.`,
+				'',
+				'> The cursor resets instead of running off the end.',
+				'',
+				`The key press that drives it is still in \`src/main.ts:11\`.`,
+			].join('\n')
+		: [
+				`**${question}**`,
+				'',
+				'Playback order lives in the `Queue` class:',
+				'',
+				'- `src/player/queue.ts:8` advances to the next track and wraps when repeat is on.',
+				'- `src/player/repeat.ts:5` cycles the repeat mode (`off`, `all`, `one`).',
+				'- `src/main.ts:7` wires both to the keyboard.',
+				'',
+				'The wrap itself is three lines:',
+				'',
+				'```ts',
+				'if (!repeat) {',
+				'\treturn null;',
+				'}',
+				'this._cursor = -1;',
+				'```',
+				'',
+				'| Key | What it does | Where |',
+				'| --- | --- | --- |',
+				'| `r` | Cycle repeat | `src/main.ts:8` |',
+				'| `ArrowRight` | Next track | `src/main.ts:11` |',
+				'',
+				'The track shape is in src/player/track.ts, and the shortcuts are documented in [the shortcuts page](docs/shortcuts.md).',
+			].join('\n');
+	return [
+		{ type: 'system', subtype: 'init', session_id: 'demo-ask' },
+		history ? tool('Bash', { command: 'git log --oneline -S"repeat" -- src/player/queue.ts' }) : tool('Grep', { pattern: 'repeat' }),
+		history ? tool('Bash', { command: `git show ${fix?.shortHash ?? 'HEAD'}` }) : tool('Read', { file_path: 'src/player/queue.ts' }),
+		{ type: 'assistant', message: { content: [{ type: 'text', text: answer }] } },
+		{ type: 'result', subtype: 'success', is_error: false, session_id: 'demo-ask', total_cost_usd: history ? 0.03 : 0.02 },
+	];
+}
+
+/** What a demo worktree "changed": each attempt gets a slightly different set, so the compare view has something to compare. */
+function demoWorktreeDiff(path: string, trees: Worktree[]): WorktreeDiff {
+	const at = Math.max(0, trees.filter((w) => !w.isMain).findIndex((w) => w.path === path));
+	const file = (p: string, status: FileStatus): ChangedFile => ({ path: p, oldPath: null, status, diff: DEMO_DIFFS[p] ?? '' });
+	const sets: ChangedFile[][] = [
+		[file('src/player/queue.ts', 'modified'), file('src/player/repeat.ts', 'untracked')],
+		[file('src/player/queue.ts', 'modified')],
+		[file('docs/old-notes.md', 'deleted'), file('src/player/queue.ts', 'modified'), file('src/player/repeat.ts', 'untracked')],
+	];
+	return { base: 'b'.repeat(40), head: 'c'.repeat(40), files: sets[at % sets.length], tooLarge: false };
+}
+
 /** Nothing persists; enough behaviour to click through every screen. */
 class DemoBackend {
 	private repos: RepoSummary[] = [
@@ -385,8 +472,20 @@ class DemoBackend {
 		return () => set.delete(handler);
 	}
 
+	/** Timers of events still to come, by agent key, so stopping an agent can call them off. */
+	private readonly pending = new Map<string, ReturnType<typeof setTimeout>[]>();
+
 	private emit(event: string, payload: unknown, delay: number): void {
-		setTimeout(() => this.listeners.get(event)?.forEach((h) => h(payload)), delay);
+		const key = (payload as { key?: string } | null)?.key;
+		const timer = setTimeout(() => {
+			if (key && event === 'agent-done') {
+				this.pending.delete(key);
+			}
+			this.listeners.get(event)?.forEach((h) => h(payload));
+		}, delay);
+		if (key) {
+			this.pending.set(key, [...(this.pending.get(key) ?? []), timer]);
+		}
 	}
 
 	async call<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -555,6 +654,9 @@ class DemoBackend {
 			case 'worktree_add': {
 				const path = `${DEMO_ID}.worktrees/${String(args.branch).replace(/[^\w.]+/g, '-')}`;
 				this.worktreeList = [...this.worktreeList, { path, branch: String(args.branch), head: 'b'.repeat(40), isMain: false, active: false, changes: 0 }];
+				if (!this.branchList.some((b) => !b.isRemote && b.name === args.branch)) {
+					this.branchList = [...this.branchList, { name: String(args.branch), isRemote: false, isCurrent: false, upstream: null, date: new Date().toISOString() }];
+				}
 				return path;
 			}
 			case 'worktree_select': {
@@ -564,13 +666,23 @@ class DemoBackend {
 				return;
 			}
 			case 'worktree_remove':
+				if (args.deleteBranch) {
+					const gone = this.worktreeList.find((w) => w.path === args.path)?.branch;
+					this.branchList = this.branchList.filter((b) => b.isRemote || b.name !== gone);
+				}
 				this.worktreeList = this.worktreeList.filter((w) => w.path !== args.path).map((w) => ({ ...w, active: w.isMain }));
 				this.repos = this.repos.map((r) => ({ ...r, worktree: null }));
+				return;
+			case 'worktree_diff':
+				return demoWorktreeDiff(String(args.path), this.worktreeList);
+			case 'plugin:opener|open_url':
+				window.open(String(args.url), '_blank', 'noopener');
 				return;
 			case 'agent_available':
 				return '2.1.0 (demo)';
 			case 'agent_start': {
 				const key = String(args.key);
+				this.pending.delete(key);
 				const say = (event: Record<string, unknown>, delay: number) => this.emit('agent-event', { key, event }, delay);
 				if ((args.options as AgentRunOptions | null)?.quick) {
 					// One-shot questions (AiService.ask): features add their own canned answers through demoAnswer().
@@ -578,6 +690,13 @@ class DemoBackend {
 					say({ type: 'assistant', message: { content: [{ type: 'text', text }] } }, 500);
 					say({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: 0.001 }, 600);
 					this.emit('agent-done', { key, ok: true, error: '' }, 650);
+					return;
+				}
+				const rules = (args.options as AgentRunOptions | null)?.tools;
+				if (rules?.includes('Read')) {
+					// A read-only question (AgentsStore.ask): an answer with file and commit references to click.
+					demoAsk(String(args.prompt), rules.some((r) => r.startsWith('Bash(git')), this.commits).forEach((event, i) => say(event, 300 + i * 600));
+					this.emit('agent-done', { key, ok: true, error: '' }, 300 + 4 * 600);
 					return;
 				}
 				say({ type: 'system', subtype: 'init', session_id: 'demo-session' }, 200);
@@ -589,8 +708,15 @@ class DemoBackend {
 				this.emit('agent-done', { key, ok: true, error: '' }, 3000);
 				return;
 			}
-			case 'agent_stop':
+			case 'agent_stop': {
+				const key = String(args.key);
+				if (this.pending.has(key)) {
+					this.pending.get(key)!.forEach((t) => clearTimeout(t));
+					this.pending.delete(key);
+					this.emit('agent-done', { key, ok: false, error: '' }, 60);
+				}
 				return;
+			}
 			case 'pick_folder':
 				return '/Users/demo/Source';
 			case 'list_dir':
