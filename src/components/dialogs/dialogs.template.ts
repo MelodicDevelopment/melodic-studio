@@ -197,6 +197,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			<div class="dlg">
 				<ml-select label="Appearance" .options=${THEMES} .value=${self.theme} @ml:change=${(e: CustomEvent) => self.pickTheme(e.detail.value as ThemeMode)}></ml-select>
 				<ml-input label="Editor command" hint="Run with the repository folder, for example: code, cursor, zed, subl" .value=${self.editor} @ml:input=${(e: CustomEvent) => (self.editor = e.detail.value)} @ml:blur=${() => self.saveEditor()}></ml-input>
+				<ms-language-servers></ms-language-servers>
 				<dl>
 					<dt>Commits as</dt>
 					<dd>${app?.authorName ? `${app.authorName} <${app.authorEmail}>` : 'No git identity set. Run git config --global user.name and user.email.'}</dd>

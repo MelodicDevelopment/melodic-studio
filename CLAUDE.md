@@ -24,6 +24,9 @@ src-tauri/src/
                 captured CLI output; `cargo test live_read_only -- --ignored` runs read-only calls against the real tools.
   ai_git.rs     git for the AI features around changes (`ai_*` commands): capped diffs for prompts (checked files, one
                 commit, what a push would send), and the preview/apply of a proposed conflict resolution
+  lsp.rs        starts a language server in the active checkout and relays its JSON-RPC messages; lsp_servers / lsp_install / lsp_uninstall
+  lsp/servers.rs  the servers we know (TypeScript/JavaScript, PHP, C#, Rust, Python, Go): lookup, "does it run" check, launch options, managed installs
+  lsp/e2e.rs    ignored tests against the real servers, fixtures in tests/fixtures (cargo test -- --ignored e2e)
 src/
   services/backend.service.ts   the ONLY place that calls invoke(); in-memory demo backend for the browser preview
   services/repo.store.ts        all app state as signals + every action; components read signals in templates
@@ -40,6 +43,8 @@ src/
   shared/platform.ts    web view minimum check at startup; turns off the web view's reload keys and page menu in the packaged app
   services/agents.store.ts      agent sessions (persisted in localStorage), worktrees, review/merge/remove
   services/lsp.service.ts       LSP client; attaches itself to Monaco when the Files tab first opens
+  services/lsp/protocol.ts      the Monaco-free half of the client (JSON-RPC, initialize, answer conversions); scripts/lsp-smoke.mjs runs it in Node against real servers
+  services/language-servers.store.ts + components/settings   the "Language servers" section of Settings: status, Install, Remove, Restart
   components/agents     sidebar "Agents" tab, the session transcript pane, the worktree banner, their dialogs
   services/ai-prompts.ts        every prompt of the AI change features, the parser for its answer, model and tools per feature
   services/ai-features.store.ts commit message, explain, review before push, conflict proposal: one stoppable run each, state as signals
@@ -92,6 +97,10 @@ src/services/demo-terminal.ts      the pretend shell of the browser preview
 - The xterm `Terminal` objects live in `TerminalStore`, not in the component: the work area is rebuilt on a repository or worktree switch and the panel is hidden with `display: none`, and neither may cost a shell or its scrollback. `term.open()` runs only once its element is on screen (xterm measures glyphs).
 - The end of a shell comes from a thread waiting on the child, not from the output stream: ConPTY never reports end of stream. Closing a terminal hangs up (SIGHUP) on Unix and terminates on Windows; dropping the pty takes the rest along, and the window's `Destroyed` event closes them all.
 - Ctrl+` is Ctrl on every OS and is caught in the capture phase, or a focused terminal would send it to the shell. Off the Mac, copy and paste are Ctrl+Shift+C / Ctrl+Shift+V; Windows also gets Ctrl+V and Ctrl+C-with-a-selection.
+- Language servers: a project's own copy (`node_modules/.bin`) first, then the app's managed copy, then PATH. Nothing is bundled; managed copies are installed on request (Settings) into the app's data dir (`app_data_dir()/language-servers`: `node/` is an npm prefix, `dotnet/` a tool path, `storage/` server caches), never globally. The protocol is spoken in `lsp.service.ts` + `lsp/protocol.ts`; the Rust side only frames messages. The editor component knows nothing about it.
+- TypeScript's managed install is `typescript-language-server` + `typescript@6`, not `typescript` latest: TypeScript 7 (the native compiler) ships no `tsserver.js`, which that server drives. `lsp_start` hands the client `initializationOptions` (tsserver path: the project's if it has a `tsserver.js`, else the managed one; intelephense storage paths). `.tsx`/`.jsx` go to the server as `typescriptreact`/`javascriptreact`. npm servers are started as `node <script>`, not through the `.bin` shim (a `.cmd` on Windows, where killing it would leave the server running).
+- A server process has a unique key (`program@root#n`). One that exits by itself, or refuses `initialize`, is reported once (`lsp-closed` carries its last error line; `LspService.failures`, a toast, the Settings row) and not started again until `LspService.refresh()` (Restart, or any install/removal). `lsp_servers` runs each found copy with its version flag, because a file on PATH can be a stand-in that does not run (rustup's `rust-analyzer` proxy).
+- Monaco's own TypeScript/JavaScript hover, definition, references, outline and diagnostics are off while a TypeScript server answers for the checkout on screen, on otherwise (`setBuiltInTypeScript` in `shared/monaco.ts`). Monaco 0.57 reads `setModeConfiguration` only once, when the first TS/JS file opens, so those five are switched off there before any file is open and registered by us from Monaco's own adapter classes (`monaco-editor/languages/features/typescript/tsMode.js`, typed in `shared/monaco-ts-mode.d.ts`); check that import when upgrading Monaco.
 
 ## Conventions
 
@@ -160,6 +169,7 @@ npm run desktop:dev     # Tauri window + Vite on :5190
 npm run dev             # browser preview with demo data
 npm run typecheck && npm test && (cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test)
 npm run icon            # regenerate icons from icon-source.svg
+(cd src-tauri && cargo test -- --ignored e2e)   # language servers end to end: installs the real ones into a temp dir (network, npm, dotnet), ~15 s when cached
 ```
 
 ## Status / next
@@ -168,3 +178,6 @@ Built and checked in the browser preview (demo backend) and by Rust tests agains
 
 Host integration: the GitHub path was run against the real `gh` (status, issue list and search, default branch, owners; `gh pr create --dry-run` for the arguments). Azure DevOps was exercised only as far as a signed-out `az` allows (status and the sign-in hint); its work item, pull request and repository output is parsed from the extension's source and documented shapes. `glab` was not installed, so GitLab is parsed from the documented API output only. No pull request or repository has been created for real on any host.
 Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. The AI change features were clicked through in the browser preview with canned answers, and their four prompts were run by hand through the `claude` CLI against real diffs of this repository. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+
+Language servers: install/removal, launch, and hover/definition/outline/diagnostics run end to end against the real typescript-language-server, intelephense and csharp-ls (ignored Rust tests, plus the frontend's protocol code run in Node), on macOS only. The Monaco wiring in `lsp.service.ts`, the built-in TypeScript switch and the Settings section are type-checked and built but have not been seen in a window; nothing has run on Windows or Linux.

@@ -42,6 +42,7 @@ import './components/ai/ai-review-banner.component';
 import './components/ai/ai-panel.component';
 import './components/ai/ai-review-diff.component';
 import './components/ai/ai-proposal.component';
+import './components/settings/language-servers.component';
 import './components/dialogs/dialogs.component';
 import './components/host/host-dialogs.component';
 import './components/app/app.component';

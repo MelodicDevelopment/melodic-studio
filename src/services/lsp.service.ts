@@ -1,122 +1,87 @@
 /**
  * Language servers for the Files tab's editor: hover, go to definition, find
- * references, the symbol outline and diagnostics, from whatever server the
- * user has installed for the language (see src-tauri/src/lsp.rs for the list).
+ * references, the symbol outline and diagnostics, from the server for the
+ * language (see src-tauri/src/lsp/servers.rs for the list, and Settings for
+ * installing them).
  *
  * The native side only starts the process and relays messages; the Language
- * Server Protocol is spoken here. This service attaches itself to Monaco the
- * first time the Files tab opens, and follows Monaco's models from then on, so
- * the editor component does not need to know it exists.
+ * Server Protocol is spoken here and in ./lsp/protocol.ts (the half that needs
+ * no Monaco, so it can be run against real servers outside the app). This
+ * service attaches itself to Monaco the first time the Files tab opens, and
+ * follows Monaco's models from then on, so the editor component does not need
+ * to know it exists.
  */
 import type * as Monaco from 'monaco-editor';
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import { effect, signal } from '@melodicdev/core/signals';
+import { ToastService } from '@melodicdev/components/toast';
 import { BackendService } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
-import { loadMonaco, type MonacoApi } from '../shared/monaco';
-import { fileName, relativeTo } from '../shared/paths';
+import { loadMonaco, setBuiltInTypeScript, type MonacoApi } from '../shared/monaco';
+import { Client, documentSymbols, editorRange, hoverContents, languageId, locations, markers, type LspDiagnostic, type LspMessage, type LspPosition, type LspRange, type Started } from './lsp/protocol';
+// As text, so the same file can be read by the Rust end-to-end tests and by scripts/lsp-smoke.mjs.
+import capabilities from './lsp/capabilities.json?raw';
 
 /** Monaco language ids we look for a server for. */
 const LANGUAGES = ['typescript', 'javascript', 'rust', 'python', 'go', 'php', 'csharp'];
 
-interface LspPosition {
-	line: number;
-	character: number;
-}
-interface LspRange {
-	start: LspPosition;
-	end: LspPosition;
-}
-interface LspLocation {
-	uri?: string;
-	range?: LspRange;
-	targetUri?: string;
-	targetSelectionRange?: LspRange;
-}
-interface LspMessage {
-	id?: number | string;
-	method?: string;
-	params?: unknown;
-	result?: unknown;
-	error?: unknown;
+/** The `lsp-closed` event; see `Closed` in src-tauri/src/lsp.rs. */
+interface Closed {
+	key: string;
+	server: string;
+	label: string;
+	/** True when the app stopped it; false when it exited or crashed by itself. */
+	expected: boolean;
+	error: string | null;
 }
 
-/** One running server: request/response bookkeeping over the relay. */
-class Client {
-	private _next = 1;
-	private readonly _pending = new Map<number, (result: unknown) => void>();
-	ready: Promise<void> = Promise.resolve();
+/** One attempt to get a server for a language in a checkout. */
+interface Start {
+	promise: Promise<Client | null>;
+	/** Unset until the attempt settles; null when there is no server (none installed, or it failed). */
+	result?: Client | null;
+}
 
-	constructor(
-		readonly key: string,
-		readonly root: string,
-		private readonly _send: (message: unknown) => Promise<void>
-	) {}
-
-	request<T>(method: string, params: unknown): Promise<T | null> {
-		const id = this._next++;
-		return new Promise((resolve) => {
-			this._pending.set(id, resolve as (result: unknown) => void);
-			this._send({ jsonrpc: '2.0', id, method, params }).catch(() => this.settle(id, null));
-			// A server that never answers must not leave the editor waiting.
-			setTimeout(() => this.settle(id, null), 15_000);
-		});
-	}
-
-	notify(method: string, params: unknown): void {
-		void this._send({ jsonrpc: '2.0', method, params }).catch(() => undefined);
-	}
-
-	private settle(id: number, result: unknown): void {
-		const resolve = this._pending.get(id);
-		if (resolve) {
-			this._pending.delete(id);
-			resolve(result);
-		}
-	}
-
-	/** Returns the message when it is a notification the service should look at. */
-	receive(message: LspMessage): LspMessage | null {
-		if (message.method === undefined) {
-			if (typeof message.id === 'number') {
-				this.settle(message.id, message.error ? null : (message.result ?? null));
-			}
-			return null;
-		}
-		if (message.id !== undefined) {
-			// The server is asking us something. Answer with "nothing special" so it carries on.
-			const items = (message.params as { items?: unknown[] } | undefined)?.items;
-			const result = message.method === 'workspace/configuration' ? (items ?? []).map(() => null) : null;
-			void this._send({ jsonrpc: '2.0', id: message.id, result }).catch(() => undefined);
-			return null;
-		}
-		return message;
-	}
-
-	close(): void {
-		[...this._pending.keys()].forEach((id) => this.settle(id, null));
-	}
+interface Doc {
+	client: Client;
+	version: number;
+	timer: ReturnType<typeof setTimeout> | null;
+	/** Stops listening to the model's edits. */
+	listener: Monaco.IDisposable;
 }
 
 @Injectable()
 export class LspService {
 	/** Server keys that are up, for anything that wants to show it. */
 	readonly running = signal<string[]>([]);
+	/**
+	 * Servers that would not start or that died, by name (`typescript`, `rust`, ...), with what they
+	 * said. Such a server is not started again until `refresh()`; Settings shows these.
+	 */
+	readonly failures = signal<Record<string, string>>({});
 
 	private _monaco: MonacoApi | null = null;
 	private _attaching = false;
 	private readonly _clients = new Map<string, Client>();
 	/** In-flight or settled starts, by `root|language`, so a server is only started once. */
-	private readonly _starts = new Map<string, Promise<Client | null>>();
+	private readonly _starts = new Map<string, Start>();
 	/** Open documents by model URI. */
-	private readonly _docs = new Map<string, { client: Client; version: number; timer: ReturnType<typeof setTimeout> | null }>();
+	private readonly _docs = new Map<string, Doc>();
+	/** Servers that went by themselves, by key: the reason may arrive before or after we notice. */
+	private readonly _exits = new Map<string, Closed>();
+	private readonly _told = new Set<string>();
 
 	constructor() {
 		effect(() => {
 			if (this.repos.tab() === 'files') {
 				void this.attach();
 			}
+		});
+		effect(() => {
+			// Another repository or worktree on screen: a different server answers for it, or none.
+			this.repos.repo();
+			this.syncBuiltIns();
 		});
 	}
 
@@ -133,6 +98,22 @@ export class LspService {
 		return repo ? { id: repo.id, root: repo.worktree || repo.path } : null;
 	}
 
+	/**
+	 * A file URI as a path inside the checkout on screen (`/` separated), or null when it is not in it.
+	 * Compared as URI paths, so Windows separators and drive letters come out the same on both sides.
+	 */
+	private relative(uri: Monaco.Uri): string | null {
+		const at = this.root();
+		if (!at || !this._monaco || uri.scheme !== 'file') {
+			return null;
+		}
+		const root = this._monaco.Uri.file(at.root).path.replace(/\/+$/, '');
+		const path = uri.path;
+		const windows = /^\/[a-z]:/i.test(root);
+		const inside = windows ? path.toLowerCase().startsWith(`${root.toLowerCase()}/`) : path.startsWith(`${root}/`);
+		return inside ? path.slice(root.length + 1) : null;
+	}
+
 	// ---- wiring into Monaco -------------------------------------------------
 
 	private async attach(): Promise<void> {
@@ -145,10 +126,10 @@ export class LspService {
 		await this.backend.listen<{ key: string; message: LspMessage }>('lsp-message', ({ key, message }) => {
 			const note = this._clients.get(key)?.receive(message);
 			if (note?.method === 'textDocument/publishDiagnostics') {
-				this.diagnostics(note.params as { uri: string; diagnostics: { range: LspRange; message: string; severity?: number; source?: string }[] });
+				this.diagnostics(note.params as { uri: string; diagnostics: LspDiagnostic[] });
 			}
 		});
-		await this.backend.listen<string>('lsp-closed', (key) => this.closed(key));
+		await this.backend.listen<Closed>('lsp-closed', (closed) => this.closed(closed));
 
 		for (const language of LANGUAGES) {
 			monaco.languages.registerHoverProvider(language, { provideHover: (model, position) => this.hover(model, position) });
@@ -162,10 +143,8 @@ export class LspService {
 		// Go to definition in another file: Monaco only knows models, the Files tab knows how to open a path.
 		monaco.editor.registerEditorOpener({
 			openCodeEditor: (source, resource, target) => {
-				const at = this.root();
-				// Not startsWith: on Windows fsPath is `c:\…` where the root is `C:\…`.
-				const path = at ? relativeTo(at.root, resource.fsPath) : null;
-				if (!path) {
+				const path = this.relative(resource);
+				if (path === null) {
 					return false;
 				}
 				Injector.get(ExplorerStore).open(path, true);
@@ -198,6 +177,18 @@ export class LspService {
 		}, 50);
 	}
 
+	/**
+	 * Monaco's own TypeScript features answer only while no TypeScript server does for the
+	 * checkout on screen; with both, every hover, definition and error would show twice.
+	 */
+	private syncBuiltIns(): void {
+		if (!this._monaco) {
+			return; // nothing registered yet, and Monaco starts with its own features on
+		}
+		const root = this.root()?.root;
+		setBuiltInTypeScript(![...this._clients.values()].some((client) => client.live && client.server === 'typescript' && client.root === root));
+	}
+
 	// ---- servers ------------------------------------------------------------
 
 	private client(language: string): Promise<Client | null> {
@@ -208,85 +199,134 @@ export class LspService {
 		const slot = `${at.root}|${language}`;
 		let start = this._starts.get(slot);
 		if (!start) {
-			start = this.start(at.id, language).catch(() => null);
-			this._starts.set(slot, start);
+			const attempt: Start = { promise: Promise.resolve(null) };
+			attempt.promise = this.start(at.id, language)
+				.catch(() => null)
+				.then((client) => (attempt.result = client));
+			this._starts.set(slot, (start = attempt));
 		}
-		return start;
+		return start.promise;
+	}
+
+	private async launch(id: string, language: string): Promise<Started | null> {
+		return (await this.backend.call<Started | null | undefined>('lsp_start', { id, language })) ?? null;
 	}
 
 	private async start(id: string, language: string): Promise<Client | null> {
-		let started = await this.backend.lspStart(id, language);
+		let started = await this.launch(id, language);
 		if (!started) {
 			return null;
 		}
 		const known = this._clients.get(started.key);
 		if (known) {
-			return known;
+			// One server for two languages (TypeScript and JavaScript): the other one started it.
+			return (await known.ready) ? known : null;
 		}
 		if (!started.fresh) {
 			// Left over from before a reload: it is already initialised by a client that is gone. Start clean.
 			await this.backend.lspStop(started.key);
-			started = await this.backend.lspStart(id, language);
+			started = await this.launch(id, language);
 			if (!started) {
 				return null;
 			}
 		}
 		const key = started.key;
-		const client = new Client(key, started.root, (message) => this.backend.lspSend(key, message));
+		const client = new Client(started, this._monaco!.Uri.file(started.root).toString(), (message) => this.backend.lspSend(key, message));
 		this._clients.set(key, client);
-		const rootUri = this._monaco!.Uri.file(started.root).toString();
-		client.ready = client
-			.request('initialize', {
-				processId: null,
-				clientInfo: { name: 'Melodic Studio' },
-				rootUri,
-				workspaceFolders: [{ uri: rootUri, name: fileName(started.root) || 'workspace' }],
-				capabilities: {
-					workspace: { configuration: true, workspaceFolders: true },
-					textDocument: {
-						synchronization: { didSave: false },
-						hover: { contentFormat: ['markdown', 'plaintext'] },
-						definition: { linkSupport: true },
-						references: {},
-						documentSymbol: { hierarchicalDocumentSymbolSupport: true },
-						publishDiagnostics: {},
-					},
-				},
-			})
-			.then(() => client.notify('initialized', {}));
-		await client.ready;
+		if (!(await client.initialize(JSON.parse(capabilities)))) {
+			// It refused, never answered, or was gone before it could (a stand-in binary, a missing runtime).
+			const why = client.error ?? (await this.exit(key))?.error ?? 'It did not answer.';
+			this._clients.delete(key);
+			void this.backend.lspStop(key).catch(() => undefined);
+			this.failed(started.server, started.label ?? started.server, why);
+			return null;
+		}
 		this.running.set([...this._clients.keys()]);
+		this.syncBuiltIns();
 		return client;
 	}
 
-	private closed(key: string): void {
-		const client = this._clients.get(key);
+	/** Why a server went, if it went by itself. The event can trail the failed request by a moment. */
+	private async exit(key: string): Promise<Closed | null> {
+		for (let tries = 0; tries < 15 && !this._exits.has(key); tries++) {
+			await new Promise((done) => setTimeout(done, 100));
+		}
+		return this._exits.get(key) ?? null;
+	}
+
+	/** Note that a server is out of action, and say so once; it is not started again until `refresh()`. */
+	private failed(server: string, label: string, why: string): void {
+		this.failures.set({ ...this.failures(), [server]: why });
+		if (!this._told.has(server)) {
+			this._told.add(server);
+			Injector.get(ToastService).warning(`The ${label} language server is not running`, `${why.length > 300 ? `${why.slice(0, 300)}…` : why} See Language servers in Settings.`);
+		}
+	}
+
+	private closed(closed: Closed): void {
+		if (!closed.expected) {
+			this._exits.set(closed.key, closed);
+			if (this._exits.size > 16) {
+				this._exits.delete(this._exits.keys().next().value as string);
+			}
+		}
+		const client = this._clients.get(closed.key);
 		if (!client) {
 			return;
 		}
+		// Gone before the handshake finished: `start()` is still waiting on it, and reports that itself.
+		const served = client.live;
 		client.close();
-		this._clients.delete(key);
+		this._clients.delete(closed.key);
 		for (const [slot, start] of this._starts) {
-			void start.then((c) => {
-				if (c === client) {
-					this._starts.delete(slot);
-				}
-			});
+			if (start.result !== client) {
+				continue;
+			}
+			if (closed.expected) {
+				// We stopped it (it was removed in Settings): another copy may take over.
+				this._starts.delete(slot);
+			} else {
+				// It died. Starting it again for every file opened would only repeat that.
+				start.promise = Promise.resolve(null);
+				start.result = null;
+			}
 		}
 		for (const [uri, doc] of this._docs) {
 			if (doc.client === client) {
-				this._docs.delete(uri);
+				this.forget(uri, doc);
 			}
 		}
 		this.running.set([...this._clients.keys()]);
+		this.syncBuiltIns();
+		if (closed.expected) {
+			this._monaco?.editor.getModels().forEach((model) => void this.opened(model));
+		} else if (served) {
+			this.failed(closed.server, closed.label, closed.error ?? 'It stopped unexpectedly.');
+		}
+	}
+
+	/**
+	 * Try again for the files that are open: forget which servers were missing or broken, and start
+	 * what can be started now. Settings calls this after installing or removing a server, and to restart one.
+	 */
+	async refresh(): Promise<void> {
+		this.failures.set({});
+		this._told.clear();
+		for (const [slot, start] of this._starts) {
+			// Only attempts that ended with no server; one still in flight is not a failure yet.
+			if (start.result === null) {
+				this._starts.delete(slot);
+			}
+		}
+		await Promise.all(this._monaco?.editor.getModels().map((model) => this.opened(model)) ?? []);
 	}
 
 	// ---- documents ----------------------------------------------------------
 
 	private async opened(model: Monaco.editor.ITextModel): Promise<void> {
 		const language = model.getLanguageId();
-		const at = this.root();
-		if (model.uri.scheme !== 'file' || !LANGUAGES.includes(language) || !at || !relativeTo(at.root, model.uri.fsPath)) {
+		const path = this.relative(model.uri);
+		if (path === null || !LANGUAGES.includes(language)) {
 			return;
 		}
 		const client = await this.client(language);
@@ -294,14 +334,18 @@ export class LspService {
 		if (!client || model.isDisposed() || this._docs.has(uri)) {
 			return;
 		}
-		const doc = { client, version: 1, timer: null as ReturnType<typeof setTimeout> | null };
+		const doc: Doc = {
+			client,
+			version: 1,
+			timer: null,
+			listener: model.onDidChangeContent(() => {
+				if (doc.timer === null) {
+					doc.timer = setTimeout(() => this.flush(model), 300);
+				}
+			}),
+		};
 		this._docs.set(uri, doc);
-		client.notify('textDocument/didOpen', { textDocument: { uri, languageId: language, version: doc.version, text: model.getValue() } });
-		model.onDidChangeContent(() => {
-			if (doc.timer === null) {
-				doc.timer = setTimeout(() => this.flush(model), 300);
-			}
-		});
+		client.notify('textDocument/didOpen', { textDocument: { uri, languageId: languageId(language, path), version: doc.version, text: model.getValue() } });
 	}
 
 	/** Send the model's current text if the server has not seen it yet. */
@@ -314,14 +358,25 @@ export class LspService {
 		}
 	}
 
+	/** Stop following a document, and take down what its server had marked in it. */
+	private forget(uri: string, doc: Doc): void {
+		if (doc.timer !== null) {
+			clearTimeout(doc.timer);
+		}
+		doc.listener.dispose();
+		this._docs.delete(uri);
+		const monaco = this._monaco;
+		const model = monaco?.editor.getModel(monaco.Uri.parse(uri));
+		if (monaco && model && !model.isDisposed()) {
+			monaco.editor.setModelMarkers(model, 'lsp', []);
+		}
+	}
+
 	private disposed(model: Monaco.editor.ITextModel): void {
 		const uri = model.uri.toString();
 		const doc = this._docs.get(uri);
 		if (doc) {
-			if (doc.timer !== null) {
-				clearTimeout(doc.timer);
-			}
-			this._docs.delete(uri);
+			this.forget(uri, doc);
 			doc.client.notify('textDocument/didClose', { textDocument: { uri } });
 		}
 	}
@@ -329,102 +384,46 @@ export class LspService {
 	/** The client for a model, with the model's latest text delivered. */
 	private async ready(model: Monaco.editor.ITextModel): Promise<Client | null> {
 		const doc = this._docs.get(model.uri.toString());
-		if (!doc) {
+		if (!doc || !(await doc.client.ready)) {
 			return null;
 		}
-		await doc.client.ready;
 		this.flush(model);
 		return doc.client;
 	}
 
 	// ---- features -----------------------------------------------------------
-
-	private range(r: LspRange): Monaco.IRange {
-		return { startLineNumber: r.start.line + 1, startColumn: r.start.character + 1, endLineNumber: r.end.line + 1, endColumn: r.end.character + 1 };
-	}
+	// Each answers null/empty for a file no server follows, and Monaco's own providers (if any) answer instead.
 
 	private where(model: Monaco.editor.ITextModel, position: Monaco.Position): { textDocument: { uri: string }; position: LspPosition } {
 		return { textDocument: { uri: model.uri.toString() }, position: { line: position.lineNumber - 1, character: position.column - 1 } };
 	}
 
-	private async hover(model: Monaco.editor.ITextModel, position: Monaco.Position): Promise<Monaco.languages.Hover | null> {
+	async hover(model: Monaco.editor.ITextModel, position: Monaco.Position): Promise<Monaco.languages.Hover | null> {
 		const client = await this.ready(model);
 		const result = await client?.request<{ contents: unknown; range?: LspRange }>('textDocument/hover', this.where(model, position));
-		if (!result?.contents) {
-			return null;
-		}
-		const parts = Array.isArray(result.contents) ? result.contents : [result.contents];
-		const contents = parts
-			.map((part: unknown) => {
-				if (typeof part === 'string') {
-					return part;
-				}
-				const p = part as { kind?: string; language?: string; value?: string };
-				return p.language ? `\`\`\`${p.language}\n${p.value ?? ''}\n\`\`\`` : (p.value ?? '');
-			})
-			.filter(Boolean)
-			.map((value) => ({ value }));
-		return contents.length ? { contents, range: result.range ? this.range(result.range) : undefined } : null;
+		const contents = hoverContents(result?.contents).map((value) => ({ value }));
+		return contents.length ? { contents, range: result?.range ? editorRange(result.range) : undefined } : null;
 	}
 
-	private async locations(method: string, model: Monaco.editor.ITextModel, position: Monaco.Position, extra: object = {}): Promise<Monaco.languages.Location[]> {
+	async locations(method: string, model: Monaco.editor.ITextModel, position: Monaco.Position, extra: object = {}): Promise<Monaco.languages.Location[]> {
 		const client = await this.ready(model);
-		const result = await client?.request<LspLocation | LspLocation[]>(method, { ...this.where(model, position), ...extra });
-		const list = !result ? [] : Array.isArray(result) ? result : [result];
-		const out: Monaco.languages.Location[] = [];
-		for (const l of list) {
-			const uri = l.targetUri ?? l.uri;
-			const range = l.targetSelectionRange ?? l.range;
-			if (uri && range) {
-				out.push({ uri: this._monaco!.Uri.parse(uri), range: this.range(range) });
-			}
-		}
-		return out;
+		const result = await client?.request<unknown>(method, { ...this.where(model, position), ...extra });
+		return locations(result).map((l) => ({ uri: this._monaco!.Uri.parse(l.uri), range: l.range }));
 	}
 
-	private async symbols(model: Monaco.editor.ITextModel): Promise<Monaco.languages.DocumentSymbol[]> {
-		interface Sym {
-			name: string;
-			detail?: string;
-			kind: number;
-			range?: LspRange;
-			selectionRange?: LspRange;
-			location?: { range: LspRange };
-			children?: Sym[];
-		}
+	async symbols(model: Monaco.editor.ITextModel): Promise<Monaco.languages.DocumentSymbol[]> {
 		const client = await this.ready(model);
-		const result = await client?.request<Sym[]>('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString() } });
-		const convert = (s: Sym): Monaco.languages.DocumentSymbol | null => {
-			const range = s.range ?? s.location?.range;
-			if (!range) {
-				return null;
-			}
-			return {
-				name: s.name,
-				detail: s.detail ?? '',
-				// The protocol counts symbol kinds from 1, Monaco from 0.
-				kind: (s.kind - 1) as Monaco.languages.SymbolKind,
-				tags: [],
-				range: this.range(range),
-				selectionRange: this.range(s.selectionRange ?? range),
-				children: (s.children ?? []).map(convert).filter((c): c is Monaco.languages.DocumentSymbol => c !== null),
-			};
-		};
-		return (result ?? []).map(convert).filter((c): c is Monaco.languages.DocumentSymbol => c !== null);
+		const result = await client?.request<unknown>('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString() } });
+		// Kinds and tags are plain numbers in protocol.ts, already on Monaco's scale.
+		return documentSymbols(result) as Monaco.languages.DocumentSymbol[];
 	}
 
-	private diagnostics(params: { uri: string; diagnostics: { range: LspRange; message: string; severity?: number; source?: string }[] }): void {
+	private diagnostics(params: { uri: string; diagnostics: LspDiagnostic[] }): void {
 		const monaco = this._monaco!;
 		const model = monaco.editor.getModel(monaco.Uri.parse(params.uri));
-		if (!model) {
-			return;
+		if (model) {
+			monaco.editor.setModelMarkers(model, 'lsp', markers(params.diagnostics ?? []) as Monaco.editor.IMarkerData[]);
 		}
-		const severity = [monaco.MarkerSeverity.Error, monaco.MarkerSeverity.Error, monaco.MarkerSeverity.Warning, monaco.MarkerSeverity.Info, monaco.MarkerSeverity.Hint];
-		monaco.editor.setModelMarkers(
-			model,
-			'lsp',
-			params.diagnostics.map((d) => ({ ...this.range(d.range), message: d.message, source: d.source, severity: severity[d.severity ?? 1] ?? monaco.MarkerSeverity.Error }))
-		);
 	}
 }
 

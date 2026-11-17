@@ -1,0 +1,4 @@
+{
+	"name": "melodic/lsp-fixture",
+	"autoload": { "psr-4": { "Fixture\\": "src/" } }
+}
