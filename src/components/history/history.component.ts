@@ -9,7 +9,7 @@ import { relativeTime } from '../../shared/format';
 
 /** Sidebar "History" tab: the current branch's commits, newest first. */
 @MelodicComponent({
-	selector: 'rm-history',
+	selector: 'ms-history',
 	template: (self: HistoryComponent) => {
 		const store = self.store;
 		const commits = store.commits();
@@ -85,11 +85,11 @@ import { relativeTime } from '../../shared/format';
 			border-bottom: 1px solid var(--ml-color-border-muted);
 		}
 		.commit:hover {
-			background: var(--rm-hover);
+			background: var(--ms-hover);
 		}
 		.commit.sel {
-			background: var(--rm-selected);
-			color: var(--rm-selected-fg);
+			background: var(--ms-selected);
+			color: var(--ms-selected-fg);
 		}
 		.top {
 			display: flex;

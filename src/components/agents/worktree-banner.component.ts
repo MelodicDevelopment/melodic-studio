@@ -6,7 +6,7 @@ import { RepoStore } from '../../services/repo.store';
 
 /** A strip across the top while the app is looking at a linked worktree instead of the main checkout. */
 @MelodicComponent({
-	selector: 'rm-worktree-banner',
+	selector: 'ms-worktree-banner',
 	template: (self: WorktreeBannerComponent) => {
 		const path = self.repos.repo()?.worktree;
 		if (!path) {

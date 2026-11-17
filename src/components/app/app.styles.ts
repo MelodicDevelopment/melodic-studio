@@ -32,7 +32,7 @@ export const appStyles = () => css`
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
-		background: var(--rm-sidebar-bg);
+		background: var(--ms-sidebar-bg);
 	}
 	.resizer {
 		flex: none;
@@ -53,7 +53,7 @@ export const appStyles = () => css`
 		flex-direction: column;
 		background: var(--ml-color-surface);
 	}
-	rm-diff {
+	ms-diff {
 		flex: 1;
 		height: auto;
 	}
@@ -104,7 +104,7 @@ export const appStyles = () => css`
 		flex: none;
 		display: flex;
 		overflow-x: auto;
-		background: var(--rm-sidebar-bg);
+		background: var(--ms-sidebar-bg);
 		border-bottom: 1px solid var(--ml-color-border);
 		scrollbar-width: none;
 	}
@@ -146,7 +146,7 @@ export const appStyles = () => css`
 		border-radius: 4px;
 	}
 	.filetab button:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 	}
 
 	/* ---- diff header ---- */
@@ -169,10 +169,10 @@ export const appStyles = () => css`
 		font-weight: 600;
 	}
 	.stat.add {
-		color: var(--rm-add);
+		color: var(--ms-add);
 	}
 	.stat.del {
-		color: var(--rm-del);
+		color: var(--ms-del);
 	}
 
 	/* ---- commit detail ---- */
@@ -228,7 +228,7 @@ export const appStyles = () => css`
 		flex: none;
 		width: 260px;
 		border-right: 1px solid var(--ml-color-border);
-		background: var(--rm-sidebar-bg);
+		background: var(--ms-sidebar-bg);
 	}
 	.diffcol {
 		flex: 1;
@@ -304,7 +304,7 @@ export const appStyles = () => css`
 	}
 	.card:hover:not([disabled]) {
 		border-color: var(--ml-color-border-strong);
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 	}
 	.card:focus-visible {
 		outline: 2px solid var(--ml-color-primary);

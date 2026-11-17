@@ -10,7 +10,7 @@ type PopoverId = 'repo-pop' | 'branch-pop' | 'host-pop';
 export type ToolbarMenu = ({ kind: 'repo'; repo: RepoSummary } | { kind: 'branch'; branch: Branch }) & { x: number; y: number };
 
 @MelodicComponent({
-	selector: 'rm-toolbar',
+	selector: 'ms-toolbar',
 	template: toolbarTemplate,
 	styles: toolbarStyles,
 })

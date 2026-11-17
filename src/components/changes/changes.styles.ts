@@ -20,11 +20,11 @@ export const listStyles = `
 		border-bottom: 1px solid var(--ml-color-border-muted);
 	}
 	.row:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 	}
 	.row.sel {
-		background: var(--rm-selected);
-		color: var(--rm-selected-fg);
+		background: var(--ms-selected);
+		color: var(--ms-selected-fg);
 	}
 	.path {
 		flex: 1;
@@ -62,20 +62,20 @@ export const listStyles = `
 		line-height: 1;
 	}
 	.mark.add {
-		color: var(--rm-add);
+		color: var(--ms-add);
 	}
 	.mark.del {
-		color: var(--rm-del);
+		color: var(--ms-del);
 	}
 	.mark.mod {
-		color: var(--rm-mod);
+		color: var(--ms-mod);
 	}
 	.mark.ren {
-		color: var(--rm-ren);
+		color: var(--ms-ren);
 	}
 	.mark.con {
-		color: var(--rm-del);
-		background: var(--rm-diff-del-bg);
+		color: var(--ms-del);
+		background: var(--ms-diff-del-bg);
 	}
 `;
 
@@ -99,7 +99,7 @@ export const ctxStyles = `
 		border-radius: 5px;
 	}
 	.ctx-item:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 	}
 	.ctx-sep {
 		height: 1px;
@@ -144,7 +144,7 @@ export const changesStyles = () => css`
 		color: var(--ml-color-text-muted);
 	}
 	.icon:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 		color: var(--ml-color-text);
 	}
 	.banner {

@@ -13,7 +13,7 @@ import { getResolvedTheme } from '@melodicdev/components/theme';
 
 export type MonacoApi = typeof Monaco;
 
-const THEME = 'repoman';
+const THEME = 'melodic-studio';
 const STYLE_NODES = 'style, link[rel="stylesheet"]';
 
 let _loading: Promise<MonacoApi> | null = null;
@@ -133,9 +133,9 @@ function applyMonacoTheme(monaco: MonacoApi): void {
 		'minimap.background': '--ml-color-surface',
 		'editorStickyScroll.background': '--ml-color-surface',
 		'editor.foreground': '--ml-color-text',
-		'editorLineNumber.foreground': '--rm-diff-gutter-fg',
+		'editorLineNumber.foreground': '--ms-diff-gutter-fg',
 		'editorLineNumber.activeForeground': '--ml-color-text-secondary',
-		'editor.lineHighlightBackground': '--rm-hover',
+		'editor.lineHighlightBackground': '--ms-hover',
 		'editorCursor.foreground': '--ml-color-primary',
 		'editorWidget.background': '--ml-color-surface-raised',
 		'editorWidget.border': '--ml-color-border',

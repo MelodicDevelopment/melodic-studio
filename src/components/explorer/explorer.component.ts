@@ -58,7 +58,7 @@ function fileIcon(name: string): string {
 
 /** Sidebar "Files" tab: the working tree as folders and files. Clicking a file opens it in the editor. */
 @MelodicComponent({
-	selector: 'rm-explorer',
+	selector: 'ms-explorer',
 	template: explorerTemplate,
 	styles: () => css`
 		:host {
@@ -94,7 +94,7 @@ function fileIcon(name: string): string {
 			color: var(--ml-color-text-muted);
 		}
 		.icon:hover {
-			background: var(--rm-hover);
+			background: var(--ms-hover);
 			color: var(--ml-color-text);
 		}
 		.list {
@@ -131,16 +131,16 @@ function fileIcon(name: string): string {
 			opacity: 0.5;
 		}
 		.row.add:not(.sel) .name {
-			color: var(--rm-add);
+			color: var(--ms-add);
 		}
 		.row.mod:not(.sel) .name {
-			color: var(--rm-mod);
+			color: var(--ms-mod);
 		}
 		.row.ren:not(.sel) .name {
-			color: var(--rm-ren);
+			color: var(--ms-ren);
 		}
 		.row.con:not(.sel) .name {
-			color: var(--rm-del);
+			color: var(--ms-del);
 		}
 		.dot {
 			flex: none;
@@ -148,7 +148,7 @@ function fileIcon(name: string): string {
 			height: 7px;
 			margin-right: 4px;
 			border-radius: 50%;
-			background: var(--rm-mod);
+			background: var(--ms-mod);
 		}
 		.note {
 			padding: 14px 12px;

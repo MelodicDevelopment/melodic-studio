@@ -32,7 +32,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 
 /** The main pane of the Files tab: open files as tabs over one Monaco editor. */
 @MelodicComponent({
-	selector: 'rm-editor',
+	selector: 'ms-editor',
 	template: (self: EditorComponent) => {
 		const explorer = self.explorer;
 		const tabs = explorer.tabs();
@@ -112,7 +112,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 			flex: none;
 			display: flex;
 			overflow-x: auto;
-			background: var(--rm-sidebar-bg);
+			background: var(--ms-sidebar-bg);
 			border-bottom: 1px solid var(--ml-color-border);
 			scrollbar-width: none;
 		}
@@ -154,7 +154,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 			border-radius: 4px;
 		}
 		.filetab button:hover {
-			background: var(--rm-hover);
+			background: var(--ms-hover);
 		}
 		.filetab .dot {
 			display: none;

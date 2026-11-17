@@ -10,15 +10,15 @@ export const toolbarStyles = () => css`
 		display: flex;
 		align-items: stretch;
 		height: 50px;
-		background: var(--rm-toolbar-bg);
-		color: var(--rm-toolbar-fg);
-		border-bottom: 1px solid var(--rm-toolbar-border);
+		background: var(--ms-toolbar-bg);
+		color: var(--ms-toolbar-fg);
+		border-bottom: 1px solid var(--ms-toolbar-border);
 	}
 	.bar.mac {
 		padding-left: 84px;
 	}
 	.bar.mac ml-popover:first-of-type .seg {
-		border-left: 1px solid var(--rm-toolbar-border);
+		border-left: 1px solid var(--ms-toolbar-border);
 	}
 	ml-popover {
 		display: flex;
@@ -36,12 +36,12 @@ export const toolbarStyles = () => css`
 		width: 236px;
 		height: 49px;
 		padding: 0 14px;
-		border-right: 1px solid var(--rm-toolbar-border);
-		color: var(--rm-toolbar-fg);
+		border-right: 1px solid var(--ms-toolbar-border);
+		color: var(--ms-toolbar-fg);
 		cursor: default;
 	}
 	.seg:hover:not([disabled]) {
-		background: var(--rm-toolbar-hover);
+		background: var(--ms-toolbar-hover);
 	}
 	.seg:focus-visible {
 		outline: 2px solid var(--ml-color-primary);
@@ -53,7 +53,7 @@ export const toolbarStyles = () => css`
 	.seg > ml-icon:first-child,
 	.seg > ml-spinner {
 		flex: none;
-		color: var(--rm-toolbar-muted);
+		color: var(--ms-toolbar-muted);
 	}
 	.txt {
 		flex: 1;
@@ -64,7 +64,7 @@ export const toolbarStyles = () => css`
 	}
 	.k {
 		font-size: 11px;
-		color: var(--rm-toolbar-muted);
+		color: var(--ms-toolbar-muted);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -83,8 +83,8 @@ export const toolbarStyles = () => css`
 		gap: 2px;
 		padding: 1px 7px;
 		border-radius: 999px;
-		background: var(--rm-toolbar-hover);
-		border: 1px solid var(--rm-toolbar-border);
+		background: var(--ms-toolbar-hover);
+		border: 1px solid var(--ms-toolbar-border);
 		font-size: 11px;
 		font-weight: 600;
 	}
@@ -96,7 +96,7 @@ export const toolbarStyles = () => css`
 		display: grid;
 		place-items: center;
 		width: 48px;
-		color: var(--rm-toolbar-muted);
+		color: var(--ms-toolbar-muted);
 	}
 	.tool.wide {
 		width: auto;
@@ -110,8 +110,8 @@ export const toolbarStyles = () => css`
 		width: 260px;
 	}
 	.tool:hover {
-		background: var(--rm-toolbar-hover);
-		color: var(--rm-toolbar-fg);
+		background: var(--ms-toolbar-hover);
+		color: var(--ms-toolbar-fg);
 	}
 
 	/* ---- dropdown panels ---- */
@@ -153,7 +153,7 @@ export const toolbarStyles = () => css`
 		padding: 4px 10px 4px 14px;
 	}
 	.item:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 	}
 	.item > ml-icon {
 		flex: none;
@@ -207,7 +207,7 @@ export const toolbarStyles = () => css`
 		color: var(--ml-color-text-muted);
 	}
 	.acts button:hover {
-		background: var(--rm-hover);
+		background: var(--ms-hover);
 		color: var(--ml-color-text);
 	}
 	.foot {

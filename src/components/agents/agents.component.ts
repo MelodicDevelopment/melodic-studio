@@ -17,7 +17,7 @@ export const AGENT_MODES = [
 
 /** Sidebar "Agents" tab: sessions for this repository, its worktrees, and the dialogs for both. */
 @MelodicComponent({
-	selector: 'rm-agents',
+	selector: 'ms-agents',
 	template: (self: AgentsComponent) => {
 		const agents = self.agents;
 		const sessions = agents.current();
@@ -136,11 +136,11 @@ export const AGENT_MODES = [
 		}
 		.session:hover,
 		.tree:hover {
-			background: var(--rm-hover);
+			background: var(--ms-hover);
 		}
 		.session.sel {
-			background: var(--rm-selected);
-			color: var(--rm-selected-fg);
+			background: var(--ms-selected);
+			color: var(--ms-selected-fg);
 		}
 		.top,
 		.tree {
@@ -179,10 +179,10 @@ export const AGENT_MODES = [
 			height: 8px;
 			margin: 0 4px;
 			border-radius: 50%;
-			background: var(--rm-add);
+			background: var(--ms-add);
 		}
 		.dot.failed {
-			background: var(--rm-del);
+			background: var(--ms-del);
 		}
 		.meta {
 			display: flex;
@@ -220,7 +220,7 @@ export const AGENT_MODES = [
 			visibility: visible;
 		}
 		.x:hover {
-			background: var(--rm-hover);
+			background: var(--ms-hover);
 			color: var(--ml-color-text);
 		}
 		.group {

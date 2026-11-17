@@ -124,7 +124,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> Git {
-        let dir = std::env::temp_dir().join(format!("repoman-files-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("studio-files-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Git::init(&dir).unwrap();
         Git::at(dir)

@@ -10,7 +10,7 @@ const TOOL_ICONS: Record<string, string> = { Read: 'file-text', Edit: 'pencil-si
 
 /** Main pane of the Agents tab: one session's transcript and the box to send it more. */
 @MelodicComponent({
-	selector: 'rm-agent-session',
+	selector: 'ms-agent-session',
 	template: (self: AgentSessionComponent) => {
 		const agents = self.agents;
 		const s = agents.selected();
@@ -161,8 +161,8 @@ const TOOL_ICONS: Record<string, string> = { Read: 'file-text', Edit: 'pencil-si
 		.msg.error {
 			padding: 8px 12px;
 			border-radius: 8px;
-			background: var(--rm-diff-del-bg);
-			color: var(--rm-del);
+			background: var(--ms-diff-del-bg);
+			color: var(--ms-del);
 		}
 		.tool {
 			display: flex;

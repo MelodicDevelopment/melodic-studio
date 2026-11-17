@@ -9,7 +9,7 @@ import { changesStyles } from './changes.styles';
 
 /** Sidebar "Changes" tab: the checked file list and the commit form under it. */
 @MelodicComponent({
-	selector: 'rm-changes',
+	selector: 'ms-changes',
 	template: changesTemplate,
 	styles: changesStyles,
 })

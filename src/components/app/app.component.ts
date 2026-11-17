@@ -5,7 +5,7 @@ import { RepoStore } from '../../services/repo.store';
 import { appTemplate } from './app.template';
 import { appStyles } from './app.styles';
 
-const WIDTH_KEY = 'repoman.sidebar';
+const WIDTH_KEY = 'studio.sidebar';
 const MIN_W = 220;
 const MAX_W = 520;
 const DEFAULT_W = 300;
@@ -20,7 +20,7 @@ function savedWidth(): number {
 }
 
 @MelodicComponent({
-	selector: 'rm-app',
+	selector: 'ms-app',
 	template: appTemplate,
 	styles: appStyles,
 })

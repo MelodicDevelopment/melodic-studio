@@ -19,6 +19,7 @@ import './services/repo.store';
 import './services/explorer.store';
 import './services/agents.store';
 import './services/lsp.service';
+import './services/ai.service';
 
 // App components
 import './components/diff/diff-view.component';

@@ -137,7 +137,7 @@ function changesPane(self: AppComponent) {
 				</div>
 			`
 			: ''}
-		${fileHead(file, diff)}<rm-diff .diff=${diff} .emptyText=${emptyText(file)}></rm-diff>
+		${fileHead(file, diff)}<ms-diff .diff=${diff} .emptyText=${emptyText(file)}></ms-diff>
 	`;
 }
 
@@ -178,7 +178,7 @@ function historyPane(self: AppComponent) {
 				})}
 			</div>
 			<div class="diffcol">
-				${file ? html`${fileHead(file, diff)}<rm-diff .diff=${diff} .emptyText=${emptyText(file)}></rm-diff>` : files.length || !diff ? html`<rm-diff .diff=${null}></rm-diff>` : html`<div class="empty"><p>This commit changed no files.</p></div>`}
+				${file ? html`${fileHead(file, diff)}<ms-diff .diff=${diff} .emptyText=${emptyText(file)}></ms-diff>` : files.length || !diff ? html`<ms-diff .diff=${null}></ms-diff>` : html`<div class="empty"><p>This commit changed no files.</p></div>`}
 			</div>
 		</div>
 	`;
@@ -193,7 +193,7 @@ export function appTemplate(self: AppComponent) {
 	const count = st?.files.length ?? 0;
 
 	return html`
-		<rm-toolbar></rm-toolbar>
+		<ms-toolbar></ms-toolbar>
 		${!store.ready()
 			? html`<div class="center"><ml-spinner size="lg"></ml-spinner></div>`
 			: !repo
@@ -212,7 +212,7 @@ export function appTemplate(self: AppComponent) {
 					: !st
 						? html`<div class="center"><ml-spinner size="lg"></ml-spinner></div>`
 						: html`
-							<rm-worktree-banner></rm-worktree-banner>
+							<ms-worktree-banner></ms-worktree-banner>
 							<div class="work ${self.resizing ? 'resizing' : ''}">
 								<aside style="width: ${self.sidebarWidth}px">
 									<div class="tabs">
@@ -221,12 +221,12 @@ export function appTemplate(self: AppComponent) {
 										<button class="tab ${tab === 'files' ? 'on' : ''}" @click=${() => store.setTab('files')}>Files</button>
 										<button class="tab ${tab === 'agents' ? 'on' : ''}" @click=${() => store.setTab('agents')}>Agents</button>
 									</div>
-									${tab === 'changes' ? html`<rm-changes></rm-changes>` : tab === 'history' ? html`<rm-history></rm-history>` : tab === 'agents' ? html`<rm-agents></rm-agents>` : html`<rm-explorer></rm-explorer>`}
+									${tab === 'changes' ? html`<ms-changes></ms-changes>` : tab === 'history' ? html`<ms-history></ms-history>` : tab === 'agents' ? html`<ms-agents></ms-agents>` : html`<ms-explorer></ms-explorer>`}
 								</aside>
 								<div class="resizer" @pointerdown=${self.startResize} @dblclick=${() => self.resetWidth()}></div>
-								<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<rm-agent-session></rm-agent-session>` : html`<rm-editor></rm-editor>`}</main>
+								<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
 							</div>
 						`}
-		<rm-dialogs></rm-dialogs>
+		<ms-dialogs></ms-dialogs>
 	`;
 }

@@ -10,7 +10,7 @@ function message(icon: string, text: string) {
 
 /** Renders one parsed unified diff. `.diff` is null while it loads. */
 @MelodicComponent({
-	selector: 'rm-diff',
+	selector: 'ms-diff',
 	template: (self: DiffViewComponent) => {
 		const d = self.diff;
 		if (!d) {
@@ -76,7 +76,7 @@ function message(icon: string, text: string) {
 			width: 46px;
 			padding: 0 8px;
 			text-align: right;
-			color: var(--rm-diff-gutter-fg);
+			color: var(--ms-diff-gutter-fg);
 			border-right: 1px solid var(--ml-color-border-muted);
 		}
 		.sign {
@@ -93,28 +93,28 @@ function message(icon: string, text: string) {
 			cursor: text;
 		}
 		.add {
-			background: var(--rm-diff-add-bg);
+			background: var(--ms-diff-add-bg);
 		}
 		.add .no {
-			background: var(--rm-diff-add-gutter);
+			background: var(--ms-diff-add-gutter);
 			border-right-color: transparent;
 		}
 		.add .sign {
-			color: var(--rm-add);
+			color: var(--ms-add);
 		}
 		.del {
-			background: var(--rm-diff-del-bg);
+			background: var(--ms-diff-del-bg);
 		}
 		.del .no {
-			background: var(--rm-diff-del-gutter);
+			background: var(--ms-diff-del-gutter);
 			border-right-color: transparent;
 		}
 		.del .sign {
-			color: var(--rm-del);
+			color: var(--ms-del);
 		}
 		.hunk {
-			background: var(--rm-diff-hunk-bg);
-			color: var(--rm-diff-hunk-fg);
+			background: var(--ms-diff-hunk-bg);
+			color: var(--ms-diff-hunk-fg);
 		}
 		.hunk .no {
 			border-right-color: transparent;

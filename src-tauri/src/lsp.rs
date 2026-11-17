@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
@@ -57,11 +57,7 @@ fn server_for(language: &str) -> Option<(&'static str, &'static [&'static str])>
 
 /// A project's own copy (node_modules/.bin) wins over one on PATH.
 fn locate(root: &Path, program: &str) -> Option<PathBuf> {
-    let local = root.join("node_modules").join(".bin").join(program);
-    if local.is_file() {
-        return Some(local);
-    }
-    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|dir| dir.join(program)).find(|p| p.is_file()))
+    crate::proc::find_in(&root.join("node_modules").join(".bin"), program).or_else(|| crate::proc::find(program))
 }
 
 /// Read one `Content-Length`-framed message. None at end of stream.
@@ -108,7 +104,7 @@ pub async fn lsp_start(app: tauri::AppHandle, state: State<'_, AppState>, lsp: S
         servers.remove(&key);
     }
 
-    let mut child = Command::new(&binary)
+    let mut child = crate::proc::command(&binary)
         .args(args)
         .current_dir(&root)
         .stdin(Stdio::piped())
@@ -176,8 +172,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("studio-lsp-test-{}", std::process::id()));
         let bin = dir.join("node_modules/.bin");
         std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("typescript-language-server"), "").unwrap();
-        assert_eq!(locate(&dir, "typescript-language-server").unwrap(), bin.join("typescript-language-server"));
+        let file = bin.join(if cfg!(windows) { "typescript-language-server.cmd" } else { "typescript-language-server" });
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(locate(&dir, "typescript-language-server").unwrap(), file);
         assert!(locate(&dir, "no-such-language-server-anywhere").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }

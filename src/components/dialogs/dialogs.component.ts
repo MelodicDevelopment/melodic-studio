@@ -10,7 +10,7 @@ export type AddTab = 'add' | 'clone' | 'create';
 
 /** Every dialog in the app. They are opened by id through `RepoStore.ask()`. */
 @MelodicComponent({
-	selector: 'rm-dialogs',
+	selector: 'ms-dialogs',
 	template: dialogsTemplate,
 	styles: dialogsStyles,
 })

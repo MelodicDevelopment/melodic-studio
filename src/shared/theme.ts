@@ -7,7 +7,7 @@ import { isDesktop } from '../services/backend.service';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
-const KEY = 'repoman.theme';
+const KEY = 'studio.theme';
 
 export function savedTheme(): ThemeMode {
 	try {

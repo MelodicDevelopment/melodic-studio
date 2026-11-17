@@ -1,6 +1,6 @@
 # Melodic Studio
 
-Cross-platform desktop developer workspace: a git client in the spirit of GitHub Desktop, a read-mostly code viewer, and AI agents that each work in their own git worktree. Tauri 2 + Melodic JS/Components 4. Started 2026-11-16 as "Repoman" (the folder, the `rm-` component prefix and `--rm-*` tokens still carry that name). Layout and conventions follow `../chamber`.
+Cross-platform desktop developer workspace: a git client in the spirit of GitHub Desktop, a read-mostly code viewer, and AI agents that each work in their own git worktree. Tauri 2 + Melodic JS/Components 4. Started 2026-11-16 as "Repoman" (the folder still carries that name; components are `ms-*`, app tokens `--ms-*`). Layout and conventions follow `../chamber`.
 
 ## Layout
 
@@ -27,12 +27,12 @@ src/
   components/explorer   sidebar "Files" tab: lazy folder tree of the working tree, git status marks, ignored entries dimmed
   components/editor     main pane of the Files tab: open-file tabs over one Monaco editor, save (Cmd/Ctrl+S), unsaved/conflict bar
   services/explorer.store.ts    Files tab state per repository: tree, open tabs, Monaco models (they outlive the editor component)
-  shared/monaco.ts      lazy Monaco load, workers, theme from --ml-*/--rm-* tokens, copies Monaco's CSS into the shadow root
+  shared/monaco.ts      lazy Monaco load, workers, theme from --ml-*/--ms-* tokens, copies Monaco's CSS into the shadow root
   services/agents.store.ts      agent sessions (persisted in localStorage), worktrees, review/merge/remove
   services/lsp.service.ts       LSP client; attaches itself to Monaco when the Files tab first opens
   components/agents     sidebar "Agents" tab, the session transcript pane, the worktree banner, their dialogs
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
-  styles/global.css     theme: --ml-* overrides + --rm-* tokens, light on :root, dark on :root[data-theme='dark']
+  styles/global.css     theme: --ml-* overrides + --ms-* tokens, light on :root, dark on :root[data-theme='dark']
 ```
 
 ## Decisions (do not regress)
@@ -55,7 +55,7 @@ src/
 
 - Melodic 3-file pattern for big components, single file for small ones. `@Service()` for DI, `@ml:click`/`@ml:input`/`@ml:change` for Melodic events, `@click` for native.
 - Never import `@tauri-apps/*` at module top level; lazy-import inside `isDesktop()` checks.
-- No hard-coded colors in component styles; use `--ml-*` or `--rm-*`.
+- No hard-coded colors in component styles; use `--ml-*` or `--ms-*`.
 - New backend command: add to `git.rs` (with a test), `commands.rs`, the handler list in `lib.rs`, `backend.service.ts` (plus a demo case), then a store action.
 - Commits: author as Rick only. No AI attribution trailers.
 
@@ -71,4 +71,4 @@ npm run icon            # regenerate icons from icon-source.svg
 
 ## Status / next
 
-Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder and `rm-` prefix.
+Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.

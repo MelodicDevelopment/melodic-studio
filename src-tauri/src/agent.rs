@@ -7,7 +7,7 @@ use crate::commands::main_repo;
 use crate::error::{AppError, Result};
 use crate::worktree;
 use crate::AppState;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -35,8 +35,20 @@ struct AgentDone {
     error: String,
 }
 
+/// Extras for one turn. Everything is optional; an agent session sends none of it.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RunOptions {
+    /// Permission rules to pre-approve (`Read`, `Bash(git log:*)`). An empty list means no tools at all.
+    pub tools: Option<Vec<String>>,
+    /// A model alias or id (`haiku`, `sonnet`, `opus`).
+    pub model: Option<String>,
+    /// A one-shot question: skip MCP servers and skills so it starts fast, and keep no session.
+    pub quick: bool,
+}
+
 fn claude() -> Command {
-    let mut c = Command::new("claude");
+    let mut c = crate::proc::command("claude");
     // Started from inside another Claude Code session these would make the child think it is nested.
     c.env_remove("CLAUDECODE").env_remove("CLAUDE_CODE_ENTRYPOINT");
     c
@@ -71,12 +83,14 @@ pub async fn agent_start(
     prompt: String,
     mode: String,
     resume: Option<String>,
+    options: Option<RunOptions>,
 ) -> Result<()> {
+    let options = options.unwrap_or_default();
     let (git, _) = main_repo(&state, &id)?;
     if !worktree::belongs(&git, Path::new(&cwd)) {
         return Err(AppError::msg("Agents can only run inside this repository or one of its worktrees"));
     }
-    if !matches!(mode.as_str(), "plan" | "acceptEdits" | "bypassPermissions") {
+    if !matches!(mode.as_str(), "default" | "plan" | "acceptEdits" | "bypassPermissions") {
         return Err(AppError::msg("Unknown permission mode"));
     }
     if prompt.trim().is_empty() {
@@ -90,6 +104,24 @@ pub async fn agent_start(
     c.current_dir(&cwd).args(["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", &mode]);
     if let Some(session) = resume.as_deref().filter(|s| !s.is_empty() && s.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')) {
         c.args(["--resume", session]);
+    }
+    if options.quick {
+        c.args(["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]);
+    }
+    if let Some(model) = options.model.as_deref().filter(|m| !m.is_empty() && m.chars().all(|ch| ch.is_ascii_alphanumeric() || "-._[]".contains(ch))) {
+        c.args(["--model", model]);
+    }
+    match options.tools.as_deref() {
+        Some([]) => {
+            c.args(["--tools", ""]);
+        }
+        Some(rules) => {
+            if rules.iter().any(|r| r.starts_with('-')) {
+                return Err(AppError::msg("Invalid tool rule"));
+            }
+            c.arg("--allowedTools").args(rules);
+        }
+        None => {}
     }
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().map_err(|e| AppError::msg(format!("Could not start Claude Code: {e}. Is the `claude` CLI installed?")))?;

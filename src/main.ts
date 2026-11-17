@@ -5,7 +5,7 @@ import { initTheme } from './shared/theme';
 
 await bootstrap({
 	target: '#app',
-	rootComponent: 'rm-app',
+	rootComponent: 'ms-app',
 	devMode: import.meta.env.DEV,
 	onBefore: () => {
 		initTheme();

@@ -369,12 +369,12 @@ pub async fn open_in(app: tauri::AppHandle, state: State<'_, AppState>, id: Stri
 fn open_editor(editor: &str, dir: &str) -> Result<()> {
     let mut parts = editor.split_whitespace();
     let program = parts.next().unwrap_or("code");
-    if std::process::Command::new(program).args(parts).arg(dir).spawn().is_ok() {
+    if crate::proc::command(program).args(parts).arg(dir).spawn().is_ok() {
         return Ok(());
     }
     // `code` is often not on PATH on macOS; the app bundle still is.
     #[cfg(target_os = "macos")]
-    if program == "code" && std::process::Command::new("open").args(["-a", "Visual Studio Code", dir]).spawn().is_ok() {
+    if program == "code" && crate::proc::command("open").args(["-a", "Visual Studio Code", dir]).spawn().is_ok() {
         return Ok(());
     }
     Err(AppError::msg(format!("Could not start \"{editor}\". Set your editor command in Settings.")))
@@ -382,11 +382,11 @@ fn open_editor(editor: &str, dir: &str) -> Result<()> {
 
 fn open_terminal(dir: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").args(["-a", "Terminal", dir]).spawn();
+    let result = crate::proc::command("open").args(["-a", "Terminal", dir]).spawn();
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd").args(["/C", "start", "cmd"]).current_dir(dir).spawn();
+    let result = crate::proc::command("cmd").args(["/C", "start", "cmd"]).current_dir(dir).spawn();
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let result = std::process::Command::new("x-terminal-emulator").current_dir(dir).spawn();
+    let result = crate::proc::command("x-terminal-emulator").current_dir(dir).spawn();
     result.map(|_| ()).map_err(|e| AppError::msg(format!("Could not open a terminal: {e}")))
 }
 

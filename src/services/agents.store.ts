@@ -145,6 +145,10 @@ export class AgentsStore {
 	}
 
 	private update(id: string, change: (s: AgentSession) => AgentSession): void {
+		// Events for one-shot questions (AiService) share the channel; they are not sessions.
+		if (!this.sessions().some((s) => s.id === id)) {
+			return;
+		}
 		this.save(this.sessions().map((s) => (s.id === id ? { ...change(s), updated: Date.now() } : s)));
 	}
 

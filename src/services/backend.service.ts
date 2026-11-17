@@ -32,7 +32,15 @@ export interface Worktree {
 	changes: number;
 }
 /** Claude Code permission modes an agent can run in. */
-export type AgentMode = 'plan' | 'acceptEdits' | 'bypassPermissions';
+export type AgentMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions';
+/** Extras for one Claude Code turn; see RunOptions in src-tauri/src/agent.rs. */
+export interface AgentRunOptions {
+	/** Permission rules to pre-approve, e.g. `Read`, `Bash(git log:*)`. An empty list means no tools. */
+	tools?: string[];
+	model?: string;
+	/** One-shot question: starts fast (no MCP servers or skills) and keeps no session. */
+	quick?: boolean;
+}
 /** One line of Claude Code's stream-json output, for the session named `key`. */
 export interface AgentEvent {
 	key: string;
@@ -212,7 +220,7 @@ export class BackendService {
 	selectWorktree(id: string, path: string | null) { return this.call<void>('worktree_select', { id, path }); }
 	removeWorktree(id: string, path: string, force: boolean, deleteBranch: boolean) { return this.call<void>('worktree_remove', { id, path, force, deleteBranch }); }
 	agentAvailable() { return this.call<string | null>('agent_available'); }
-	agentStart(id: string, cwd: string, key: string, prompt: string, mode: AgentMode, resume: string | null) { return this.call<void>('agent_start', { id, cwd, key, prompt, mode, resume }); }
+	agentStart(id: string, cwd: string, key: string, prompt: string, mode: AgentMode, resume: string | null, options: AgentRunOptions | null = null) { return this.call<void>('agent_start', { id, cwd, key, prompt, mode, resume, options }); }
 	agentStop(key: string) { return this.call<void>('agent_stop', { key }); }
 	/** Null when no server for that language is installed (and always in the browser preview). */
 	async lspStart(id: string, language: string) { return (await this.call<{ key: string; root: string; fresh: boolean } | null | undefined>('lsp_start', { id, language })) ?? null; }
@@ -316,6 +324,18 @@ function demoCommit(n: number, summary: string, minutesAgo: number, extra: Parti
 		unpushed: false,
 		...extra,
 	};
+}
+
+/**
+ * What the demo "AI" says to a one-shot question. Each AI feature tags its prompt with a
+ * first line like `[commit-message]`; add a case here so the browser preview shows something real.
+ */
+function demoAnswer(prompt: string): string {
+	const tag = /^\[([a-z-]+)\]/.exec(prompt)?.[1] ?? '';
+	switch (tag) {
+		default:
+			return 'This is the browser preview, so there is no Claude here. In the desktop app the answer appears in this spot.';
+	}
 }
 
 /** Nothing persists; enough behaviour to click through every screen. */
@@ -552,6 +572,14 @@ class DemoBackend {
 			case 'agent_start': {
 				const key = String(args.key);
 				const say = (event: Record<string, unknown>, delay: number) => this.emit('agent-event', { key, event }, delay);
+				if ((args.options as AgentRunOptions | null)?.quick) {
+					// One-shot questions (AiService.ask): features add their own canned answers through demoAnswer().
+					const text = demoAnswer(String(args.prompt));
+					say({ type: 'assistant', message: { content: [{ type: 'text', text }] } }, 500);
+					say({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: 0.001 }, 600);
+					this.emit('agent-done', { key, ok: true, error: '' }, 650);
+					return;
+				}
 				say({ type: 'system', subtype: 'init', session_id: 'demo-session' }, 200);
 				say({ type: 'assistant', message: { content: [{ type: 'text', text: 'I will look at how the queue advances, then make the change.' }] } }, 700);
 				say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/player/queue.ts' } }] } }, 1300);

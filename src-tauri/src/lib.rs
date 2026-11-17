@@ -6,6 +6,7 @@ mod files;
 mod git;
 mod lsp;
 mod paths;
+mod proc;
 mod worktree;
 
 use std::path::PathBuf;

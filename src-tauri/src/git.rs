@@ -116,7 +116,7 @@ pub struct UndoneCommit {
 }
 
 fn base_command() -> Command {
-    let mut c = Command::new("git");
+    let mut c = crate::proc::command("git");
     c.env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
         // Paths come from git's own output; never let one be read as a glob or magic pathspec.
@@ -127,11 +127,6 @@ fn base_command() -> Command {
         .env("GIT_EDITOR", "true")
         .env("GIT_SEQUENCE_EDITOR", "true");
     c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     c
 }
 
@@ -1010,7 +1005,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("repoman-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("studio-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Git::init(&dir).unwrap();
         git(&dir, &["config", "user.name", "Test"]);
