@@ -1,0 +1,127 @@
+/* Melodic Studio theme. --ml-* overrides restyle Melodic components; --rm-* are
+   Melodic Studio-only tokens, each with a light and a dark value. `data-theme` on
+   <html> is set by applyTheme(); light is the base so dark wins on specificity. */
+
+:root {
+	--ml-radius: 6px;
+	--ml-radius-md: 6px;
+	--ml-radius-lg: 10px;
+	--ml-radius-xl: 12px;
+}
+
+:root,
+:root[data-theme='light'] {
+	color-scheme: light;
+
+	--ml-color-background: #f6f7f9;
+	--ml-color-surface: #ffffff;
+	--ml-color-primary: #3b62e0;
+	--ml-color-primary-hover: #3154c8;
+	--ml-color-primary-active: #2947ab;
+	--ml-color-primary-subtle: #e8edfd;
+
+	--rm-toolbar-bg: #1f2330;
+	--rm-toolbar-fg: #f2f4f8;
+	--rm-toolbar-muted: #9aa3b8;
+	--rm-toolbar-border: #333a4d;
+	--rm-toolbar-hover: #2b3142;
+	--rm-sidebar-bg: #ffffff;
+	--rm-hover: rgba(30, 40, 70, 0.06);
+	--rm-selected: #e3eafd;
+	--rm-selected-fg: #1c2b5e;
+
+	--rm-add: #1f8a55;
+	--rm-del: #cf3a3a;
+	--rm-mod: #b7791f;
+	--rm-ren: #3b62e0;
+	--rm-diff-add-bg: #e6f6ec;
+	--rm-diff-add-gutter: #cdeed9;
+	--rm-diff-del-bg: #fdecec;
+	--rm-diff-del-gutter: #f9d4d4;
+	--rm-diff-hunk-bg: #eef2fb;
+	--rm-diff-hunk-fg: #5a6a94;
+	--rm-diff-gutter-fg: #9aa1b0;
+}
+
+:root[data-theme='dark'] {
+	color-scheme: dark;
+
+	--ml-color-background: #0f1118;
+	--ml-color-surface: #161922;
+	--ml-color-surface-raised: #1e2230;
+	--ml-color-surface-overlay: #1e2230;
+	--ml-color-surface-sunken: #0c0e14;
+	--ml-color-input-bg: #11141c;
+	--ml-color-border: #2a2f3f;
+	--ml-color-border-strong: #3a4155;
+	--ml-color-border-muted: #1f2330;
+	--ml-color-text: #e8ebf2;
+	--ml-color-text-secondary: #c2c8d6;
+	--ml-color-text-muted: #8d95a8;
+	--ml-color-text-subtle: #687086;
+	--ml-color-text-inverse: #0f1118;
+	--ml-color-primary: #7c9cff;
+	--ml-color-primary-hover: #93adff;
+	--ml-color-primary-active: #a9beff;
+	--ml-color-primary-subtle: #1c2545;
+
+	--rm-toolbar-bg: #0b0d13;
+	--rm-toolbar-fg: #e8ebf2;
+	--rm-toolbar-muted: #8d95a8;
+	--rm-toolbar-border: #232838;
+	--rm-toolbar-hover: #171b27;
+	--rm-sidebar-bg: #13161e;
+	--rm-hover: rgba(200, 215, 255, 0.06);
+	--rm-selected: #223063;
+	--rm-selected-fg: #f2f5ff;
+
+	--rm-add: #5fd3a2;
+	--rm-del: #f0837c;
+	--rm-mod: #e2b25a;
+	--rm-ren: #7c9cff;
+	--rm-diff-add-bg: rgba(63, 185, 130, 0.14);
+	--rm-diff-add-gutter: rgba(63, 185, 130, 0.26);
+	--rm-diff-del-bg: rgba(240, 100, 92, 0.14);
+	--rm-diff-del-gutter: rgba(240, 100, 92, 0.26);
+	--rm-diff-hunk-bg: #181d2c;
+	--rm-diff-hunk-fg: #8996bd;
+	--rm-diff-gutter-fg: #596078;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+	background: var(--ml-color-background);
+	color: var(--ml-color-text);
+	font-family: var(--ml-font-sans);
+	font-size: 13px;
+	line-height: 1.45;
+	-webkit-font-smoothing: antialiased;
+	overflow: hidden;
+	user-select: none;
+	-webkit-user-select: none;
+	cursor: default;
+}
+
+#app {
+	height: 100%;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--ml-color-border-strong);
+	border-radius: 5px;
+	border: 2px solid transparent;
+	background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
