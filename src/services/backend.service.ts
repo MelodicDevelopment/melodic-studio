@@ -591,6 +591,27 @@ class DemoBackend {
 			}
 			case 'agent_stop':
 				return;
+			case 'folder_inspect': {
+				// Preview: any path with "new" or "empty" in it is treated as a plain folder, so the setup wizard can be seen.
+				const path = String(args.path);
+				const plain = /new|empty/i.test(path);
+				return {
+					path,
+					name: path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder',
+					exists: true,
+					isRepo: !plain,
+					entries: /empty/i.test(path) ? 0 : 7,
+					hasReadme: false,
+					hasGitignore: false,
+					detected: ['os', 'node'],
+					templates: [['os', 'macOS, Windows and Linux files'], ['editors', 'Editor folders'], ['node', 'Node.js / JavaScript / TypeScript'], ['dotnet', '.NET / C#'], ['php', 'PHP / Composer'], ['rust', 'Rust']],
+					defaultBranch: 'main',
+					authorName: 'Demo Author',
+					authorEmail: 'demo@example.com',
+				};
+			}
+			case 'repo_init':
+				return this.handle('repo_add', { path: args.path });
 			case 'pick_folder':
 				return '/Users/demo/Source';
 			case 'list_dir':

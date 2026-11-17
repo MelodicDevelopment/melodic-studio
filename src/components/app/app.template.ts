@@ -37,7 +37,7 @@ function welcome(self: AppComponent) {
 			${store.app()?.gitVersion ? '' : html`<p class="warn">Git was not found on this computer. Install git, then restart Melodic Studio.</p>`}
 			<div class="cards">
 				<button class="card" @click=${() => store.ask('add-repo', { tab: 'add' })}>
-					<ml-icon icon="folder-simple-plus" size="md"></ml-icon><span><b>Add an existing repository</b><small>One that is already on this computer</small></span>
+					<ml-icon icon="folder-simple-plus" size="md"></ml-icon><span><b>Open a folder</b><small>A repository, or any folder to turn into one</small></span>
 				</button>
 				<button class="card" @click=${() => store.ask('add-repo', { tab: 'clone' })}>
 					<ml-icon icon="cloud-arrow-down" size="md"></ml-icon><span><b>Clone a repository</b><small>From GitHub or any other git host</small></span>
@@ -228,5 +228,6 @@ export function appTemplate(self: AppComponent) {
 							</div>
 						`}
 		<ms-dialogs></ms-dialogs>
+		<ms-init-repo></ms-init-repo>
 	`;
 }

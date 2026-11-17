@@ -37,13 +37,13 @@ export function dialogsTemplate(self: DialogsComponent) {
 			<h3 slot="dialog-header">Add a repository</h3>
 			<div class="dlg">
 				<ml-tabs size="sm" variant="pills" value=${self.addTab} @ml:change=${(e: CustomEvent) => (self.addTab = e.detail.value as AddTab)}>
-					<ml-tab slot="tab" value="add" label="Add existing"></ml-tab>
+					<ml-tab slot="tab" value="add" label="Open a folder"></ml-tab>
 					<ml-tab slot="tab" value="clone" label="Clone"></ml-tab>
 					<ml-tab slot="tab" value="create" label="Create new"></ml-tab>
 				</ml-tabs>
 				${self.addTab === 'add'
 					? html`
-						<p>Point Melodic Studio at a git repository that is already on this computer.</p>
+						<p>Pick any folder on this computer. If it is not a git repository yet, Melodic Studio sets one up there.</p>
 						${folderField(self, 'Local path', 'addPath', '/path/to/repository')}
 					`
 					: self.addTab === 'clone'
@@ -55,13 +55,12 @@ export function dialogsTemplate(self: DialogsComponent) {
 						: html`
 							<ml-input label="Name" placeholder="my-project" .value=${self.createName} @ml:input=${(e: CustomEvent) => (self.createName = e.detail.value)}></ml-input>
 							${folderField(self, 'Create in', 'createParent', '/path/to/parent/folder')}
-							<ml-checkbox label="Start with a README and an initial commit" .checked=${self.createReadme} @ml:change=${(e: CustomEvent) => (self.createReadme = e.detail.checked)}></ml-checkbox>
 						`}
 			</div>
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="outline" @ml:click=${() => store.closeDialog('add-repo')}>Cancel</ml-button>
 				<ml-button variant="primary" ?disabled=${!self.canAdd} ?loading=${busy === 'repo'} @ml:click=${() => self.submitAdd()}>
-					${self.addTab === 'add' ? 'Add repository' : self.addTab === 'clone' ? 'Clone' : 'Create repository'}
+					${self.addTab === 'add' ? 'Open folder' : self.addTab === 'clone' ? 'Clone' : 'Continue'}
 				</ml-button>
 			</div>
 		</ml-dialog>

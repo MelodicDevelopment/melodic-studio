@@ -31,5 +31,6 @@ import './components/editor/editor.component';
 import './components/agents/agents.component';
 import './components/agents/agent-session.component';
 import './components/agents/worktree-banner.component';
+import './components/init/init-repo.component';
 import './components/dialogs/dialogs.component';
 import './components/app/app.component';

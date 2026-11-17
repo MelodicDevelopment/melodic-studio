@@ -5,6 +5,7 @@ mod dev;
 mod error;
 mod files;
 mod git;
+mod init;
 mod lsp;
 mod paths;
 mod proc;
@@ -91,6 +92,9 @@ pub fn run() {
             lsp::lsp_send,
             lsp::lsp_stop,
             dev::dev_log,
+            init::folder_inspect,
+            init::repo_init,
+            init::open_url,
             commands::list_dir,
             commands::read_file,
             commands::write_file,

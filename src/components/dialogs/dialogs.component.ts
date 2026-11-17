@@ -1,6 +1,7 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { RepoStore } from '../../services/repo.store';
+import { InitService } from '../init/init-repo.component';
 import type { ResetMode } from '../../services/backend.service';
 import { savedTheme, setTheme, type ThemeMode } from '../../shared/theme';
 import { dialogsTemplate } from './dialogs.template';
@@ -16,6 +17,7 @@ export type AddTab = 'add' | 'clone' | 'create';
 })
 export class DialogsComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
+	@Service(InitService) private readonly _init!: InitService;
 
 	addTab: AddTab = 'add';
 	addPath = '';
@@ -23,7 +25,6 @@ export class DialogsComponent {
 	cloneParent = '';
 	createName = '';
 	createParent = '';
-	createReadme = true;
 
 	branchName = '';
 	/** Git refused a safe delete; the next click forces it. */
@@ -70,12 +71,14 @@ export class DialogsComponent {
 		if (!this.canAdd) {
 			return;
 		}
+		// A folder that is not a repository yet (or a brand new one) goes through the setup wizard.
+		const parent = this.createParent.trim().replace(/[\\/]+$/, '');
 		const ok =
 			this.addTab === 'add'
-				? await this.store.addRepo(this.addPath.trim())
+				? await this._init.open(this.addPath.trim())
 				: this.addTab === 'clone'
 					? await this.store.cloneRepo(this.cloneUrl.trim(), this.cloneParent.trim())
-					: await this.store.createRepo(this.createParent.trim(), this.createName.trim(), this.createReadme);
+					: await this._init.open(`${parent}${parent.includes('\\') ? '\\' : '/'}${this.createName.trim()}`);
 		if (ok) {
 			this.store.closeDialog('add-repo');
 		}

@@ -58,7 +58,7 @@ pub(crate) fn save_worktree(state: &State<'_, AppState>, id: &str, worktree: Opt
     config.save(&state.config_path)
 }
 
-fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
+pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
     let id = path.to_string_lossy().to_string();
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| id.clone());
     let mut config = state.config.lock().unwrap();
