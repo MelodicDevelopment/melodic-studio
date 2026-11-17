@@ -33,7 +33,7 @@ pub struct FileContent {
 
 /// Turn a repository-relative path into a real one, refusing anything that is not
 /// plainly inside the repository (absolute paths, `..`, `.git`, symlinks leading out).
-fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
+pub(crate) fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
     let outside = || AppError::msg("That path is outside the repository");
     let rel_path = Path::new(rel);
     let mut first = true;

@@ -3,8 +3,9 @@ import type { AppComponent } from './app.component';
 import type { FileChange } from '../../services/backend.service';
 import { dirName, fileName, longTime, plural, statusMark } from '../../shared/format';
 import type { ParsedDiff } from '../../shared/diff';
+import { aiSidePanel, explainButton, fileAction, proposalPane, reviewCard, reviewPane } from '../ai/ai-entry';
 
-function fileHead(file: FileChange, diff: ParsedDiff | null) {
+function fileHead(file: FileChange, diff: ParsedDiff | null, action: unknown = '') {
 	const mark = statusMark(file.status);
 	return html`
 		<div class="filehead">
@@ -13,6 +14,7 @@ function fileHead(file: FileChange, diff: ParsedDiff | null) {
 			${diff && !diff.binary && (diff.added || diff.removed)
 				? html`<span class="stat add">+${diff.added}</span><span class="stat del">−${diff.removed}</span>`
 				: ''}
+			${action}
 		</div>
 	`;
 }
@@ -77,6 +79,7 @@ function noChanges(self: AppComponent) {
 						</button>
 					`
 					: ''}
+				${reviewCard()}
 				<button class="card" @click=${() => store.openIn('editor')}>
 					<ml-icon icon="code" size="md"></ml-icon><span><b>Open in your editor</b><small>${store.app()?.editor ?? 'code'}</small></span>
 				</button>
@@ -114,6 +117,10 @@ function noChanges(self: AppComponent) {
 
 function changesPane(self: AppComponent) {
 	const store = self.store;
+	const finding = reviewPane();
+	if (finding) {
+		return finding;
+	}
 	const file = store.selectedFile();
 	if (!file) {
 		return noChanges(self);
@@ -137,12 +144,16 @@ function changesPane(self: AppComponent) {
 				</div>
 			`
 			: ''}
-		${fileHead(file, diff)}<ms-diff .diff=${diff} .emptyText=${emptyText(file)}></ms-diff>
+		${fileHead(file, diff, fileAction(file))}${proposalPane(file) ?? html`<ms-diff .diff=${diff} .emptyText=${emptyText(file)}></ms-diff>`}
 	`;
 }
 
 function historyPane(self: AppComponent) {
 	const store = self.store;
+	const finding = reviewPane();
+	if (finding) {
+		return finding;
+	}
 	const commit = store.selectedCommit();
 	if (!commit) {
 		return html`<div class="empty"><h2>${store.historyLoaded() ? 'No commits yet' : ''}</h2></div>`;
@@ -163,6 +174,7 @@ function historyPane(self: AppComponent) {
 				<span><ml-icon icon="files" size="sm"></ml-icon>${plural(files.length, 'changed file')}</span>
 				${commit.unpushed ? html`<ml-badge size="xs" variant="warning">Not pushed</ml-badge>` : ''}
 				${refs.map((r) => html`<ml-badge size="xs" variant=${r.startsWith('tag: ') ? 'primary' : 'default'}>${r.replace(/^tag: /, '')}</ml-badge>`)}
+				${explainButton({ kind: 'commit', commit }, 'margin: -4px 0 -4px auto')}
 			</div>
 		</div>
 		<div class="split">
@@ -225,6 +237,7 @@ export function appTemplate(self: AppComponent) {
 								</aside>
 								<div class="resizer" @pointerdown=${self.startResize} @dblclick=${() => self.resetWidth()}></div>
 								<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
+								${aiSidePanel()}
 							</div>
 						`}
 		<ms-dialogs></ms-dialogs>

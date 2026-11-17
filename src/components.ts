@@ -20,6 +20,7 @@ import './services/explorer.store';
 import './services/agents.store';
 import './services/lsp.service';
 import './services/ai.service';
+import './services/ai-features.store';
 
 // App components
 import './components/diff/diff-view.component';
@@ -31,5 +32,10 @@ import './components/editor/editor.component';
 import './components/agents/agents.component';
 import './components/agents/agent-session.component';
 import './components/agents/worktree-banner.component';
+import './components/ai/ai-commit.component';
+import './components/ai/ai-review-banner.component';
+import './components/ai/ai-panel.component';
+import './components/ai/ai-review-diff.component';
+import './components/ai/ai-proposal.component';
 import './components/dialogs/dialogs.component';
 import './components/app/app.component';

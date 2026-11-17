@@ -19,6 +19,18 @@ export interface ParsedDiff {
 	raw: string;
 }
 
+/** A remark shown inside a diff, under the line it is about (a review finding). */
+export interface DiffNote {
+	/** Line number in the new version of the file. Null, or a line the diff does not show, puts the note above the diff. */
+	line: number | null;
+	/** Colours the note: `bug`, `risk`, anything else is neutral. */
+	tone: string;
+	/** The word shown before the title, e.g. the severity. */
+	label: string;
+	title: string;
+	detail: string;
+}
+
 const MAX_LINES = 6000;
 
 export function parseDiff(raw: string, tooLarge = false): ParsedDiff {

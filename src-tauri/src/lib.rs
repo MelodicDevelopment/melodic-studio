@@ -1,4 +1,5 @@
 mod agent;
+mod ai_git;
 mod commands;
 mod config;
 mod error;
@@ -64,6 +65,13 @@ pub fn run() {
             commands::history,
             commands::commit_files,
             commands::commit_diff,
+            ai_git::ai_selected_diff,
+            ai_git::ai_commit_patch,
+            ai_git::ai_push_diff,
+            ai_git::ai_range_file_diff,
+            ai_git::ai_conflict_file,
+            ai_git::ai_resolution_preview,
+            ai_git::ai_resolution_apply,
             commands::branches,
             commands::branch_create,
             commands::branch_checkout,
