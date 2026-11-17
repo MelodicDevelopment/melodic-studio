@@ -19,7 +19,8 @@ export default defineConfig({
 	],
 	base: './',
 	clearScreen: false,
-	server: { port: 5190, strictPort: true },
+	// Worktrees under .claude/ and the Rust build are not part of this app's sources: do not reload for them.
+	server: { port: 5190, strictPort: true, watch: { ignored: ['**/.claude/**', '**/src-tauri/**'] } },
 	envPrefix: ['VITE_', 'TAURI_ENV_'],
 	build: { target: 'es2022' },
 });

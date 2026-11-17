@@ -1,6 +1,7 @@
 mod agent;
 mod commands;
 mod config;
+mod dev;
 mod error;
 mod files;
 mod git;
@@ -32,6 +33,7 @@ pub fn run() {
             app.manage(AppState { config_path, config: Mutex::new(config) });
             app.manage(agent::Agents::default());
             app.manage(lsp::Lsp::default());
+            dev::start(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +90,7 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            dev::dev_log,
             commands::list_dir,
             commands::read_file,
             commands::write_file,
