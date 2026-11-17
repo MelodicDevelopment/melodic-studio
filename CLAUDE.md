@@ -12,6 +12,9 @@ src-tauri/src/
   commands.rs   Tauri commands (thin, all async, camelCase DTOs). Only repositories in the config can be operated on.
   config.rs     registry of added repositories (app config dir, repositories.json) + editor command
   error.rs      AppError -> {kind, message, paths}; kind: conflict | auth | git | error
+  init.rs       turning a plain folder into a repository: inspect it, then git init with the wizard's choices
+                (default branch, .gitignore templates, README, first commit, per-repository identity)
+  dev.rs        debug builds only: STUDIO_DEV_EVAL runs a script file in the window, dev_log sends lines back
   paths.rs      how absolute paths are spelled and compared (native / same / typed), and the PATH fix for
                 GUI-launched apps so git, ssh and claude resolve
   proc.rs       the only way to start a process (command), stop one (kill_tree), or hand off to the user's
@@ -54,6 +57,10 @@ src/
                         ms-ask-button for other tabs), attempts (side-by-side compare of parallel attempts),
                         rich-text.ts (Markdown -> templates, with file/commit/url links), agent-state.ts (status pill)
   services/agent-paths.ts       the only path handling the agent features do (samePath, repoRelative); adjust here
+  components/repo-tabs  the tab strip across the top: several repositories open side by side (hidden with one)
+  components/init       setup wizard for a folder that is not a repository yet + InitService.open(path), the one way to open a folder
+  services/ai.service.ts        AiService.ask(): one-shot questions to the user's `claude` CLI (no MCP servers or skills, named tools only)
+  dev/hooks.ts          dev builds only: window.__studio (stores, q() through shadow roots, log()) for scripts run via STUDIO_DEV_EVAL
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt)
   services/host.store.ts        issues list, "start agent on this", the pull request draft; opens the two dialogs below
   components/host       Issues / work items dialog and the Create pull request dialog (HostStore.openIssues() / openPr())
@@ -88,6 +95,11 @@ src/
 - Review before push covers merge-base(upstream, HEAD)..HEAD, or the merge-base with the default branch when the branch has no upstream. The diff in the prompt has new-file line numbers written in (`numbered()`), so findings name real lines; `ms-diff` shows them in place through `.notes` (keyed by new-file line). Sonnet, read-only tools (`Read`, `Grep`, `Glob`).
 - Conflict proposals: Claude answers one replacement per conflict block and the frontend splices them into the file, so nothing outside a block can change (and a long file costs no more than its conflicts). The proposal is previewed with `git diff --no-index` against a temp file. Accepting goes through `files::resolve()` and is refused when markers remain, the file is no longer conflicted, it changed since it was read, or the active checkout switched; then it is `git add`ed.
 - Two Melodic traps: a component that first renders an empty template (``html`` ``) never shows a later non-empty one, so render `nothing()` (ai-entry.ts) instead; and `computed()` created while a component renders is disposed with that component, so a store with computed fields is instantiated at module load (end of ai-features.store.ts) and its effects are created outside any component.
+
+- Repository tabs (`RepoStore.repoTabs`, localStorage `studio.repo-tabs`): `selectRepo(id)` switches in the current tab, `selectRepo(id, true)` / `openRepoTab` opens another. Each tab's view (sidebar tab, selected file, pinned diff tabs, unchecked files, draft message) is kept in memory by `keepView`/`restoreView`. The strip, not the toolbar, takes the macOS traffic-light padding while it is visible.
+- Opening a folder always goes through `InitService.open(path)`: a repository is added, anything else starts the setup wizard. The wizard never overwrites: .gitignore is appended to, an existing README is kept, and a folder inside another repository is refused. Creating the remote uses `host_repo_create` (the user's gh / az / glab), then the normal publish.
+- macOS dev builds run from `target/debug/Melodic Studio.app` (cargo runner `scripts/dev-app.sh`, set in `src-tauri/.cargo/config.toml`), because a bare binary shows in the Dock under its file name. The runner passes everything except the app binary straight through, so `cargo test` is unaffected.
+- A component's first render must not be a bare ``html`` `` if it will ever show something else (Melodic never leaves an empty first template): render a hidden placeholder, or `nothing()` from `components/ai/ai-entry.ts`.
 
 ## Integrated terminal
 
@@ -182,12 +194,10 @@ npm run icon            # regenerate icons from icon-source.svg
 
 ## Status / next
 
-Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+Checked on macOS three ways: unit and integration tests (57 Rust tests against real git and ptys, 8 more ignored ones against real language servers and host CLIs, 5 TypeScript tests), the browser preview with the demo backend, and the real desktop window driven by script (`STUDIO_DEV_EVAL`, see `src-tauri/src/dev.rs`) with screenshots.
 
-Host integration: the GitHub path was run against the real `gh` (status, issue list and search, default branch, owners; `gh pr create --dry-run` for the arguments). Azure DevOps was exercised only as far as a signed-out `az` allows (status and the sign-in hint); its work item, pull request and repository output is parsed from the extension's source and documented shapes. `glab` was not installed, so GitLab is parsed from the documented API output only. No pull request or repository has been created for real on any host.
-Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. The AI change features were clicked through in the browser preview with canned answers, and their four prompts were run by hand through the `claude` CLI against real diffs of this repository. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
-Agent board, Ask the repository, History questions and parallel attempts: clicked through in the browser preview (the demo backend answers questions with file and commit references and gives each attempt a different diff); `worktree_diff` and the `claude` command line by Rust tests; the read-only allow-list by four real `claude -p` runs in a scratch repository (git log/show/blame ran, an edit and `touch` were refused, `--resume` worked with the lean flags). Not yet exercised in the desktop window.
+Run for real in the desktop window: add repository, status, diff, commit, push, history, branches, stash, worktrees, Files tab, the setup wizard through to a push, repository tabs, the terminal against a real shell, an agent session end to end (task, edit in its worktree, review, commit, merge, cleanup), one-shot AI (commit message, explain, review before push), Ask the repository, TypeScript hover and go-to-definition through the managed server, host tools (gh sign-in, owners, live issue list).
 
-Built and checked in the browser preview (demo backend) and by Rust tests against real git. Not yet run as a desktop window, so agent sessions and language servers have only been exercised piecewise: the `claude` CLI invocation and its event format by hand, LSP framing by unit test, the agent UI against demo events. Not done: integrated terminal, cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, listing issues/work items inside the app (needs host API tokens), background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+Not run for real: anything on Windows or Linux (written to the Platforms rules, linted for Windows in part; the first CI run is the proof), creating a pull request or a remote repository (unit tests and `gh --dry-run` only), Azure DevOps and GitLab beyond their signed-out / not-installed paths, parallel attempts and the agent board with real agents (preview only), conflict proposals in the window (Rust tests + preview + one real prompt), C# and PHP servers in the window (end-to-end tests only).
 
-Language servers: install/removal, launch, and hover/definition/outline/diagnostics run end to end against the real typescript-language-server, intelephense and csharp-ls (ignored Rust tests, plus the frontend's protocol code run in Node), on macOS only. The Monaco wiring in `lsp.service.ts`, the built-in TypeScript switch and the Settings section are type-checked and built but have not been seen in a window; nothing has run on Windows or Linux.
+Not done: cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, dragging repository tabs to reorder, restoring the selected commit when returning to a tab, background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
