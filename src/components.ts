@@ -20,6 +20,7 @@ import './services/explorer.store';
 import './services/agents.store';
 import './services/lsp.service';
 import './services/ai.service';
+import './services/updates.service';
 import './services/terminal.store';
 import './services/host.store';
 import './services/ai-features.store';
@@ -27,6 +28,7 @@ import './services/ai-features.store';
 // App components
 import './components/diff/diff-view.component';
 import './components/repo-tabs/repo-tabs.component';
+import './components/updates/updates.component';
 import './components/toolbar/toolbar.component';
 import './components/changes/changes.component';
 import './components/history/history.component';

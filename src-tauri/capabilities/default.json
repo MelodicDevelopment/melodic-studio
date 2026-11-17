@@ -10,6 +10,8 @@
     "core:window:allow-toggle-maximize",
     "core:webview:allow-internal-toggle-devtools",
     "dialog:default",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

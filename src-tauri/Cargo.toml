@@ -16,12 +16,20 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 trash = "5"
 portable-pty = "0.9"
 base64 = "0.23"
+
+# Build scripts and proc macros are loaded by the compiler, not shipped. Stripping them (as `strip = true`
+# below would) breaks the build on recent Xcode once the macOS deployment target is 13 or newer: `strip`
+# leaves the library misaligned and the compiler cannot load it ("mis-aligned LINKEDIT string pool").
+[profile.release.build-override]
+strip = false
 
 [profile.release]
 codegen-units = 1

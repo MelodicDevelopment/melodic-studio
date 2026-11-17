@@ -101,6 +101,8 @@ src/
 - macOS dev builds run from `target/debug/Melodic Studio.app` (cargo runner `scripts/dev-app.sh`, set in `src-tauri/.cargo/config.toml`), because a bare binary shows in the Dock under its file name. The runner passes everything except the app binary straight through, so `cargo test` is unaffected.
 - A component's first render must not be a bare ``html`` `` if it will ever show something else (Melodic never leaves an empty first template): render a hidden placeholder, or `nothing()` from `components/ai/ai-entry.ts`.
 
+- `[profile.release.build-override] strip = false` in Cargo.toml is load-bearing: with a macOS deployment target of 13+ (ours is 14) recent Xcode's `strip` corrupts proc-macro libraries and the release build fails with "mis-aligned LINKEDIT string pool".
+
 ## Integrated terminal
 
 ```
@@ -133,7 +135,7 @@ src/services/demo-terminal.ts      the pretend shell of the browser preview
 
 ## Platforms
 
-macOS, Windows and Linux are all first-class. CI (`.github/workflows/ci.yml`) runs typecheck, `npm test`, the build, clippy and `cargo test` on all three; the Rust tests run the runner's real git. Only macOS has been run by hand so far (see the end of this section).
+macOS, Windows and Linux are all first-class. CI (`.github/workflows/ci.yml`) runs typecheck, `npm test`, the build, clippy and `cargo test` on all three; the Rust tests run the runner's real git. Releases: pushing a `v*` tag runs `.github/workflows/release.yml` (universal macOS, Windows, Linux installers on a draft GitHub release, published when all three finish; signing secrets optional, an unsigned release stays a draft). The updater public key is in `tauri.conf.json`, its private key at `~/.tauri/melodic-studio.key` (never in the repository; `TAURI_SIGNING_PRIVATE_KEY` secret). A local `tauri build` needs that key in the environment or `--config src-tauri/tauri.no-updater.conf.json`. `npm run bump -- set <version>` keeps the three version files in step; setup and checklist in `docs/release.md`. Windows signing is `scripts/sign-windows.mjs` via `bundle.windows.signCommand` (set `SKIP_WIN_SIGN=1` for a local Windows build). Only macOS has been run by hand so far (see the end of this section).
 
 ### Rules (check new code against these)
 
@@ -200,4 +202,4 @@ Run for real in the desktop window: add repository, status, diff, commit, push, 
 
 Not run for real: anything on Windows or Linux (written to the Platforms rules, linted for Windows in part; the first CI run is the proof), creating a pull request or a remote repository (unit tests and `gh --dry-run` only), Azure DevOps and GitLab beyond their signed-out / not-installed paths, parallel attempts and the agent board with real agents (preview only), conflict proposals in the window (Rust tests + preview + one real prompt), C# and PHP servers in the window (end-to-end tests only).
 
-Not done: cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, dragging repository tabs to reorder, restoring the selected commit when returning to a tab, background auto-fetch, in-app updater, signing/release workflow, renaming the folder.
+Not done: cherry-pick UI (backend command exists), partial (line/hunk) commits, image diffs, dragging repository tabs to reorder, restoring the selected commit when returning to a tab, background auto-fetch, renaming the folder. In-app updates (`UpdatesService`, toolbar pill, Settings row; tauri-plugin-updater) are wired but have never been exercised: that needs two published releases. The release workflow itself has never run: the repository has no GitHub remote yet.

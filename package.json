@@ -2,6 +2,11 @@
   "name": "melodic-studio",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MelodicDevelopment/melodic-studio.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,12 +17,15 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
-    "icon": "tauri icon icon-source.svg -o src-tauri/icons"
+    "icon": "tauri icon icon-source.svg -o src-tauri/icons",
+    "bump": "node scripts/version.mjs"
   },
   "dependencies": {
     "@melodicdev/components": "^4.0.1",
     "@melodicdev/core": "^4.0.1",
     "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "monaco-editor": "^0.57.0"

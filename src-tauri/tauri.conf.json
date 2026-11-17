@@ -26,15 +26,22 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; script-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGMjQ1RDc3QTUyRTQ4QTEKUldTaFNDNmxkMTBrSDBmU0FqZGsyVE8yVzNyQjl3NGsxU2VpLzd6YVRjRmJiNjJmVkYvUmlyU3QK",
+      "endpoints": ["https://github.com/MelodicDevelopment/melodic-studio/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "A desktop git client.",
-    "longDescription": "Commit, branch, sync and browse history for your git repositories.",
+    "shortDescription": "Git, code and AI agents in one window.",
+    "longDescription": "A desktop developer workspace: commit, branch and sync your git repositories, read the code, run a terminal, and hand tasks to AI agents that each work on their own branch.",
     "copyright": "Copyright © 2026 Melodic Development",
     "macOS": { "minimumSystemVersion": "14.0" },
-    "windows": { "minimumWebview2Version": "114.0.0.0" },
+    "windows": { "minimumWebview2Version": "114.0.0.0", "signCommand": "node ../scripts/sign-windows.mjs %1" },
     "linux": {
       "deb": { "depends": ["git", "libwebkit2gtk-4.1-0 (>= 2.42)"], "recommends": ["xdg-utils"], "section": "devel" },
       "rpm": { "depends": ["git"] }

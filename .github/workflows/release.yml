@@ -1,0 +1,196 @@
+name: Release
+
+# Push a tag like v0.2.0 to build installers for macOS, Windows and Linux and
+# attach them to a GitHub release. "Run workflow" builds the same installers
+# without releasing anything (they are attached to the run instead).
+# Setup and the per-release checklist: docs/release.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos-latest
+            args: --target universal-apple-darwin --verbose
+          - name: Linux
+            # The oldest supported Ubuntu, so the binaries run on older distributions too.
+            platform: ubuntu-22.04
+            args: --verbose
+          - name: Windows
+            platform: windows-latest
+            args: --verbose
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: The tag must match the app version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: node scripts/version.mjs check "${GITHUB_REF_NAME}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+
+      # Signing secrets are passed on only when they exist, so the workflow builds
+      # (unsigned, with a warning) before they are set up, and signs once they are.
+      - name: Signing setup
+        shell: bash
+        env:
+          S_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          S_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          S_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          S_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          S_AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          S_AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          S_AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          S_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          S_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          S_TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          S_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          S_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          put() {
+            if [ -n "$2" ]; then
+              { echo "$1<<__STUDIO_EOF__"; echo "$2"; echo "__STUDIO_EOF__"; } >> "$GITHUB_ENV"
+            fi
+          }
+          if [ -n "$S_TAURI_SIGNING_PRIVATE_KEY" ]; then
+            # In-app updates: with the key present the bundler signs the updater archives
+            # and tauri-action uploads the latest.json that installed copies check.
+            put TAURI_SIGNING_PRIVATE_KEY "$S_TAURI_SIGNING_PRIVATE_KEY"
+            put TAURI_SIGNING_PRIVATE_KEY_PASSWORD "$S_TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          else
+            echo "EXTRA_ARGS=--config src-tauri/tauri.no-updater.conf.json" >> "$GITHUB_ENV"
+            echo "::warning title=No updater key::TAURI_SIGNING_PRIVATE_KEY is not set, so this build has no update archives or latest.json. Installed copies will not see it as an update (docs/release.md)."
+          fi
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            if [ -n "$S_APPLE_CERTIFICATE" ] && [ -n "$S_APPLE_SIGNING_IDENTITY" ]; then
+              # Signing and notarization, consumed directly by Tauri's bundler.
+              put APPLE_CERTIFICATE "$S_APPLE_CERTIFICATE"
+              put APPLE_CERTIFICATE_PASSWORD "$S_APPLE_CERTIFICATE_PASSWORD"
+              put APPLE_SIGNING_IDENTITY "$S_APPLE_SIGNING_IDENTITY"
+              put APPLE_ID "$S_APPLE_ID"
+              put APPLE_PASSWORD "$S_APPLE_PASSWORD"
+              put APPLE_TEAM_ID "$S_APPLE_TEAM_ID"
+            else
+              echo "::warning title=macOS build is not signed::Add the APPLE_* secrets (docs/release.md). Gatekeeper blocks an unsigned download."
+            fi
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if [ -n "$S_AZURE_CLIENT_SECRET" ] && [ -n "$S_TRUSTED_SIGNING_ACCOUNT" ]; then
+              # Azure Trusted Signing, consumed by scripts/sign-windows.mjs (bundle.windows.signCommand).
+              put AZURE_TENANT_ID "$S_AZURE_TENANT_ID"
+              put AZURE_CLIENT_ID "$S_AZURE_CLIENT_ID"
+              put AZURE_CLIENT_SECRET "$S_AZURE_CLIENT_SECRET"
+              put TRUSTED_SIGNING_ENDPOINT "$S_TRUSTED_SIGNING_ENDPOINT"
+              put TRUSTED_SIGNING_ACCOUNT "$S_TRUSTED_SIGNING_ACCOUNT"
+              put TRUSTED_SIGNING_PROFILE "$S_TRUSTED_SIGNING_PROFILE"
+              echo "WINDOWS_SIGNING=1" >> "$GITHUB_ENV"
+            else
+              echo "SKIP_WIN_SIGN=1" >> "$GITHUB_ENV"
+              echo "::warning title=Windows build is not signed::Add the AZURE_* and TRUSTED_SIGNING_* secrets (docs/release.md). SmartScreen warns on an unsigned installer."
+            fi
+          fi
+
+      - name: Set up Java (needed by jsign for Windows signing)
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING == '1'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download jsign (Windows signing)
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING == '1'
+        shell: bash
+        run: |
+          url=$(curl -s https://api.github.com/repos/ebourg/jsign/releases/latest \
+            | jq -r '.assets[] | select(.name | test("\\.jar$")) | .browser_download_url' | head -n1)
+          echo "Downloading $url"
+          curl -sL "$url" -o jsign.jar
+          echo "JSIGN_JAR=$(pwd -W)/jsign.jar" >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      - name: Build installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # With a tag: create (or add to) a draft release and upload the installers.
+          # Without one (Run workflow): only build.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Melodic Studio {0}', github.ref_name) || '' }}
+          # Stays a draft while the platforms build; the publish job flips it live.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} ${{ env.EXTRA_ARGS }}
+
+      - name: Attach installers to this run
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: melodic-studio-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/rpm/*.rpm
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
+
+  publish:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          MAC_SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+          WIN_SIGNED: ${{ secrets.AZURE_CLIENT_SECRET != '' && secrets.TRUSTED_SIGNING_ACCOUNT != '' }}
+        run: |
+          # Title and notes come from the tagged commit's subject and body.
+          subject=$(git log -1 --format=%s)
+          git log -1 --format=%b | sed '/^Bumps to /d' > notes.md
+          gh release edit "$TAG" --title "Melodic Studio $TAG — $subject" --notes-file notes.md
+          if [ "$MAC_SIGNED" = "true" ] && [ "$WIN_SIGNED" = "true" ] && [ "$UPDATER_KEY" = "true" ]; then
+            gh release edit "$TAG" --draft=false --latest
+          else
+            echo "::warning title=Release left as a draft::Something a published release needs is missing (mac signed: $MAC_SIGNED, windows signed: $WIN_SIGNED, updater key: $UPDATER_KEY). Publish it by hand from the Releases page if that is what you want."
+          fi

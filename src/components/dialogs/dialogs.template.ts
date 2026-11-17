@@ -206,6 +206,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 					<dt>Melodic Studio</dt>
 					<dd>${app?.appVersion ?? ''}</dd>
 				</dl>
+				<ms-update-status></ms-update-status>
 			</div>
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="primary" @ml:click=${() => (self.saveEditor(), store.closeDialog('settings'))}>Done</ml-button>

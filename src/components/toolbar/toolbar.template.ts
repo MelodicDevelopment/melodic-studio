@@ -195,6 +195,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 				`
 				: ''}
 			${repo && st ? html`<button class="tool" title="Terminal (Ctrl+\`)" style=${terminals().open() ? 'color: var(--ms-toolbar-fg)' : ''} @click=${() => terminals().toggle()}><ml-icon icon="terminal-window" size="md"></ml-icon></button>` : ''}
+			<ms-update-pill></ms-update-pill>
 			<button class="tool" title="Settings" @click=${() => store.ask('settings')}><ml-icon icon="gear" size="md"></ml-icon></button>
 		</div>
 		<div class="ctx" popover="manual" style="left: ${self.menu?.x ?? 0}px; top: ${self.menu?.y ?? 0}px" @contextmenu=${(e: Event) => e.preventDefault()}>${contextMenu(self)}</div>
