@@ -7,6 +7,7 @@ mod git;
 mod lsp;
 mod paths;
 mod proc;
+mod terminal;
 mod worktree;
 
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ pub fn run() {
             app.manage(AppState { config_path, config: Mutex::new(config) });
             app.manage(agent::Agents::default());
             app.manage(lsp::Lsp::default());
+            app.manage(terminal::Terminals::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,10 +90,15 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            terminal::term_open,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_close,
             commands::list_dir,
             commands::read_file,
             commands::write_file,
         ])
+        .on_window_event(terminal::on_window_event)
         .run(tauri::generate_context!())
         .expect("error while running Melodic Studio");
 }

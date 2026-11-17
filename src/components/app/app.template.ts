@@ -224,7 +224,9 @@ export function appTemplate(self: AppComponent) {
 									${tab === 'changes' ? html`<ms-changes></ms-changes>` : tab === 'history' ? html`<ms-history></ms-history>` : tab === 'agents' ? html`<ms-agents></ms-agents>` : html`<ms-explorer></ms-explorer>`}
 								</aside>
 								<div class="resizer" @pointerdown=${self.startResize} @dblclick=${() => self.resetWidth()}></div>
+								<div class="maincol">
 								<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
+								<ms-terminal></ms-terminal></div>
 							</div>
 						`}
 		<ms-dialogs></ms-dialogs>

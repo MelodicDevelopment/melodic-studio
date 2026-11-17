@@ -51,6 +51,23 @@ src/
 - Agents are Claude Code, not a reimplementation: `claude -p --output-format stream-json --verbose --permission-mode <mode> [--resume <id>]`, prompt on stdin (never argv), cwd checked against the repository's worktrees. Only assistant/user/result/init events are forwarded. `total_cost_usd` is the session's running total. Agents do not commit; the user reviews in the Changes tab of the agent's worktree, commits, then merges.
 - Language servers are whatever the user has installed (a project's `node_modules/.bin` first, then PATH); nothing is bundled or downloaded. The protocol is spoken in `lsp.service.ts`; the Rust side only frames messages. The editor component knows nothing about it.
 
+## Integrated terminal
+
+```
+src-tauri/src/terminal.rs          shells on a pseudo-terminal (portable-pty: Unix ptys, Windows ConPTY): term_open / term_write /
+                                   term_resize / term_close, `term-data` and `term-exit` events
+src/services/terminal.store.ts     every terminal with its xterm.js screen; the panel's open/closed state and height (studio.terminal.*)
+src/shared/xterm.ts                lazy xterm.js load, its CSS adopted into the shadow root, theme from --ml-*/--ms-* tokens
+src/components/terminal            ms-terminal: the panel under the main pane (tabs, top edge to drag, Ctrl+` / Ctrl+Shift+`)
+src/services/demo-terminal.ts      the pretend shell of the browser preview
+```
+
+- The shell is the user's own: `$SHELL -l` on Unix (a login shell, because a GUI-launched app has almost no environment), `pwsh.exe`, else `powershell.exe`, else `%COMSPEC%` on Windows. It starts in the active checkout (`commands::repo`), so a new terminal follows a worktree switch; terminals already open stay where they are.
+- Output travels as base64 of the raw bytes (a read can end inside a UTF-8 character) and can arrive before `term_open` has returned the key, so the store holds early events until it knows the key. Keystrokes are sent one write at a time: async commands may otherwise overtake each other.
+- The xterm `Terminal` objects live in `TerminalStore`, not in the component: the work area is rebuilt on a repository or worktree switch and the panel is hidden with `display: none`, and neither may cost a shell or its scrollback. `term.open()` runs only once its element is on screen (xterm measures glyphs).
+- The end of a shell comes from a thread waiting on the child, not from the output stream: ConPTY never reports end of stream. Closing a terminal hangs up (SIGHUP) on Unix and terminates on Windows; dropping the pty takes the rest along, and the window's `Destroyed` event closes them all.
+- Ctrl+` is Ctrl on every OS and is caught in the capture phase, or a focused terminal would send it to the shell. Off the Mac, copy and paste are Ctrl+Shift+C / Ctrl+Shift+V; Windows also gets Ctrl+V and Ctrl+C-with-a-selection.
+
 ## Conventions
 
 - Melodic 3-file pattern for big components, single file for small ones. `@Service()` for DI, `@ml:click`/`@ml:input`/`@ml:change` for Melodic events, `@click` for native.
