@@ -100,6 +100,7 @@ pub fn run() {
             worktree::worktree_add,
             worktree::worktree_select,
             worktree::worktree_remove,
+            worktree::worktree_diff,
             agent::agent_available,
             agent::agent_start,
             agent::agent_stop,

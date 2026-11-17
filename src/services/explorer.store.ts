@@ -199,6 +199,41 @@ export class ExplorerStore {
 		this.active.set(path);
 	}
 
+	/**
+	 * Show a file with the cursor on a line (1-based), for links that point into the code.
+	 * The Files tab has to be the one on screen; the editor swaps to the file once it has
+	 * loaded, so this waits for that (as LspService.reveal does) before moving the cursor.
+	 * Resolves to whether the cursor got there.
+	 */
+	async openAt(path: string, line: number, column = 1): Promise<boolean> {
+		this.sync();
+		const id = this._repoId;
+		if (!id) {
+			return false;
+		}
+		this.open(path, true);
+		const monaco = await loadMonaco();
+		// The same address `model()` gives the file.
+		const wanted = monaco.Uri.file(`${id}/${path}`).toString();
+		return new Promise((resolve) => {
+			let tries = 0;
+			const timer = setInterval(() => {
+				const editor = monaco.editor.getEditors().find((e) => e.getModel()?.uri.toString() === wanted);
+				if (editor) {
+					clearInterval(timer);
+					const position = { lineNumber: Math.min(Math.max(1, line), editor.getModel()?.getLineCount() ?? 1), column: Math.max(1, column) };
+					editor.setPosition(position);
+					editor.revealPositionInCenter(position);
+					editor.focus();
+					resolve(true);
+				} else if (++tries > 160 || id !== this._repoId || !this.tabs().some((t) => t.path === path && (t.kind === 'loading' || t.kind === 'text'))) {
+					clearInterval(timer); // closed, not text, or the editor never came up
+					resolve(false);
+				}
+			}, 50);
+		});
+	}
+
 	/** Load a file from disk into its tab. With `quietly`, a file that is gone just closes. */
 	private async read(path: string, quietly: boolean): Promise<void> {
 		const id = this._repoId;

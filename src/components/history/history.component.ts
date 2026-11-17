@@ -24,6 +24,7 @@ import { relativeTime } from '../../shared/format';
 		}
 		return html`
 			<ms-ai-review-banner></ms-ai-review-banner>
+			<ms-ask-button .scope=${'history'} .look=${'bar'}></ms-ask-button>
 			<div class="list">
 				${commits.map(
 					(c) => html`
