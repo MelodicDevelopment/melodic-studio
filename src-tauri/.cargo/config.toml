@@ -1,0 +1,4 @@
+# The Dock labels an unbundled app with its executable's file name, and cargo cannot name a binary
+# "Melodic Studio". So on macOS `cargo run` (which is what `tauri dev` does) goes through dev-runner.sh.
+[target.'cfg(target_os = "macos")']
+runner = "./dev-runner.sh"

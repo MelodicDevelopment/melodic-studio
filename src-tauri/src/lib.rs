@@ -28,7 +28,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let config_dir = app.path().app_config_dir()?;
+            // Debug builds can keep their settings somewhere else, so a test instance never touches the real ones.
+            let config_dir = match std::env::var("STUDIO_CONFIG_DIR") {
+                Ok(dir) if cfg!(debug_assertions) && !dir.is_empty() => PathBuf::from(dir),
+                _ => app.path().app_config_dir()?,
+            };
             std::fs::create_dir_all(&config_dir)?;
             let config_path = config_dir.join("repositories.json");
             let config = config::AppConfig::load(&config_path).unwrap_or_default();

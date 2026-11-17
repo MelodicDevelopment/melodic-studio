@@ -10,6 +10,7 @@ import { AgentsStore } from '../services/agents.store';
 import { ExplorerStore } from '../services/explorer.store';
 import { AiService } from '../services/ai.service';
 import { LspService } from '../services/lsp.service';
+import { TerminalStore } from '../services/terminal.store';
 
 const backend = (): BackendService => Injector.get(BackendService);
 
@@ -46,6 +47,11 @@ function q(path: string): Element | null {
 	get lsp() {
 		return Injector.get(LspService);
 	},
+	get terminal() {
+		return Injector.get(TerminalStore);
+	},
+	/** Any other service, by class: `s.inject(SomeStore)` from a module the script imported. */
+	inject: <T>(token: new (...args: never[]) => T): T => Injector.get(token as never),
 	q,
 	sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
 	log: (...parts: unknown[]) => backend().call('dev_log', { line: parts.map((p) => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ') }),
