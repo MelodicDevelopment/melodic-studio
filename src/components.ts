@@ -48,6 +48,7 @@ import './components/ai/ai-review-diff.component';
 import './components/ai/ai-proposal.component';
 import './components/settings/language-servers.component';
 import './components/settings/editor-settings.component';
+import './components/new-project/new-project.component';
 import './components/agents/ask.component';
 import './components/agents/attempts.component';
 import './components/agents/agent-board.component';

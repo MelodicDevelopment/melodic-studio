@@ -7,6 +7,7 @@ import { Injectable } from '@melodicdev/core/injection';
 import { demoFileOp, demoListDir, demoReadFile, demoWriteFile } from './demo-files';
 import { demoTerminal } from './demo-terminal';
 import { demoHost, demoPullRequestAnswer } from './demo-host';
+import { demoProject } from './demo-project';
 
 export function isDesktop(): boolean {
 	return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -219,6 +220,25 @@ export interface TreeEntry {
 	path: string;
 	isDir: boolean;
 	ignored: boolean;
+}
+export type TemplateOption =
+	| { kind: 'flag'; id: string; label: string; default: boolean }
+	| { kind: 'pick'; id: string; label: string; choices: { value: string; label: string }[] }
+	| { kind: 'name'; id: string; label: string; default: string; when: string | null };
+export interface ProjectTemplate {
+	id: string;
+	name: string;
+	description: string;
+	group: 'melodic' | 'popular' | 'blank';
+	icon: string;
+	tools: { program: string; name: string; installPage: string; found: boolean }[];
+	options: TemplateOption[];
+	nameRule: string;
+}
+/** A New Project run's progress: `step` starts a command (its label and the command), `out` is a line it printed. */
+export interface ProjectOutput {
+	kind: 'step' | 'out';
+	text: string;
 }
 /** What to do when something copied or moved in already has a namesake there. `ask` changes nothing and answers the clashes. */
 export type OnConflict = 'ask' | 'replace' | 'keep-both' | 'skip';
@@ -480,6 +500,10 @@ export class BackendService {
 	readFile(id: string, path: string) { return this.call<FileContent>('read_file', { id, path }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
 	writeFile(id: string, path: string, text: string, root: string) { return this.call<void>('write_file', { id, path, text, root }); }
+	// New Project. Output arrives as `project-output` events; answers the new folder.
+	projectTemplates() { return this.call<ProjectTemplate[]>('project_templates'); }
+	projectCreate(template: string, parent: string, name: string, options: Record<string, string>) { return this.call<string>('project_create', { request: { template, parent, name, options } }); }
+	projectStop() { return this.call<void>('project_stop'); }
 	// File operations. `root` is the checkout the action was aimed at; refused if another one is active by now.
 	createEntry(id: string, root: string, dir: string, name: string, isDir: boolean) { return this.call<string>('files_create', { id, root, dir, name, isDir }); }
 	/** Move into folder `to`; `rename` gives the single path a new name. */
@@ -1231,6 +1255,10 @@ class DemoBackend {
 				return demoReadFile(String(args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
+			case 'project_templates':
+			case 'project_create':
+			case 'project_stop':
+				return demoProject(cmd, args, (event, payload, delay) => this.emit(event, payload, delay));
 			case 'files_create':
 			case 'files_move':
 			case 'files_duplicate':

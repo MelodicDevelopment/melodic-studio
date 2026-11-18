@@ -14,6 +14,7 @@ mod menu;
 mod paths;
 mod proc;
 mod sessions;
+mod templates;
 mod terminal;
 mod worktree;
 
@@ -54,6 +55,7 @@ pub fn run() {
             app.manage(lsp::Lsp::default());
             dev::start(app.handle());
             app.manage(terminal::Terminals::default());
+            app.manage(templates::Scaffolds::default());
             app.manage(conversation::Hooks::default());
             conversation::clean(app.handle());
             Ok(())
@@ -141,6 +143,9 @@ pub fn run() {
             lsp::lsp_install,
             lsp::lsp_uninstall,
             commands::list_dir,
+            templates::project_templates,
+            templates::project_create,
+            templates::project_stop,
             commands::files_create,
             commands::files_move,
             commands::files_duplicate,

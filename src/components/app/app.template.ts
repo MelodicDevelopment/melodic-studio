@@ -44,8 +44,11 @@ function welcome(self: AppComponent) {
 				<button class="card" @click=${() => store.ask('add-repo', { tab: 'clone' })}>
 					<ml-icon icon="cloud-arrow-down" size="md"></ml-icon><span><b>Clone a repository</b><small>From GitHub or any other git host</small></span>
 				</button>
+				<button class="card" @click=${() => store.ask('new-project')}>
+					<ml-icon icon="plus-circle" size="md"></ml-icon><span><b>New project</b><small>Melodic JS, Melodic PHP, Angular, React, .NET, Rust and more</small></span>
+				</button>
 				<button class="card" @click=${() => store.ask('add-repo', { tab: 'create' })}>
-					<ml-icon icon="plus-circle" size="md"></ml-icon><span><b>Create a new repository</b><small>Start a fresh project</small></span>
+					<ml-icon icon="folder-plus" size="md"></ml-icon><span><b>Create an empty repository</b><small>A new folder with git set up</small></span>
 				</button>
 			</div>
 		</div>
@@ -259,6 +262,7 @@ export function appTemplate(self: AppComponent) {
 		<ms-dialogs></ms-dialogs>
 		<ms-git-ops></ms-git-ops>
 		<ms-init-repo></ms-init-repo>
+		<ms-new-project></ms-new-project>
 		<ms-host-dialogs></ms-host-dialogs>
 	`;
 }

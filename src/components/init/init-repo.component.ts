@@ -42,6 +42,25 @@ export interface HostOwner {
 
 export type Where = 'local' | 'github' | 'azure' | 'gitlab' | 'bitbucket' | 'other';
 
+/** The host (and owner, Azure DevOps organization) last chosen for a new project, offered first next time. */
+const LAST_HOST = 'studio.new-project.host';
+interface LastHost {
+	where: Where;
+	owner: string;
+	org: string;
+}
+function lastHost(): LastHost {
+	try {
+		const v = JSON.parse(localStorage.getItem(LAST_HOST) ?? 'null') as LastHost | null;
+		if (v && typeof v.where === 'string') {
+			return { where: v.where, owner: String(v.owner ?? ''), org: String(v.org ?? '') };
+		}
+	} catch {
+		/* per-viewer convenience only */
+	}
+	return { where: 'github', owner: '', org: '' };
+}
+
 export const HOSTS: { id: Where; label: string; icon: string; createPage?: string }[] = [
 	{ id: 'local', label: 'This computer only', icon: 'desktop' },
 	{ id: 'github', label: 'GitHub', icon: 'github-logo', createPage: 'https://github.com/new' },
@@ -59,12 +78,14 @@ export const HOSTS: { id: Where; label: string; icon: string; createPage?: strin
 export class InitService {
 	/** The folder the wizard is setting up; null when it is closed. */
 	readonly folder = signal<FolderInfo | null>(null);
+	/** A project just made by New Project: the wizard offers a host (the last one used, GitHub at first). */
+	readonly fresh = signal(false);
 
 	/**
 	 * Returns true when the path was dealt with (added, or the wizard took over),
 	 * false when the caller should carry on as before (browser preview without demo data, errors).
 	 */
-	async open(path: string): Promise<boolean> {
+	async open(path: string, fresh = false): Promise<boolean> {
 		const backend = Injector.get(BackendService);
 		const repos = Injector.get(RepoStore);
 		let info: FolderInfo | null | undefined;
@@ -80,6 +101,7 @@ export class InitService {
 		if (info.isRepo) {
 			return repos.addRepo(info.path);
 		}
+		this.fresh.set(fresh);
 		this.folder.set(info);
 		Injector.get(DialogService).open('init-repo' as DialogId);
 		return true;
@@ -170,6 +192,7 @@ export class InitRepoComponent {
 	close(): void {
 		this._dialogs.close('init-repo' as DialogId);
 		this.init.folder.set(null);
+		this.init.fresh.set(false);
 	}
 
 	/** Step 1: create the repository, then move on to where it should live. */
@@ -198,6 +221,17 @@ export class InitRepoComponent {
 			this.clis = (await this._backend.call<HostCli[] | undefined>('host_clis')) ?? [];
 		} catch {
 			this.clis = [];
+		}
+		if (this.init.fresh()) {
+			const last = lastHost();
+			this.org = last.org;
+			await this.pick(last.where);
+			if (last.where === 'azure' && last.org && this.usable) {
+				await this.loadOwners();
+			}
+			if (last.owner && this.owners.some((o) => o.id === last.owner)) {
+				this.owner = last.owner;
+			}
 		}
 	}
 
@@ -246,6 +280,13 @@ export class InitRepoComponent {
 	async finish(): Promise<void> {
 		if (!this.canFinish) {
 			return;
+		}
+		if (this.init.fresh()) {
+			try {
+				localStorage.setItem(LAST_HOST, JSON.stringify({ where: this.where, owner: this.owner, org: this.org.trim() } satisfies LastHost));
+			} catch {
+				/* per-viewer convenience only */
+			}
 		}
 		if (this.where === 'local') {
 			this.close();

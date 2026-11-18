@@ -1090,9 +1090,46 @@ fn host_cli_of(provider: &str, name: &str) -> HostCli {
 /// All three, always, asked at the same time so the slowest one sets the wait.
 fn host_clis_now() -> Vec<HostCli> {
     std::thread::scope(|scope| {
+        let jira = scope.spawn(jira_cli);
         let asked: Vec<_> = PROVIDERS.iter().map(|(provider, name)| scope.spawn(move || host_cli_of(provider, name))).collect();
-        asked.into_iter().zip(PROVIDERS).map(|(handle, (provider, name))| handle.join().unwrap_or_else(|_| HostCli { provider: provider.into(), name: name.into(), cli: String::new(), installed: false, signed_in: false, account: None, hint: Some("Could not check this tool.".into()) })).collect()
+        let mut all: Vec<HostCli> = asked.into_iter().zip(PROVIDERS).map(|(handle, (provider, name))| handle.join().unwrap_or_else(|_| HostCli { provider: provider.into(), name: name.into(), cli: String::new(), installed: false, signed_in: false, account: None, hint: Some("Could not check this tool.".into()) })).collect();
+        all.extend(jira.join().ok());
+        all
     })
+}
+
+/// Jira, through Atlassian's own CLI (`acli`), which keeps its own sign-in.
+fn jira_cli() -> HostCli {
+    let mut cli = HostCli { provider: "jira".into(), name: "Jira".into(), cli: "acli".into(), installed: false, signed_in: false, account: None, hint: None };
+    if crate::proc::find("acli").is_none() {
+        cli.hint = Some(JIRA_MISSING.into());
+        return cli;
+    }
+    cli.installed = true;
+    let mut c = tool("acli", &std::env::temp_dir());
+    c.args(["jira", "auth", "status"]);
+    match run(c, None, STATUS_TIMEOUT, "acli") {
+        Ok(out) if out.ok => {
+            cli.signed_in = true;
+            cli.account = parse_acli_status(&out.stdout);
+        }
+        Ok(out) if looks_offline(&out.stderr) => cli.hint = Some(failure("acli", &out).to_string()),
+        Ok(_) => cli.hint = Some(JIRA_SIGNED_OUT.into()),
+        Err(e) => cli.hint = Some(e.to_string()),
+    }
+    cli
+}
+
+const JIRA_MISSING: &str = "Install the Atlassian CLI (acli) from https://developer.atlassian.com/cloud/acli/guides/install-acli/, then run `acli jira auth login --web` in a terminal.";
+const JIRA_SIGNED_OUT: &str = "Run `acli jira auth login --web` in a terminal to sign in to Jira.";
+
+/// `acli jira auth status` prints lines like `Site: team.atlassian.net` and `Email: me@example.com`.
+fn parse_acli_status(out: &str) -> Option<String> {
+    let field = |name: &str| out.lines().filter_map(|l| l.trim().trim_start_matches(['✓', '-', '*', ' ']).split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
+    match (field("email").or_else(|| field("user")), field("site")) {
+        (Some(who), Some(site)) => Some(format!("{who} on {site}")),
+        (who, site) => who.or(site),
+    }
 }
 
 /// The signed-in user first, then the organizations (one login per line, as `--jq` prints them).
@@ -1396,6 +1433,13 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn acli_status_names_the_account() {
+        assert_eq!(parse_acli_status("✓ Authenticated\n  Site: team.atlassian.net\n  Email: me@example.com\n").as_deref(), Some("me@example.com on team.atlassian.net"));
+        assert_eq!(parse_acli_status("Site: team.atlassian.net").as_deref(), Some("team.atlassian.net"));
+        assert_eq!(parse_acli_status("ok"), None);
     }
 
     #[test]
