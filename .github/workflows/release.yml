@@ -146,6 +146,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The Vite build (Monaco) outgrew Node's default heap on the macOS runner.
+          NODE_OPTIONS: --max-old-space-size=6144
         with:
           # With a tag: create (or add to) a draft release and upload the installers.
           # Without one (Run workflow): only build.
