@@ -34,7 +34,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 	const files = prompt.files ?? [];
 
 	return html`
-		<ml-dialog #add-repo style="--ml-dialog-max-width: 520px" @ml:open=${() => self.openedAdd()}>
+		<ml-dialog #add-repo style="--ml-dialog-max-width: 520px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedAdd()}>
 			<h3 slot="dialog-header">Add a repository</h3>
 			<div class="dlg">
 				<ml-tabs size="sm" variant="pills" value=${self.addTab} @ml:change=${(e: CustomEvent) => (self.addTab = e.detail.value as AddTab)}>
@@ -66,7 +66,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #new-branch style="--ml-dialog-max-width: 420px" @ml:open=${() => self.openedBranch('')}>
+		<ml-dialog #new-branch style="--ml-dialog-max-width: 420px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedBranch('')}>
 			<h3 slot="dialog-header">New branch</h3>
 			<div class="dlg">
 				<ml-input label="Name" placeholder="feature/my-change" .value=${self.branchName} @ml:input=${(e: CustomEvent) => self.setBranchName(e.detail.value)}></ml-input>
@@ -78,7 +78,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #rename-branch style="--ml-dialog-max-width: 420px" @ml:open=${() => self.openedBranch(self.branch)}>
+		<ml-dialog #rename-branch style="--ml-dialog-max-width: 420px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedBranch(self.branch)}>
 			<h3 slot="dialog-header">Rename branch</h3>
 			<div class="dlg">
 				<ml-input label="Name" .value=${self.branchName} @ml:input=${(e: CustomEvent) => self.setBranchName(e.detail.value)}></ml-input>
@@ -90,7 +90,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #delete-branch style="--ml-dialog-max-width: 420px" @ml:open=${() => self.openedBranch('')}>
+		<ml-dialog #delete-branch style="--ml-dialog-max-width: 420px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedBranch('')}>
 			<h3 slot="dialog-header">Delete branch</h3>
 			<div class="dlg">
 				${prompt.remote
@@ -113,7 +113,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #new-tag style="--ml-dialog-max-width: 420px" @ml:open=${() => ((self.tagName = ''), (self.tagPush = false))}>
+		<ml-dialog #new-tag style="--ml-dialog-max-width: 420px" @ml:open=${(e: Event) => e.target === e.currentTarget && ((self.tagName = ''), (self.tagPush = false))}>
 			<h3 slot="dialog-header">Create tag</h3>
 			<div class="dlg">
 				<ml-input label="Name" placeholder="v1.0.0" .value=${self.tagName} @ml:input=${(e: CustomEvent) => self.setTagName(e.detail.value)}></ml-input>
@@ -126,7 +126,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #reset style="--ml-dialog-max-width: 480px" @ml:open=${() => (self.resetMode = 'mixed')}>
+		<ml-dialog #reset style="--ml-dialog-max-width: 480px" @ml:open=${(e: Event) => e.target === e.currentTarget && (self.resetMode = 'mixed')}>
 			<h3 slot="dialog-header">Reset branch</h3>
 			<div class="dlg">
 				<p>Move <b>${st?.branch ?? ''}</b> back to <b>${prompt.commit ? `${prompt.commit.shortHash} ${prompt.commit.summary}` : ''}</b>. Every commit after it leaves the branch.</p>
@@ -151,7 +151,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #publish style="--ml-dialog-max-width: 480px" @ml:open=${() => (self.remoteUrl = '')}>
+		<ml-dialog #publish style="--ml-dialog-max-width: 480px" @ml:open=${(e: Event) => e.target === e.currentTarget && (self.remoteUrl = '')}>
 			<h3 slot="dialog-header">Publish repository</h3>
 			<div class="dlg">
 				<p>Create an empty repository on your git host, then paste its URL. Melodic Studio sets it as <b>origin</b> and pushes <b>${st?.branch ?? ''}</b>.</p>
@@ -186,7 +186,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #settings style="--ml-dialog-max-width: 560px" @ml:open=${() => self.openedSettings()}>
+		<ml-dialog #settings style="--ml-dialog-max-width: 560px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedSettings()}>
 			<h3 slot="dialog-header">Settings</h3>
 			<div class="dlg settings">
 				<ml-tabs size="sm" variant="pills" value=${self.settingsTab} @ml:change=${(e: CustomEvent) => (self.settingsTab = e.detail.value as SettingsTab)}>

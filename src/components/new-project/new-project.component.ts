@@ -42,7 +42,7 @@ function keep(key: string, value: string): void {
 		const running = self.state === 'running';
 		const locked = running || self.state === 'done';
 		return html`
-			<ml-dialog #new-project style="--ml-dialog-max-width: 760px" @ml:open=${() => void self.opened()}>
+			<ml-dialog #new-project style="--ml-dialog-max-width: 760px" @ml:open=${(e: Event) => e.target === e.currentTarget && void self.opened()}>
 				<h3 slot="dialog-header">New project</h3>
 				<div class="body">
 					<div class="list ${locked ? 'off' : ''}">

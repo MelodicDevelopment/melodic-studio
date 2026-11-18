@@ -180,7 +180,7 @@ function jiraDialog(self: HostWorkComponent) {
 	const sel = issues.find((i) => i.key === work.selectedJira()) ?? null;
 	const busy = work.jiraBusy();
 	return html`
-		<ml-dialog #host-jira style="--ml-dialog-max-width: 980px" @ml:open=${() => void work.loadClis()}>
+		<ml-dialog #host-jira style="--ml-dialog-max-width: 980px" @ml:open=${(e: Event) => e.target === e.currentTarget && void work.loadClis()}>
 			<h3 slot="dialog-header">Jira${config ? ` · ${config.project}` : ''}</h3>
 			<div class="dlg">
 				${jira && !jira.signedIn ? html`<ms-cli-notice .provider=${'jira'} .what=${'Jira issues'} .always=${true}></ms-cli-notice>` : ''}

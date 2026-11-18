@@ -89,7 +89,7 @@ function remote(self: InitRepoComponent) {
 export function initRepoTemplate(self: InitRepoComponent) {
 	const info = self.info;
 	return html`
-		<ml-dialog #init-repo style="--ml-dialog-max-width: 560px" @ml:open=${() => self.opened()}>
+		<ml-dialog #init-repo style="--ml-dialog-max-width: 560px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.opened()}>
 			<h3 slot="dialog-header">${self.step === 'setup' ? 'Set up a repository' : 'Where should it live?'}</h3>
 			<div class="dlg">${!info ? '' : self.step === 'setup' ? setup(self) : remote(self)}</div>
 			<div slot="dialog-footer" class="foot">

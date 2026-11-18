@@ -39,7 +39,7 @@ function mergeDialog(self: GitOpsComponent) {
 	const n = self.incoming?.length ?? null;
 	const mode = self.mode;
 	return html`
-		<ml-dialog #merge-branch style="--ml-dialog-max-width: 520px" @ml:open=${() => void self.openedMerge()}>
+		<ml-dialog #merge-branch style="--ml-dialog-max-width: 520px" @ml:open=${(e: Event) => e.target === e.currentTarget && void self.openedMerge()}>
 			<h3 slot="dialog-header">Bring in ${branch}</h3>
 			<div class="dlg">
 				<p>${n === null ? html`Counting the commits on <b>${branch}</b>…` : n ? html`<b>${branch}</b> has ${plural(n, 'commit')} that <b>${current}</b> does not.` : html`<b>${current}</b> already has every commit on <b>${branch}</b>.`}</p>
@@ -88,7 +88,7 @@ function pickDialog(self: GitOpsComponent) {
 	const count = self.picked.size;
 	const all = !!list?.length && list.every((c) => self.picked.has(c.hash));
 	return html`
-		<ml-dialog #cherry-pick style="--ml-dialog-max-width: 600px" @ml:open=${() => void self.openedPick()}>
+		<ml-dialog #cherry-pick style="--ml-dialog-max-width: 600px" @ml:open=${(e: Event) => e.target === e.currentTarget && void self.openedPick()}>
 			<h3 slot="dialog-header">Cherry-pick from ${self.branch}</h3>
 			<div class="dlg">
 				<p>Copies the chosen commits onto <b>${self.current}</b> as new commits, oldest first. ${self.branch} is left as it is.</p>
@@ -135,7 +135,7 @@ function rebaseDialog(self: GitOpsComponent) {
 	const kept = rows.filter((r) => r.action !== 'drop').length;
 	const title = p.branch ? `Rebase ${self.current} onto ${p.branch}` : 'Rewrite history';
 	return html`
-		<ml-dialog #rebase-interactive style="--ml-dialog-max-width: 760px" @ml:open=${() => void self.openedRebase()}>
+		<ml-dialog #rebase-interactive style="--ml-dialog-max-width: 760px" @ml:open=${(e: Event) => e.target === e.currentTarget && void self.openedRebase()}>
 			<h3 slot="dialog-header">${title}</h3>
 			<div class="dlg">
 				<p>
