@@ -19,6 +19,7 @@ import { ToastService } from '@melodicdev/components/toast';
 import { BackendService, asAppError, type AgentDone, type AgentEvent, type AgentMode, type Worktree, type WorktreeDiff } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
+import { WorkspaceStore } from './workspace.store';
 import { samePath } from './agent-paths';
 
 export interface AgentItem {
@@ -466,6 +467,9 @@ export class AgentsStore {
 		this.selectedId.set(id);
 		if (id) {
 			this.seen(id);
+			// The transcript is in the main pane, which a full-window Claude workspace would hide.
+			// (Resolved here, not at load: workspace.store imports this module.)
+			Injector.get(WorkspaceStore).revealMain();
 		}
 	}
 

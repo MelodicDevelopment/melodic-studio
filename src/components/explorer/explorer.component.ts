@@ -4,6 +4,7 @@ import { effect, untracked } from '@melodicdev/core/signals';
 import { html, css } from '@melodicdev/core/template';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
+import { WorkspaceStore } from '../../services/workspace.store';
 import { ExplorerStore } from '../../services/explorer.store';
 import type { FileStatus, TreeEntry } from '../../services/backend.service';
 import { statusMark } from '../../shared/format';
@@ -161,6 +162,7 @@ export class ExplorerComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(ExplorerStore) readonly explorer!: ExplorerStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
+	@Service(WorkspaceStore) private readonly _workspace!: WorkspaceStore;
 
 	/** Right-click menu on a row. */
 	menu: { entry: TreeEntry; x: number; y: number } | null = null;
@@ -191,6 +193,7 @@ export class ExplorerComponent {
 	click(entry: TreeEntry, keep = false): void {
 		if (!entry.isDir) {
 			this.explorer.open(entry.path, keep);
+			this._workspace.revealMain();
 		} else if (!keep) {
 			this.explorer.toggle(entry.path);
 		}
@@ -214,6 +217,7 @@ export class ExplorerComponent {
 	showChanges(path: string): void {
 		this.store.setTab('changes');
 		this.store.selectFile(path);
+		this._workspace.revealMain();
 	}
 }
 
@@ -275,7 +279,7 @@ function explorerTemplate(self: ExplorerComponent) {
 				<div class="ctx" style="left: ${self.menu!.x}px; top: ${self.menu!.y}px">
 					${m.isDir
 						? html`<div class="ctx-item" @click=${() => explorer.toggle(m.path)}><ml-icon icon=${expanded.has(m.path) ? 'folder' : 'folder-open'} size="sm"></ml-icon>${expanded.has(m.path) ? 'Collapse' : 'Expand'}</div>`
-						: html`<div class="ctx-item" @click=${() => explorer.open(m.path, true)}><ml-icon icon="browsers" size="sm"></ml-icon>Open in new tab</div>`}
+						: html`<div class="ctx-item" @click=${() => self.click(m, true)}><ml-icon icon="browsers" size="sm"></ml-icon>Open in new tab</div>`}
 					${changed.has(m.path) ? html`<div class="ctx-item" @click=${() => self.showChanges(m.path)}><ml-icon icon="git-diff" size="sm"></ml-icon>View changes</div>` : ''}
 					<div class="ctx-sep"></div>
 					<div class="ctx-item" @click=${() => self.copyPath(explorer.absolutePath(m.path) ?? m.path)}><ml-icon icon="copy" size="sm"></ml-icon>Copy path</div>

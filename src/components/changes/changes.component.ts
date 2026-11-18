@@ -3,6 +3,7 @@ import { Service } from '@melodicdev/core/injection';
 import { html } from '@melodicdev/core/template';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
+import { WorkspaceStore } from '../../services/workspace.store';
 import type { FileChange, Operation } from '../../services/backend.service';
 import { dirName, fileName, plural, statusMark } from '../../shared/format';
 import { changesStyles } from './changes.styles';
@@ -17,6 +18,7 @@ import { proposeMenuItem } from '../ai/ai-entry';
 export class ChangesComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
+	@Service(WorkspaceStore) private readonly _workspace!: WorkspaceStore;
 
 	/** Right-click menu on a file row. */
 	menu: { file: FileChange; x: number; y: number } | null = null;
@@ -33,6 +35,12 @@ export class ChangesComponent {
 	onDestroy(): void {
 		window.removeEventListener('click', this._dismiss);
 		window.removeEventListener('blur', this._dismiss);
+	}
+
+	/** A file clicked: its diff, with the main pane on screen to show it. */
+	select(path: string): void {
+		this.store.selectFile(path);
+		this._workspace.revealMain();
 	}
 
 	openMenu(ev: MouseEvent, file: FileChange): void {
@@ -95,7 +103,7 @@ function changesTemplate(self: ChangesComponent) {
 			${files.map((f) => {
 				const mark = statusMark(f.status);
 				return html`
-					<div class="row ${f.path === selected ? 'sel' : ''}" title=${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path} @click=${() => store.selectFile(f.path)} @contextmenu=${(e: MouseEvent) => self.openMenu(e, f)}>
+					<div class="row ${f.path === selected ? 'sel' : ''}" title=${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path} @click=${() => self.select(f.path)} @contextmenu=${(e: MouseEvent) => self.openMenu(e, f)}>
 						<span class="check" @click=${(e: Event) => e.stopPropagation()}><ml-checkbox size="sm" .checked=${!excluded.has(f.path)} @ml:change=${(e: CustomEvent) => store.toggleFile(f.path, e.detail.checked)}></ml-checkbox></span>
 						<span class="path"><span class="dir">${dirName(f.path)}</span><span class="file">${fileName(f.path)}</span></span>
 						<span class="mark ${mark.tone}" title=${mark.label}>${mark.letter}</span>

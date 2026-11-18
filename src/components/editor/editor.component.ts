@@ -47,7 +47,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 					<div class="filetabs">
 						${tabs.map(
 							(t) => html`
-								<div class="filetab ${t === tab ? 'on' : ''} ${t.path === preview ? 'preview' : ''} ${t.dirty ? 'dirty' : ''}" title=${explorer.absolutePath(t.path) ?? t.path}@click=${() => explorer.open(t.path)} @dblclick=${() => explorer.open(t.path, true)}>
+								<div class="filetab ${t === tab ? 'on' : ''} ${t.path === preview ? 'preview' : ''} ${t.dirty ? 'dirty' : ''}" title=${explorer.absolutePath(t.path) ?? t.path} @click=${() => explorer.open(t.path)} @dblclick=${() => explorer.open(t.path, true)}>
 									<span>${fileName(t.path)}</span>
 									<button title=${t.dirty ? 'Close (unsaved changes)' : 'Close tab'} @click=${(e: Event) => (e.stopPropagation(), explorer.close(t.path))}>
 										<ml-icon class="x" icon="x" size="xs"></ml-icon><i class="dot"></i>

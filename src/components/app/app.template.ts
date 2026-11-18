@@ -185,7 +185,7 @@ function historyPane(self: AppComponent) {
 				${files.map((f) => {
 					const mark = statusMark(f.status);
 					return html`
-						<div class="row ${f.path === selected ? 'sel' : ''}" title=${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path} @click=${() => store.selectCommitFile(f.path)}>
+						<div class="row ${f.path === selected ? 'sel' : ''}" title=${f.oldPath ? `${f.oldPath} → ${f.path}` : f.path} @click=${() => { store.selectCommitFile(f.path); self.workspace.revealMain(); }}>
 							<span class="path"><span class="dir">${dirName(f.path)}</span><span class="file">${fileName(f.path)}</span></span>
 							<span class="mark ${mark.tone}" title=${mark.label}>${mark.letter}</span>
 						</div>

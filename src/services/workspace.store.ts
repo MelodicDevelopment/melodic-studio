@@ -255,6 +255,13 @@ export class WorkspaceStore {
 		this.setView(this.view() === 'hidden' ? 'side' : 'hidden');
 	}
 
+	/** Something was opened in the main pane (a file clicked): bring it back on screen if the workspace fills the window. */
+	revealMain(): void {
+		if (this.view() === 'full') {
+			this.setView('side');
+		}
+	}
+
 	setWidth(width: number): void {
 		this.width.set(Math.max(MIN_WORKSPACE_W, Math.round(width)));
 	}
