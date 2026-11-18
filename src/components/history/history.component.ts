@@ -4,6 +4,7 @@ import { html, css } from '@melodicdev/core/template';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
 import { AgentsStore } from '../../services/agents.store';
+import { WorkspaceStore } from '../../services/workspace.store';
 import type { Commit } from '../../services/backend.service';
 import { ctxStyles } from '../changes/changes.styles';
 import { plural, relativeTime } from '../../shared/format';
@@ -11,7 +12,7 @@ import { plural, relativeTime } from '../../shared/format';
 /** One commit in a list. */
 function commitRow(self: HistoryComponent, c: Commit) {
 	return html`
-		<div class="commit ${c.hash === self.store.selectedHash() ? 'sel' : ''}" @click=${() => self.pick(c.hash)} @contextmenu=${(e: MouseEvent) => self.openMenu(e, c)}>
+		<div class="commit ${c.hash === self.store.selectedHash() ? 'sel' : ''}" @click=${() => self.open(c.hash)} @contextmenu=${(e: MouseEvent) => self.openMenu(e, c)}>
 			<div class="top">
 				<span class="summary">${c.summary}</span>
 				${c.unpushed ? html`<ml-icon icon="arrow-up" size="xs" title="Not pushed yet"></ml-icon>` : ''}
@@ -416,6 +417,7 @@ export class HistoryComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
+	@Service(WorkspaceStore) private readonly _workspace!: WorkspaceStore;
 
 	/** Right-click menu on a commit. */
 	menu: { commit: Commit; x: number; y: number; foreign: boolean } | null = null;
@@ -523,6 +525,12 @@ export class HistoryComponent {
 	pick(hash: string): void {
 		this.store.selectCommit(hash);
 		this.agents.hideHistoryChat();
+	}
+
+	/** A click on a commit: also brings the main pane back from a full-window Claude workspace. */
+	open(hash: string): void {
+		this.pick(hash);
+		this._workspace.revealMain();
 	}
 
 	openMenu(ev: MouseEvent, commit: Commit): void {

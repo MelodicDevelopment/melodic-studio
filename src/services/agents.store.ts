@@ -933,6 +933,7 @@ export class AgentsStore {
 		}
 		repos.selectCommit(commit.hash);
 		this.hideHistoryChat();
+		Injector.get(WorkspaceStore).revealMain();
 		this.commitShown.set(this.commitShown() + 1);
 		return true;
 	}
