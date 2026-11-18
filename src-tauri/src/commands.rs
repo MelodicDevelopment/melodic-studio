@@ -70,6 +70,17 @@ pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoS
     Ok(summary(config.find(&id).unwrap()))
 }
 
+/// Quit and start again, after an update has been installed. See `proc::relaunch`.
+#[tauri::command]
+pub async fn app_relaunch(app: tauri::AppHandle) -> Result<()> {
+    if crate::proc::relaunch().is_ok() {
+        // `exit` rather than `std::process::exit`, so RunEvent::Exit still stops what we started.
+        app.exit(0);
+        return Ok(());
+    }
+    app.restart()
+}
+
 #[tauri::command]
 pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<AppStatus> {
     let (repos, current) = {

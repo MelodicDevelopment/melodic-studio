@@ -90,6 +90,62 @@ pub fn launch(mut c: Command) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The argument `relaunch()` starts this app's own binary with: `--relaunch-after <pid> <bundle>`.
+const RELAUNCH_FLAG: &str = "--relaunch-after";
+
+/// Start this app again once the current process has ended (macOS, after an update).
+///
+/// Tauri's own restart runs `open -n <bundle>` while the old instance is still alive, so
+/// LaunchServices registers a second instance and the Dock gives it its own icon beside the
+/// pinned one. Instead the app's binary is started as a small helper (`relaunch_helper`) that
+/// waits for this process to be gone and then runs a plain `open <bundle>`, which the Dock
+/// matches to the pinned icon. The binary is the one now in the bundle, i.e. the new version:
+/// every later version must keep understanding the flag.
+///
+/// Returns an error where this does not apply (other platforms, not inside a `.app`); the
+/// caller then falls back to Tauri's restart. On success the caller must exit.
+pub fn relaunch() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe()?;
+        let bundle = exe
+            .parent()
+            .filter(|d| d.ends_with("Contents/MacOS"))
+            .and_then(|d| d.parent()?.parent())
+            .filter(|b| b.extension().is_some_and(|e| e == "app"))
+            .ok_or_else(|| AppError::msg("not running from an app bundle"))?;
+        let mut c = command(&exe);
+        c.arg(RELAUNCH_FLAG).arg(std::process::id().to_string()).arg(bundle).process_group(0);
+        launch(c)?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err(AppError::msg("relaunch helper is macOS only"))
+}
+
+/// The other half of `relaunch()`: true when this process was started as the helper, which
+/// has then done its work. Called first thing in `run()`, before any window or setup.
+pub fn relaunch_helper() -> bool {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if args.first().is_none_or(|a| a != RELAUNCH_FLAG) {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    if let [_, pid, bundle] = args.as_slice() {
+        if let Some(pid) = pid.to_str().and_then(|p| p.parse::<libc::pid_t>().ok()) {
+            // Wait (up to 10 s) for the old instance to be gone, then a moment for LaunchServices to notice.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let _ = Command::new("/usr/bin/open").arg(bundle).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+    true
+}
+
 /// Split a command line the way a person writes one: on spaces, with "double" or 'single'
 /// quotes around anything that contains them. No escapes, so Windows backslashes stay as they are.
 /// Used for `$TERMINAL` on Linux.

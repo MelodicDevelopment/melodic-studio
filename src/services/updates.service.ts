@@ -7,9 +7,9 @@
  *
  * Tauri plugin modules are imported lazily so the browser preview never loads them.
  */
-import { Injectable } from '@melodicdev/core/injection';
+import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal } from '@melodicdev/core/signals';
-import { isDesktop } from './backend.service';
+import { BackendService, isDesktop } from './backend.service';
 
 export interface StagedUpdate {
 	currentVersion: string;
@@ -74,16 +74,19 @@ export class UpdatesService {
 		}
 	}
 
-	/** Install the staged update and relaunch. On Windows the installer quits the app itself, so relaunch may not return. */
+	/**
+	 * Install the staged update and relaunch. On Windows the installer quits the app itself, so relaunch may not return.
+	 * Relaunching is `app_relaunch`, not the process plugin: on macOS that one starts the new copy with `open -n`
+	 * while this one is still running, and the Dock gives the new copy a second icon.
+	 */
 	async restart(): Promise<void> {
 		if (!this._update) {
 			return;
 		}
 		this.state.set('restarting');
 		try {
-			const { relaunch } = await import('@tauri-apps/plugin-process');
 			await this._update.install();
-			await relaunch();
+			await Injector.get(BackendService).relaunch();
 		} catch (e) {
 			this.error.set(e instanceof Error ? e.message : String(e));
 			this.state.set('ready');

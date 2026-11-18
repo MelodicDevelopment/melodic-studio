@@ -353,6 +353,8 @@ export class BackendService {
 
 	// ---- typed surface -----------------------------------------------------
 	appStatus() { return this.call<AppStatus>('app_status'); }
+	/** Quit and start again (after an update). Does not return in the desktop app. */
+	relaunch() { return this.call<void>('app_relaunch'); }
 	addRepo(path: string) { return this.call<RepoSummary>('repo_add', { path }); }
 	createRepo(parent: string, name: string, readme: boolean) { return this.call<RepoSummary>('repo_create', { parent, name, readme }); }
 	cloneRepo(url: string, parent: string) { return this.call<RepoSummary>('repo_clone', { url, parent }); }
@@ -859,6 +861,9 @@ class DemoBackend {
 	private handle(cmd: string, args: Record<string, unknown>): unknown {
 		const empty = this.current !== DEMO_ID;
 		switch (cmd) {
+			case 'app_relaunch':
+				location.reload();
+				return null;
 			case 'app_status':
 				return { repos: this.repos, current: this.current, gitVersion: '2.47.0 (demo)', authorName: this.globalIdentity.name, authorEmail: this.globalIdentity.email, appVersion: '0.1.0' } satisfies AppStatus;
 			case 'repo_add':

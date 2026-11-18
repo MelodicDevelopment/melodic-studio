@@ -26,6 +26,10 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Started by `app_relaunch` only to wait for the old instance and reopen the app: no window, no setup.
+    if proc::relaunch_helper() {
+        return;
+    }
     paths::fix_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -52,6 +56,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
+            commands::app_relaunch,
             commands::repo_add,
             commands::repo_create,
             commands::repo_clone,
