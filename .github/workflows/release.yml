@@ -15,8 +15,32 @@ permissions:
   contents: write
 
 jobs:
+  # One draft release, made before the platforms build: when each build made its own, two of
+  # them could find none at the same moment and both create one (v0.3.2 lost Windows that way).
+  draft:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A re-run reuses the draft the first run made.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq "[.[] | select(.tag_name == \"$TAG\")][0].id // empty")
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" -f name="Melodic Studio $TAG" -F draft=true -F prerelease=false --jq .id)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: draft
+    # Also runs without a tag (Run workflow), when the draft job is skipped.
+    if: ${{ !cancelled() && needs.draft.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
@@ -149,13 +173,9 @@ jobs:
           # The Vite build (Monaco) outgrew Node's default heap on the macOS runner.
           NODE_OPTIONS: --max-old-space-size=6144
         with:
-          # With a tag: create (or add to) a draft release and upload the installers.
-          # Without one (Run workflow): only build.
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Melodic Studio {0}', github.ref_name) || '' }}
-          # Stays a draft while the platforms build; the publish job flips it live.
-          releaseDraft: true
-          prerelease: false
+          # With a tag: upload the installers to the draft the draft job made (the publish job
+          # flips it live). Without one (Run workflow): only build.
+          releaseId: ${{ needs.draft.outputs.id }}
           args: ${{ matrix.args }} ${{ env.EXTRA_ARGS }}
 
       - name: Attach installers to this run
