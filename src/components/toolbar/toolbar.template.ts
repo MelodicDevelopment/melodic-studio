@@ -179,6 +179,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 			<span class="spacer drag"></span>
 			<ms-workspace-button></ms-workspace-button>
 			<ms-agent-board></ms-agent-board>
+			${st?.host ? html`<ms-ci-status></ms-ci-status>` : ''}
 			${st?.host
 				? html`
 					<ml-popover id="host-pop" placement="bottom-end" offset="0">
@@ -194,9 +195,11 @@ export function toolbarTemplate(self: ToolbarComponent) {
 									: ''}
 								${st.host.issues || (st.host.pulls && !st.detached) ? html`<div class="group">In Melodic Studio</div>` : ''}
 								${st.host.issues ? html`<div class="item" @click=${() => self.openHostDialog('issues')}><ml-icon icon="robot" size="sm"></ml-icon><span class="name">Browse ${st.host.issuesLabel.toLowerCase()}…</span></div>` : ''}
+								${st.host.pulls ? html`<div class="item" @click=${() => self.openHostDialog('pulls')}><ml-icon icon="git-pull-request" size="sm"></ml-icon><span class="name">Browse ${st.host.pullsLabel.toLowerCase()}…</span></div>` : ''}
 								${st.host.pulls && !st.detached
 									? html`<div class="item" @click=${() => self.openHostDialog('pull-request')}><ml-icon icon="sparkle" size="sm"></ml-icon><span class="name">Create ${st.host.pullsLabel.toLowerCase().replace(/s$/, '')}…</span></div>`
 									: ''}
+								<div class="item" @click=${() => self.openHostDialog('jira')}><ml-icon icon="kanban" size="sm"></ml-icon><span class="name">Jira issues…</span></div>
 							</div>
 						</div>
 					</ml-popover>

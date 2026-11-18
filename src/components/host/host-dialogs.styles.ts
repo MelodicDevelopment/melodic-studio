@@ -245,6 +245,14 @@ export const hostDialogsStyles = () => css`
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
+	.acts {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		margin-top: 8px;
+		padding-top: 10px;
+		border-top: 1px solid var(--ml-color-border);
+	}
 	.body.none {
 		color: var(--ml-color-text-muted);
 		text-align: left;

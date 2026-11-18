@@ -1,0 +1,38 @@
+[
+ {
+  "conclusion": "failure",
+  "createdAt": "2026-10-21T01:15:49Z",
+  "databaseId": 39526285238,
+  "displayTitle": "build(deps): bump left-pad and right-pad",
+  "event": "pull_request",
+  "headBranch": "dependabot/npm_and_yarn/multi-869fff3352",
+  "name": "CI",
+  "status": "completed",
+  "url": "https://github.com/example/app/actions/runs/39526285238",
+  "workflowName": "CI"
+ },
+ {
+  "conclusion": "failure",
+  "createdAt": "2026-10-21T01:15:49Z",
+  "databaseId": 39526284835,
+  "displayTitle": "build(deps): bump left-pad and right-pad",
+  "event": "pull_request",
+  "headBranch": "dependabot/npm_and_yarn/multi-310820743c",
+  "name": "CI",
+  "status": "completed",
+  "url": "https://github.com/example/app/actions/runs/39526284835",
+  "workflowName": "CI"
+ },
+ {
+  "conclusion": "success",
+  "createdAt": "2026-10-21T01:15:10Z",
+  "databaseId": 39526218764,
+  "displayTitle": "build(deps): bump left-pad and right-pad",
+  "event": "pull_request",
+  "headBranch": "dependabot/npm_and_yarn/multi-8750ddcfa5",
+  "name": "CI",
+  "status": "completed",
+  "url": "https://github.com/example/app/actions/runs/39526218764",
+  "workflowName": "CI"
+ }
+]

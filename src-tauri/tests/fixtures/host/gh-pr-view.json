@@ -1,0 +1,60 @@
+{
+ "additions": 200,
+ "author": {
+  "is_bot": true,
+  "login": "app/dependabot"
+ },
+ "baseRefName": "main",
+ "body": "Removes left-pad. It is no longer used after updating right-pad.",
+ "comments": [],
+ "deletions": 787,
+ "files": [
+  {
+   "path": "package-lock.json",
+   "additions": 199,
+   "deletions": 786
+  },
+  {
+   "path": "package.json",
+   "additions": 1,
+   "deletions": 1
+  }
+ ],
+ "headRefName": "dependabot/npm_and_yarn/multi-310820743c",
+ "headRepositoryOwner": {
+  "id": "X",
+  "login": "example"
+ },
+ "isCrossRepository": false,
+ "isDraft": false,
+ "mergeable": "MERGEABLE",
+ "number": 8,
+ "reviewDecision": "",
+ "reviews": [],
+ "state": "OPEN",
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-10-21T01:19:19Z",
+   "conclusion": "FAILURE",
+   "detailsUrl": "https://github.com/example/app/actions/runs/39526284835/job/118981566786",
+   "name": "Typecheck + tests",
+   "startedAt": "2026-10-21T01:15:52Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2026-10-21T01:19:49Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/example/app/actions/runs/39526284835/job/118981567063",
+   "name": "End-to-end (Playwright)",
+   "startedAt": "2026-10-21T01:17:43Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  }
+ ],
+ "title": "build(deps): bump left-pad and right-pad",
+ "updatedAt": "2026-10-21T01:15:47Z",
+ "url": "https://github.com/example/app/pull/8"
+}

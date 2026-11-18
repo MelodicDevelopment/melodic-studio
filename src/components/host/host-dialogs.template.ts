@@ -2,6 +2,7 @@ import { html } from '@melodicdev/core/template';
 import type { HostDialogsComponent } from './host-dialogs.component';
 import type { AgentMode, HostCliStatus, HostIssue } from '../../services/backend.service';
 import { AGENT_MODES } from '../agents/agents.component';
+import { issueBranch } from '../../services/host.store';
 import { plural, relativeTime } from '../../shared/format';
 
 /** Azure DevOps cuts a pull request description off here. */
@@ -26,7 +27,7 @@ function setup(self: HostDialogsComponent, cli: HostCliStatus | null, what: stri
 		<div class="setup">
 			<ml-icon icon=${cli?.tool ? 'terminal-window' : 'globe'} size="lg"></ml-icon>
 			<b>${title}</b>
-			${cli?.hint ? html`<p class="selectable">${hintText(cli.hint)}</p>` : ''}
+			${cli?.tool ? html`<ms-cli-notice .provider=${cli.provider} .what=${what.toLowerCase()} .always=${true}></ms-cli-notice>` : cli?.hint ? html`<p class="selectable">${hintText(cli.hint)}</p>` : ''}
 			<p class="dim">Melodic Studio keeps no passwords or tokens. It reads ${what.toLowerCase()} through the tool you sign in to yourself.</p>
 			${cli?.tool ? html`<ml-button variant="outline" size="sm" ?loading=${host.cliLoading()} @ml:click=${() => host.recheck()}><ml-icon slot="icon-start" icon="arrows-clockwise"></ml-icon>Check again</ml-button>` : ''}
 		</div>
@@ -35,7 +36,7 @@ function setup(self: HostDialogsComponent, cli: HostCliStatus | null, what: stri
 
 function issueRow(self: HostDialogsComponent, issue: HostIssue, selected: string | null) {
 	return html`
-		<div class="issue ${issue.id === selected ? 'sel' : ''}" @click=${() => self.host.selectIssue(issue.id)}>
+		<div class="issue ${issue.id === selected ? 'sel' : ''}" @click=${() => self.selectIssue(issue.id)}>
 			<div class="line"><span class="num">#${issue.id}</span><span class="title">${issue.title}</span></div>
 			<div class="meta">
 				${issue.kind === 'issue' ? '' : html`<span>${issue.kind}</span>`}
@@ -48,7 +49,10 @@ function issueRow(self: HostDialogsComponent, issue: HostIssue, selected: string
 }
 
 /** Text from the host is shown as text: no HTML, no markdown rendering. */
-function issueDetail(issue: HostIssue) {
+function issueDetail(self: HostDialogsComponent, issue: HostIssue) {
+	const work = self.work;
+	const busy = work.issueBusy();
+	const open = issue.state === 'open' || !['closed', 'done', 'resolved', 'removed', 'completed'].includes(issue.state.toLowerCase());
 	return html`
 		<div class="detail">
 			<h4 class="selectable">${issue.title}</h4>
@@ -60,6 +64,29 @@ function issueDetail(issue: HostIssue) {
 			</div>
 			${issue.labels.length ? html`<div class="labels">${issue.labels.map((l) => html`<span class="label">${l}</span>`)}</div>` : ''}
 			${issue.body.trim() ? html`<div class="body selectable">${issue.body}</div>` : html`<div class="body none">No description.</div>`}
+			<div class="acts">
+				<ml-textarea rows="3" placeholder="Comment (posted on the host as you)" .value=${work.issueComment()} ?disabled=${!!busy} @ml:input=${(e: CustomEvent) => work.issueComment.set(e.detail.value)}></ml-textarea>
+				<div class="under">
+					<ml-button variant="outline" size="xs" ?disabled=${!!busy || !work.issueComment().trim()} ?loading=${busy === 'comment'} @ml:click=${() => work.commentOnIssue(issue.id)}>Comment</ml-button>
+					<ml-button variant="outline" size="xs" ?disabled=${!!busy} ?loading=${busy === 'close' || busy === 'reopen'} @ml:click=${() => work.setIssueOpen(issue.id, !open)}>${open ? 'Close' : 'Reopen'}</ml-button>
+					<span class="grow"></span>
+					<ml-button variant="outline" size="xs" title=${issueBranch(issue)} @ml:click=${() => self.branchFor(issue)}><ml-icon slot="icon-start" icon="git-branch"></ml-icon>Create branch</ml-button>
+				</div>
+			</div>
+		</div>
+	`;
+}
+
+function newIssueForm(self: HostDialogsComponent, label: string) {
+	const work = self.work;
+	const draft = work.newIssue()!;
+	const azure = self.repos.status()?.host?.provider === 'azure';
+	return html`
+		<div class="detail form">
+			<p class="dim">New ${label.toLowerCase().replace(/s$/, '')}. It is created on the host as you when you press Create.</p>
+			${azure ? html`<ml-select label="Type" .options=${['Task', 'Bug', 'User Story', 'Feature', 'Issue'].map((v) => ({ value: v, label: v }))} .value=${draft.kind} @ml:change=${(e: CustomEvent) => work.editNewIssue({ kind: e.detail.value })}></ml-select>` : ''}
+			<ml-input label="Title" .value=${draft.title} @ml:input=${(e: CustomEvent) => work.editNewIssue({ title: e.detail.value })}></ml-input>
+			<ml-textarea label="Description" rows="10" .value=${draft.body} @ml:input=${(e: CustomEvent) => work.editNewIssue({ body: e.detail.value })}></ml-textarea>
 		</div>
 	`;
 }
@@ -111,6 +138,7 @@ function issuesDialog(self: HostDialogsComponent) {
 											<ml-icon slot="prefix" icon="magnifying-glass" size="sm"></ml-icon>
 										</ml-input>
 										<button class="icon" title="Reload" ?disabled=${loading} @click=${() => host.loadIssues()}>${loading ? html`<ml-spinner size="xs"></ml-spinner>` : html`<ml-icon icon="arrows-clockwise" size="sm"></ml-icon>`}</button>
+										<button class="icon" title="New" @click=${() => self.work.startNewIssue()}><ml-icon icon="plus" size="sm"></ml-icon></button>
 									</div>
 									<div class="rows">
 										${error ? html`<div class="none selectable"><b>The list could not be loaded.</b><br />${hintText(error)}</div>` : ''}
@@ -118,14 +146,19 @@ function issuesDialog(self: HostDialogsComponent) {
 										${issues.map((i) => issueRow(self, i, issue?.id ?? null))}
 									</div>
 								</div>
-								${task ? taskForm(self) : issue ? issueDetail(issue) : html`<div class="detail"><div class="body none">${issues.length ? `Pick one on the left.` : ''}</div></div>`}
+								${self.work.newIssue() ? newIssueForm(self, label) : task ? taskForm(self) : issue ? issueDetail(self, issue) : html`<div class="detail"><div class="body none">${issues.length ? `Pick one on the left.` : ''}</div></div>`}
 							</div>
 						`}
 			</div>
 			<div slot="dialog-footer" class="foot">
 				${st?.host?.issues ? html`<ml-button variant="outline" @ml:click=${() => self.openIssuesPage()}><ml-icon slot="icon-start" icon="arrow-square-out"></ml-icon>All ${label.toLowerCase()} on ${where}</ml-button>` : ''}
 				<span class="grow"></span>
-				${task
+				${self.work.newIssue()
+					? html`
+						<ml-button variant="outline" @ml:click=${() => self.work.newIssue.set(null)}>Back</ml-button>
+						<ml-button variant="primary" ?disabled=${!self.work.newIssue()!.title.trim()} ?loading=${self.work.issueBusy() === 'create'} @ml:click=${() => self.work.createIssue()}>Create</ml-button>
+					`
+					: task
 					? html`
 						<ml-button variant="outline" @ml:click=${() => host.task.set(null)}>Back</ml-button>
 						<ml-button variant="primary" ?disabled=${!task.task.trim() || !task.branch.trim() || self.agents.cli() === null} ?loading=${self.agents.busy()} @ml:click=${() => host.startAgent()}><ml-icon slot="icon-start" icon="robot"></ml-icon>Start agent</ml-button>

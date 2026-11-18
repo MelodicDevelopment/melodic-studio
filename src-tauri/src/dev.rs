@@ -13,9 +13,10 @@
 pub fn dev_log(line: String) {
     #[cfg(debug_assertions)]
     {
-        eprintln!("[studio] {line}");
+        use std::io::Write;
+        // Not eprintln!: it panics when stderr is gone (the `tauri dev` that started us has exited).
+        let _ = writeln!(std::io::stderr(), "[studio] {line}");
         if let Ok(path) = std::env::var("STUDIO_DEV_LOG") {
-            use std::io::Write;
             if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
                 let _ = writeln!(file, "{line}");
             }

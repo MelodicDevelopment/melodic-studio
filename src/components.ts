@@ -23,6 +23,7 @@ import './services/ai.service';
 import './services/updates.service';
 import './services/terminal.store';
 import './services/host.store';
+import './services/host-work.store';
 import './services/ai-features.store';
 
 // App components
@@ -49,6 +50,10 @@ import './components/ai/ai-proposal.component';
 import './components/settings/language-servers.component';
 import './components/settings/editor-settings.component';
 import './components/new-project/new-project.component';
+import './components/host/host-work.component';
+import './components/host/cli-notice.component';
+import './components/settings/accounts.component';
+import './components/host/ci-status.component';
 import './components/agents/ask.component';
 import './components/agents/attempts.component';
 import './components/agents/agent-board.component';

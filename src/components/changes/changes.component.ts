@@ -8,6 +8,7 @@ import type { FileChange, Operation } from '../../services/backend.service';
 import { dirName, fileName, plural, statusMark } from '../../shared/format';
 import { changesStyles } from './changes.styles';
 import { proposeMenuItem } from '../ai/ai-entry';
+import { jiraKeyOf } from '../../services/host-work.store';
 
 /** Sidebar "Changes" tab: the checked file list and the commit form under it. */
 @MelodicComponent({
@@ -137,6 +138,13 @@ function changesTemplate(self: ChangesComponent) {
 		<ms-ai-commit-suggestion></ms-ai-commit-suggestion>
 		<div class="commit" @keydown=${self.keydown}>
 			<ml-input size="sm" placeholder=${placeholder || 'Summary (required)'} .value=${store.summary()} @ml:input=${(e: CustomEvent) => store.summary.set(e.detail.value)}><ms-ai-commit-button slot="suffix"></ms-ai-commit-button></ml-input>
+			${(() => {
+				// A Jira key in the branch name (ABC-12-login) links the commit when it starts the summary.
+				const key = st && !st.detached ? jiraKeyOf(st.branch) : null;
+				return key && !store.summary().includes(key)
+					? html`<button class="keychip" title="Start the summary with the Jira key, so Jira links the commit" @click=${() => store.summary.set(`${key} ${store.summary().trimStart()}`)}><ml-icon icon="kanban" size="xs"></ml-icon>Add ${key}</button>`
+					: '';
+			})()}
 			<ml-textarea size="sm" rows="3" placeholder="Description" .value=${store.description()} @ml:input=${(e: CustomEvent) => store.description.set(e.detail.value)}></ml-textarea>
 			<ml-button variant="primary" full-width ?disabled=${!canCommit} ?loading=${busy === 'commit'} @ml:click=${() => store.commit()}>
 				${amend ? 'Amend last commit' : included ? html`Commit ${plural(included, 'file')} to <b>${st?.branch ?? ''}</b>` : 'Select files to commit'}

@@ -115,6 +115,22 @@ export const ctxStyles = `
 `;
 
 export const changesStyles = () => css`
+	.keychip {
+		all: unset;
+		align-self: flex-start;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid var(--ml-color-border);
+		font-size: 11.5px;
+		color: var(--ml-color-text-secondary);
+		cursor: pointer;
+	}
+	.keychip:hover {
+		background: var(--ms-hover);
+	}
 	:host {
 		display: flex;
 		flex-direction: column;

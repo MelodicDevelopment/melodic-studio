@@ -256,6 +256,10 @@ impl TempText {
         Ok(TempText(path))
     }
 
+    pub(crate) fn path(&self) -> String {
+        self.0.to_string_lossy().to_string()
+    }
+
     pub(crate) fn arg(&self, flag: &str) -> String {
         format!("{flag}=@{}", self.0.to_string_lossy())
     }

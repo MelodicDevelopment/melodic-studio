@@ -1,0 +1,76 @@
+[
+ {
+  "author": {
+   "is_bot": true,
+   "login": "app/dependabot"
+  },
+  "baseRefName": "main",
+  "headRefName": "dependabot/npm_and_yarn/multi-310820743c",
+  "isDraft": false,
+  "number": 8,
+  "reviewDecision": "",
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-21T01:19:19Z",
+    "conclusion": "FAILURE",
+    "detailsUrl": "https://github.com/example/app/actions/runs/39526284835/job/118981566786",
+    "name": "Typecheck + tests",
+    "startedAt": "2026-10-21T01:15:52Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-21T01:19:49Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/example/app/actions/runs/39526284835/job/118981567063",
+    "name": "End-to-end (Playwright)",
+    "startedAt": "2026-10-21T01:17:43Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "title": "build(deps): bump left-pad and right-pad",
+  "updatedAt": "2026-10-21T01:15:47Z",
+  "url": "https://github.com/example/app/pull/8"
+ },
+ {
+  "author": {
+   "is_bot": true,
+   "login": "app/dependabot"
+  },
+  "baseRefName": "main",
+  "headRefName": "dependabot/npm_and_yarn/multi-869fff3352",
+  "isDraft": false,
+  "number": 7,
+  "reviewDecision": "",
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-21T01:19:12Z",
+    "conclusion": "FAILURE",
+    "detailsUrl": "https://github.com/example/app/actions/runs/39526285238/job/118981568051",
+    "name": "Typecheck + tests",
+    "startedAt": "2026-10-21T01:15:52Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-21T01:18:36Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/example/app/actions/runs/39526285238/job/118981568274",
+    "name": "End-to-end (Playwright)",
+    "startedAt": "2026-10-21T01:16:52Z",
+    "status": "COMPLETED",
+    "workflowName": "CI"
+   }
+  ],
+  "title": "build(deps): bump left-pad and right-pad",
+  "updatedAt": "2026-10-21T01:15:46Z",
+  "url": "https://github.com/example/app/pull/7"
+ }
+]

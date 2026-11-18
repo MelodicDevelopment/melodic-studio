@@ -264,5 +264,6 @@ export function appTemplate(self: AppComponent) {
 		<ms-init-repo></ms-init-repo>
 		<ms-new-project></ms-new-project>
 		<ms-host-dialogs></ms-host-dialogs>
+		<ms-host-work></ms-host-work>
 	`;
 }

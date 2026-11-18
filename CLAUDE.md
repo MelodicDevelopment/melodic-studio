@@ -26,6 +26,10 @@ src-tauri/src/
   host_cli.rs   the host through the user's own gh / az (+ azure-devops extension) / glab: tool status, issues and work
                 items, pull request context/create, new remote repositories. Every call has a timeout. Tests parse
                 captured CLI output; `cargo test live_read_only -- --ignored` runs read-only calls against the real tools.
+  host_ops.rs   pull requests (list, view, review, comment, merge, fetch for a worktree), issue actions (create, comment,
+                close/reopen), CI runs (+ re-run) and Jira through acli; same rules as host_cli.rs, whose helpers it uses
+  templates.rs  File > New Project: the template catalog (data), the argv steps per template, a streamed, stoppable run
+  menu.rs       the OS menu bar; our items reach the page as `menu` events (MenuService)
   ai_git.rs     git for the AI features around changes (`ai_*` commands): capped diffs for prompts (checked files, one
                 commit, what a push would send), and the preview/apply of a proposed conflict resolution
   lsp.rs        starts a language server in the active checkout and relays its JSON-RPC messages; lsp_servers / lsp_install / lsp_uninstall
@@ -64,6 +68,10 @@ src/
   dev/hooks.ts          dev builds only: window.__studio (stores, q() through shadow roots, log()) for scripts run via STUDIO_DEV_EVAL
   components/dialogs    every ml-dialog, opened by id through RepoStore.ask(name, prompt); git-ops.* holds the merge
                         (merge / squash / rebase), cherry-pick and interactive-rebase dialogs
+  services/host-work.store.ts   pull requests browser, issue actions, CI runs, Jira, tool notices (HostWorkStore)
+  components/host/host-work, cli-notice, ci-status   the Pull requests / Jira dialogs, "install the CLI" notices, toolbar CI icon
+  components/settings/accounts, editor-settings     Settings tabs; services/editor-settings.store.ts (font, zoom, saving)
+  components/new-project        File > New Project dialog, then InitService.open(path, true)
   services/host.store.ts        issues list, "start agent on this", the pull request draft; opens the two dialogs below
   components/host       Issues / work items dialog and the Create pull request dialog (HostStore.openIssues() / openPr())
   services/demo-host.ts         demo issues, pull request and host tools for the browser preview (?host=missing|signed-out)
@@ -75,12 +83,16 @@ src/
 - All git work shells out to the user's `git`, so SSH agent, credential helpers, hooks and signing just work. No stored tokens, and the app itself calls no host API. Web links (issues, pull requests, commits) are built from the remote URL and opened in the browser.
 - Host data (issues, work items, pull requests, new repositories) comes only through the command-line tool the user has signed in to: `gh`, `az` with the azure-devops extension, `glab` (`host_cli.rs`). When the tool is missing or signed out the UI says exactly what to install or run and falls back to the web page. Arguments are separate argv entries in `--flag=value` form (never a shell line); long text goes on stdin (`gh --body-file=-`) or through a temp file (`az --flag=@file`, which also keeps `az.cmd` quoting out of it); names starting with `-` or `@` are refused. Nothing is installed for the user (`AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no`).
 - Text from the host (issue bodies, titles, labels) is untrusted: shown as plain text only (work item HTML is reduced to text in Rust), never as HTML. In an agent's task it is fenced and labelled as a description, and the user edits the task before starting.
-- Publishing happens only on an explicit click: `pr_create` from the Create button of the pull request dialog (which refuses until the branch is fully pushed), `host_repo_create` from the new-repository flow. Never as a side effect of anything else. `host_open` opens only https pages on the repository's own host.
+- Publishing happens only on an explicit click: `pr_create` from the Create button of the pull request dialog (which refuses until the branch is fully pushed), `host_repo_create` from the new-repository flow; reviews, comments, merges, new issues, issue state changes, CI re-runs and Jira moves (`host_ops.rs`) each from their own button. Never as a side effect of anything else. Jira goes through Atlassian's `acli` only (no token kept); its site and project per repository are in localStorage `studio.jira`. `host_open` opens only https pages on the repository's own host.
 - `GIT_LITERAL_PATHSPECS=1` on every call so file names are never read as globs. `git stash` breaks under it; those calls use `run_magic`.
 - Commit model is GitHub Desktop's: the checked files are the commit. `commit()` resets the index (except mid-merge), adds exactly the selected paths via `--pathspec-from-file`, then commits.
 - History operations (`git.rs`, `ms-git-ops`): cherry-pick takes several commits, oldest first, in one `git cherry-pick`. Squash merge is `merge --squash` then a commit with the dialog's message on stdin; on conflicts the message is written to SQUASH_MSG and the operation shows as `squash` (only while files are conflicted: SQUASH_MSG outlives a squash finished in a terminal), Continue commits from it, Abort is `reset --merge`. Interactive rebase is git's own `rebase -i --autostash` with `GIT_SEQUENCE_EDITOR` set to `cp '<our todo file>'` (git starts the editor through its shell; Git for Windows brings one); the todo and new messages live in `<git dir>/studio-rebase/`, and a new message is an `exec git commit --amend --no-verify -F <file>` after the commit's last squash/fixup, so a stop for conflicts in between keeps it. The list sent must be exactly the commits of `upstream..HEAD` (re-read in Rust), merges in the range are refused, and the first kept line cannot be squash/fixup. Rows are reordered with pointer events, not HTML drag and drop (the window's file-drop handling).
 - Undo/amend are only offered while the tip commit is on no remote. Force push is `--force-with-lease`, offered only after a rejected push.
 - Commit identity is git's own config, nothing stored by us: Settings edits `--global` user.name/email, and "Use a different name and email in <repo>" writes `--local` (the main checkout's `.git/config`, so its worktrees and agents share it); unticking unsets it. `identity_get` / `identity_set` in commands.rs. There is no external-editor setting: editing happens in the Files tab.
+- Files tab operations (`files.rs` create / relocate / duplicate / trash / import / locate): every path through
+  `resolve()` (folders) or `entry()` (the entry itself, so a symlink is moved, never its target); never replaces without
+  `OnConflict` saying so; trash, with deleting only for files where there is no trash. Drops from outside use Tauri's
+  `onDragDropEvent` (positions / devicePixelRatio, which includes the webview zoom); moves inside the tree use pointer events.
 - Discard restores tracked files from HEAD and moves untracked ones to the OS trash.
 - Branch/ref/hash arguments go through `check_ref` (nothing starting with `-`).
 - Files tab (`files.rs`): paths are repo-relative and resolved through `resolve()`, which refuses absolute paths, `..`, `.git` and symlinks leading out. Saving never creates a file, and a file that changed on disk since it was read is not overwritten without asking. `Git::ignored` drops `GIT_LITERAL_PATHSPECS` because `check-ignore` rejects it.

@@ -3,7 +3,7 @@
  * request that can be "created", and the three host tools in different states.
  * Kept apart from the demo backend so that file only gains a few `case` lines.
  */
-import type { HostCli, HostCliStatus, HostIssue, HostOwner, HostRepo, PrChanges, PrContext, PrWebUrl, PullRequestRef } from './backend.service';
+import type { CiRun, HostCli, HostCliStatus, HostIssue, HostOwner, HostRepo, JiraIssue, PrChanges, PrContext, PrDetail, PrSummary, PrWebUrl, PullRequestRef } from './backend.service';
 
 const WEB = 'https://github.com/demo/harmony';
 
@@ -87,6 +87,47 @@ const CLIS: HostCli[] = [
 	{ provider: 'github', name: 'GitHub', cli: 'gh', installed: true, signedIn: true, account: 'demo', hint: null },
 	{ provider: 'azure', name: 'Azure DevOps', cli: 'az', installed: true, signedIn: false, account: null, hint: 'Run `az extension add --name azure-devops` in a terminal, then `az login` if you have not signed in.' },
 	{ provider: 'gitlab', name: 'GitLab', cli: 'glab', installed: false, signedIn: false, account: null, hint: 'Install the GitLab CLI from https://gitlab.com/gitlab-org/cli, then run `glab auth login` in a terminal.' },
+	{ provider: 'jira', name: 'Jira', cli: 'acli', installed: true, signedIn: true, account: 'demo@example.com on demo.atlassian.net', hint: null },
+];
+
+const PRS: PrSummary[] = [
+	{ id: '131', title: 'Gapless repeat-one', author: 'sam', head: 'issue/214-repeat-one-gap', base: 'main', draft: false, state: 'open', updated: hoursAgo(2), url: `${WEB}/pull/131`, review: 'required', checks: 'pass' },
+	{ id: '129', title: 'Persist the queue between sessions', author: 'demo', head: 'feature/queue-persist', base: 'main', draft: true, state: 'open', updated: hoursAgo(20), url: `${WEB}/pull/129`, review: '', checks: 'fail' },
+	{ id: '126', title: 'Docs: list the reorder shortcuts', author: 'kim', head: 'docs/shortcuts', base: 'main', draft: false, state: 'open', updated: hoursAgo(70), url: `${WEB}/pull/126`, review: 'approved', checks: 'pending' },
+];
+
+function prDetail(id: string): PrDetail {
+	const summary = PRS.find((p) => p.id === id) ?? PRS[0];
+	return {
+		summary,
+		body: `## Summary\n- ${summary.title}\n\n## Testing\n- Play a track with repeat one and listen for the gap\n\n<b>Markup from the host stays text.</b>`,
+		notes: [
+			{ author: 'kim', body: 'Nice. Does this also cover the shuffle case?', created: hoursAgo(5), kind: 'comment' },
+			{ author: 'sam', body: 'Shuffle goes through the same path, so yes.', created: hoursAgo(4), kind: 'comment' },
+		],
+		checks: [
+			{ name: 'CI / test', state: summary.checks === 'fail' ? 'fail' : 'pass', url: `${WEB}/actions/runs/1` },
+			{ name: 'CI / lint', state: summary.checks === 'pending' ? 'pending' : 'pass', url: `${WEB}/actions/runs/1` },
+		],
+		files: [
+			{ path: 'src/player/queue.ts', additions: 14, deletions: 3 },
+			{ path: 'src/player/repeat.ts', additions: 7, deletions: 0 },
+		],
+		mergeable: summary.checks !== 'fail',
+		crossRepo: false,
+	};
+}
+
+function runs(branch: string): CiRun[] {
+	return [
+		{ id: '9001', name: 'CI', title: 'Wrap the queue when repeat is on', state: branch === 'main' ? 'pass' : 'fail', url: `${WEB}/actions/runs/9001`, created: hoursAgo(1), branch, definition: null },
+		{ id: '9000', name: 'Release', title: 'v1.4.0', state: 'pass', url: `${WEB}/actions/runs/9000`, created: hoursAgo(30), branch, definition: null },
+	];
+}
+
+const JIRA: JiraIssue[] = [
+	{ key: 'HAR-42', title: 'Crossfade between tracks', body: 'Fade the outgoing track over the last two seconds.', status: 'To Do', kind: 'Story', assignee: 'Demo Author', updated: hoursAgo(6), labels: ['player'], url: 'https://demo.atlassian.net/browse/HAR-42' },
+	{ key: 'HAR-40', title: 'Lyrics panel', body: '', status: 'In Progress', kind: 'Task', assignee: null, updated: hoursAgo(50), labels: [], url: 'https://demo.atlassian.net/browse/HAR-40' },
 ];
 
 const OWNERS: HostOwner[] = [
@@ -170,6 +211,34 @@ export function demoHost(cmd: string, args: Record<string, unknown>, state: Demo
 			const path = `${String(args.owner ?? 'demo')}/${String(args.name)}`;
 			return later({ webUrl: `https://github.com/${path}`, remoteUrl: `https://github.com/${path}.git` } satisfies HostRepo, 900);
 		}
+		case 'pr_list':
+			return later(args.scope === 'mine' ? PRS.filter((p) => p.author === 'demo') : args.scope === 'review' ? PRS.slice(0, 1) : PRS, 350);
+		case 'pr_view':
+			return later(prDetail(String(args.number)), 300);
+		case 'pr_review':
+		case 'pr_comment':
+		case 'issue_comment':
+		case 'issue_set_state':
+		case 'ci_rerun':
+		case 'jira_transition':
+		case 'jira_comment':
+			console.info(`[demo] would run ${cmd}`, args);
+			return later(undefined, 500);
+		case 'pr_merge': {
+			const pr = PRS.find((p) => p.id === args.number);
+			if (pr) {
+				pr.state = 'merged';
+			}
+			return later(undefined, 700);
+		}
+		case 'pr_fetch':
+			return later(PRS.find((p) => p.id === args.number)?.head ?? `pr-${String(args.number)}`, 400);
+		case 'issue_create':
+			return later({ id: '215', url: `${WEB}/issues/215` }, 600);
+		case 'ci_runs':
+			return later(state.empty ? [] : runs(String(args.branch)), 300);
+		case 'jira_issues':
+			return later(JIRA.filter((j) => !args.query || `${j.key} ${j.title}`.toLowerCase().includes(String(args.query).toLowerCase())), 400);
 		default:
 			return;
 	}

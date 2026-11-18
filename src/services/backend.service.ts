@@ -221,6 +221,64 @@ export interface TreeEntry {
 	isDir: boolean;
 	ignored: boolean;
 }
+export interface PrSummary {
+	id: string;
+	title: string;
+	author: string;
+	head: string;
+	base: string;
+	draft: boolean;
+	state: 'open' | 'merged' | 'closed';
+	updated: string;
+	url: string;
+	review: 'approved' | 'changes' | 'required' | '';
+	checks: 'pass' | 'fail' | 'pending' | '';
+}
+/** Untrusted text from the host: shown as text only. */
+export interface HostNote {
+	author: string;
+	body: string;
+	created: string;
+	kind: 'comment' | 'approved' | 'changes';
+}
+export interface HostCheck {
+	name: string;
+	state: 'pass' | 'fail' | 'pending' | 'skipped';
+	url: string;
+}
+export interface PrDetail {
+	summary: PrSummary;
+	body: string;
+	notes: HostNote[];
+	checks: HostCheck[];
+	files: { path: string; additions: number; deletions: number }[];
+	mergeable: boolean | null;
+	crossRepo: boolean;
+}
+export interface CiRun {
+	id: string;
+	name: string;
+	title: string;
+	state: 'pass' | 'fail' | 'pending' | 'skipped';
+	url: string;
+	created: string;
+	branch: string;
+	definition: string | null;
+}
+export interface JiraIssue {
+	key: string;
+	title: string;
+	body: string;
+	status: string;
+	kind: string;
+	assignee: string | null;
+	updated: string;
+	labels: string[];
+	url: string;
+}
+export type PrScope = 'open' | 'mine' | 'review';
+export type PrVerdict = 'approve' | 'request-changes' | 'comment';
+export type MergeMethod = 'merge' | 'squash' | 'rebase';
 export type TemplateOption =
 	| { kind: 'flag'; id: string; label: string; default: boolean }
 	| { kind: 'pick'; id: string; label: string; choices: { value: string; label: string }[] }
@@ -310,7 +368,7 @@ export interface PrWebUrl {
 }
 /** One host's command-line tool, for creating a repository before any exists locally. */
 export interface HostCli {
-	provider: 'github' | 'azure' | 'gitlab';
+	provider: 'github' | 'azure' | 'gitlab' | 'jira';
 	name: string;
 	cli: string;
 	installed: boolean;
@@ -513,6 +571,23 @@ export class BackendService {
 	trashEntries(id: string, root: string, paths: string[]) { return this.call<void>('files_trash', { id, root, paths }); }
 	/** Copy absolute `sources` (dropped from outside the app) into folder `to`. */
 	importEntries(id: string, root: string, sources: string[], to: string, onConflict: OnConflict) { return this.call<Placed>('files_import', { id, root, sources, to, onConflict }); }
+
+	// ---- pull requests, issue actions, CI and Jira (host_ops.rs). Writes run only from explicit clicks. ----
+	prList(id: string, scope: PrScope) { return this.call<PrSummary[]>('pr_list', { id, scope }); }
+	prView(id: string, number: string) { return this.call<PrDetail>('pr_view', { id, number }); }
+	prReview(id: string, number: string, verdict: PrVerdict, body: string) { return this.call<void>('pr_review', { id, number, verdict, body }); }
+	prComment(id: string, number: string, body: string) { return this.call<void>('pr_comment', { id, number, body }); }
+	prMerge(id: string, number: string, method: MergeMethod, deleteBranch: boolean) { return this.call<void>('pr_merge', { id, number, method, deleteBranch }); }
+	/** The pull request's commits as a local branch; answers its name. */
+	prFetch(id: string, number: string) { return this.call<string>('pr_fetch', { id, number }); }
+	issueCreate(id: string, title: string, body: string, kind: string) { return this.call<{ id: string; url: string }>('issue_create', { id, title, body, kind }); }
+	issueComment(id: string, number: string, body: string) { return this.call<void>('issue_comment', { id, number, body }); }
+	issueSetState(id: string, number: string, open: boolean) { return this.call<void>('issue_set_state', { id, number, open }); }
+	ciRuns(id: string, branch: string) { return this.call<CiRun[]>('ci_runs', { id, branch }); }
+	ciRerun(id: string, run: CiRun) { return this.call<void>('ci_rerun', { id, run: run.id, definition: run.definition, branch: run.branch }); }
+	jiraIssues(site: string, project: string, query: string) { return this.call<JiraIssue[]>('jira_issues', { site, project, query }); }
+	jiraTransition(key: string, status: string) { return this.call<void>('jira_transition', { key, status }); }
+	jiraComment(key: string, body: string) { return this.call<void>('jira_comment', { key, body }); }
 
 	// ---- the host, through the user's own gh / az / glab ----
 	issuesStatus(id: string) { return this.call<HostCliStatus>('issues_status', { id }); }
@@ -1276,6 +1351,20 @@ class DemoBackend {
 			case 'host_clis':
 			case 'host_owners':
 			case 'host_repo_create':
+			case 'pr_list':
+			case 'pr_view':
+			case 'pr_review':
+			case 'pr_comment':
+			case 'pr_merge':
+			case 'pr_fetch':
+			case 'issue_create':
+			case 'issue_comment':
+			case 'issue_set_state':
+			case 'ci_runs':
+			case 'ci_rerun':
+			case 'jira_issues':
+			case 'jira_transition':
+			case 'jira_comment':
 				return demoHost(cmd, args, { empty, branch: this.branch, unpushed: this.ahead, onRemote: !!this.branchList.find((b) => b.isCurrent)?.upstream, remoteBranches: this.branchList.filter((b) => b.isRemote).map((b) => b.name.replace(/^[^/]+\//, '')), subjects: this.commits.filter((c) => c.unpushed || c.refs.some((r) => r.startsWith('origin/feature'))).map((c) => c.summary) });
 			case 'ai_selected_diff': {
 				const paths = (args.files as { path: string }[]).map((f) => f.path);

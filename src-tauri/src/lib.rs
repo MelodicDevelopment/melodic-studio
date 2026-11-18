@@ -9,6 +9,7 @@ mod files;
 mod git;
 mod init;
 mod host_cli;
+mod host_ops;
 mod lsp;
 mod menu;
 mod paths;
@@ -143,6 +144,20 @@ pub fn run() {
             lsp::lsp_install,
             lsp::lsp_uninstall,
             commands::list_dir,
+            host_ops::pr_list,
+            host_ops::pr_view,
+            host_ops::pr_review,
+            host_ops::pr_comment,
+            host_ops::pr_merge,
+            host_ops::pr_fetch,
+            host_ops::issue_create,
+            host_ops::issue_comment,
+            host_ops::issue_set_state,
+            host_ops::ci_runs,
+            host_ops::ci_rerun,
+            host_ops::jira_issues,
+            host_ops::jira_transition,
+            host_ops::jira_comment,
             templates::project_templates,
             templates::project_create,
             templates::project_stop,

@@ -1,7 +1,8 @@
 import { MelodicComponent } from '@melodicdev/core/components';
-import { Service } from '@melodicdev/core/injection';
+import { Injector, Service } from '@melodicdev/core/injection';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
+import { HostWorkStore } from '../../services/host-work.store';
 import { HostStore } from '../../services/host.store';
 import { AgentsStore } from '../../services/agents.store';
 import { isDesktop, isMac, isWindows, type Branch, type OpenTarget, type RepoSummary, type Worktree } from '../../services/backend.service';
@@ -186,10 +187,14 @@ export class ToolbarComponent {
 	}
 
 	/** The issues list or the pull request dialog (components/host), from the host menu. */
-	openHostDialog(which: 'issues' | 'pull-request'): void {
+	openHostDialog(which: 'issues' | 'pull-request' | 'pulls' | 'jira'): void {
 		this.close('host-pop');
 		if (which === 'issues') {
 			this.host.openIssues();
+		} else if (which === 'pulls') {
+			Injector.get(HostWorkStore).openPulls();
+		} else if (which === 'jira') {
+			Injector.get(HostWorkStore).openJira();
 		} else {
 			this.host.openPr();
 		}
