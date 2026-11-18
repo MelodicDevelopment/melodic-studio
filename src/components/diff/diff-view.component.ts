@@ -145,12 +145,12 @@ function noteRow(n: DiffNote, focus: number | null) {
 			left: 0;
 			box-sizing: border-box;
 			width: 620px;
-			width: min(100cqw, 860px);
-			padding: 7px 16px 8px 13px;
-			border-left: 3px solid var(--ml-color-border-strong);
-			border-top: 1px solid var(--ml-color-border);
-			border-bottom: 1px solid var(--ml-color-border);
-			background: var(--ml-color-background);
+			width: min(calc(100cqw - 24px), 760px);
+			margin: 6px 12px 8px;
+			padding: 9px 14px 10px;
+			border: 1px solid var(--ms-ai-border);
+			border-radius: 10px;
+			background: var(--ml-color-surface-raised);
 			font-family: var(--ml-font-sans);
 			font-size: 12.5px;
 			line-height: 1.45;
@@ -159,13 +159,13 @@ function noteRow(n: DiffNote, focus: number | null) {
 			-webkit-user-select: text;
 		}
 		.fnote.bug {
-			border-left-color: var(--ms-del);
+			border-color: color-mix(in srgb, var(--ms-del) 55%, transparent);
 		}
 		.fnote.risk {
-			border-left-color: var(--ms-mod);
+			border-color: color-mix(in srgb, var(--ms-mod) 55%, transparent);
 		}
 		.fnote.focus {
-			background: var(--ml-color-primary-subtle);
+			background: var(--ms-ai-subtle);
 		}
 		.fnote .sev {
 			margin-right: 8px;
@@ -173,7 +173,7 @@ function noteRow(n: DiffNote, focus: number | null) {
 			font-weight: 700;
 			letter-spacing: 0.05em;
 			text-transform: uppercase;
-			color: var(--ml-color-text-muted);
+			color: var(--ms-ai);
 		}
 		.fnote.bug .sev {
 			color: var(--ms-del);

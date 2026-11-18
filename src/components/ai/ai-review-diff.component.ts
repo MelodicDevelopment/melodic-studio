@@ -43,8 +43,8 @@ import { dirName, fileName, plural } from '../../shared/format';
 			gap: 9px;
 			height: 36px;
 			padding: 0 8px 0 6px;
-			border-bottom: 1px solid var(--ml-color-border);
-			background: var(--ml-color-primary-subtle);
+			border-bottom: 1px solid var(--ms-ai-border);
+			background: var(--ms-ai-subtle);
 		}
 		.icon {
 			all: unset;

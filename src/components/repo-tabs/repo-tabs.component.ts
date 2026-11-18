@@ -47,10 +47,11 @@ import { isDesktop, isMac } from '../../services/backend.service';
 		}
 		.strip {
 			display: flex;
-			align-items: stretch;
-			height: 36px;
-			background: var(--ms-toolbar-bg);
-			border-bottom: 1px solid var(--ms-toolbar-border);
+			align-items: flex-end;
+			gap: 2px;
+			height: 38px;
+			padding: 0 8px;
+			background: var(--ms-strip-bg);
 			color: var(--ms-toolbar-muted);
 		}
 		.strip.mac {
@@ -62,23 +63,28 @@ import { isDesktop, isMac } from '../../services/backend.service';
 			display: flex;
 			align-items: center;
 			gap: 7px;
+			height: 31px;
 			padding: 0 8px 0 12px;
-			border-right: 1px solid var(--ms-toolbar-border);
+			border-radius: 9px 9px 0 0;
 			font-size: 12px;
-			box-shadow: inset 0 2px 0 transparent;
-		}
-		.strip.mac .tab:first-child {
-			border-left: 1px solid var(--ms-toolbar-border);
 		}
 		.tab:hover {
 			background: var(--ms-toolbar-hover);
 			color: var(--ms-toolbar-fg);
 		}
+		/* The open tab is cut from the toolbar below it. */
 		.tab.on {
-			background: var(--ms-toolbar-hover);
+			background: var(--ms-toolbar-bg);
 			color: var(--ms-toolbar-fg);
 			font-weight: 600;
-			box-shadow: inset 0 2px 0 var(--ml-color-primary);
+		}
+		.tab.on::before {
+			content: '';
+			flex: none;
+			width: 6px;
+			height: 6px;
+			border-radius: 50%;
+			background: var(--ms-you);
 		}
 		.tab > ml-icon,
 		.tab > ml-spinner {
@@ -116,6 +122,7 @@ import { isDesktop, isMac } from '../../services/backend.service';
 		}
 		.add {
 			align-self: center;
+			border-radius: 7px;
 			width: 26px;
 			height: 26px;
 			margin: 0 6px;

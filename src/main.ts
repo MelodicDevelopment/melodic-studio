@@ -1,3 +1,4 @@
+import './styles/fonts';
 import './components';
 
 import { bootstrap } from '@melodicdev/core/bootstrap';

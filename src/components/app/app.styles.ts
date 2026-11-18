@@ -33,6 +33,7 @@ export const appStyles = () => css`
 		flex-direction: column;
 		min-height: 0;
 		background: var(--ms-sidebar-bg);
+		container-type: inline-size;
 	}
 	.resizer {
 		flex: none;
@@ -120,8 +121,14 @@ export const appStyles = () => css`
 	.tabs {
 		flex: none;
 		display: flex;
-		border-bottom: 1px solid var(--ml-color-border);
+		gap: 2px;
+		margin: 10px 10px 6px;
+		padding: 3px;
+		border-radius: 10px;
+		background: var(--ml-color-surface-sunken);
 	}
+	/* Each tab is as wide as its label plus padding, and the spare width is shared out: equal widths would
+	   squeeze "Changes 12" against the pill's edges while "Files" has room to spare. */
 	.tab {
 		all: unset;
 		flex: 1 1 auto;
@@ -129,29 +136,49 @@ export const appStyles = () => css`
 		align-items: center;
 		justify-content: center;
 		gap: 5px;
-		padding: 0 6px;
-		height: 36px;
+		padding: 0 10px;
+		white-space: nowrap;
+		height: 30px;
+		border-radius: 8px;
 		font-size: 12px;
 		font-weight: 500;
 		color: var(--ml-color-text-muted);
-		box-shadow: inset 0 -2px 0 transparent;
+		transition: background-color 0.12s, color 0.12s;
 	}
 	.tab:hover {
 		color: var(--ml-color-text);
 	}
 	.tab.on {
 		color: var(--ml-color-text);
-		box-shadow: inset 0 -2px 0 var(--ml-color-primary);
+		font-weight: 600;
+		background: var(--ms-seg-on);
+		box-shadow: var(--ms-seg-shadow);
 	}
 	.tab:focus-visible {
 		outline: 2px solid var(--ml-color-primary);
 		outline-offset: -2px;
 	}
+	/* Near the sidebar's minimum width (220px) the four labels only fit with tighter spacing. */
+	@container (max-width: 270px) {
+		.tabs {
+			gap: 1px;
+			margin: 8px 8px 6px;
+			padding: 2px;
+		}
+		.tab {
+			gap: 4px;
+			padding: 0 4px;
+			font-size: 11.5px;
+		}
+		.count {
+			padding: 0 4px;
+		}
+	}
 	.count {
-		padding: 0 7px;
-		border-radius: 999px;
+		padding: 0 6px;
+		border-radius: 6px;
 		background: var(--ml-color-primary-subtle);
-		color: var(--ml-color-primary);
+		color: var(--ml-color-text-link);
 		font-size: 11px;
 		font-weight: 600;
 		line-height: 17px;
@@ -241,7 +268,10 @@ export const appStyles = () => css`
 	}
 	.commithead h2 {
 		margin: 0;
-		font-size: 16px;
+		font-family: var(--ms-font-display);
+		font-size: 19px;
+		line-height: 1.2;
+		letter-spacing: -0.01em;
 		font-weight: 600;
 		user-select: text;
 		-webkit-user-select: text;
@@ -272,6 +302,7 @@ export const appStyles = () => css`
 	}
 	.hash {
 		font-family: var(--ml-font-mono);
+		color: var(--ms-hash);
 		cursor: pointer;
 	}
 	.hash:hover {
@@ -314,12 +345,16 @@ export const appStyles = () => css`
 	}
 	h1 {
 		margin: 6px 0 0;
-		font-size: 24px;
-		font-weight: 650;
+		font-family: var(--ms-font-display);
+		font-size: 28px;
+		letter-spacing: -0.02em;
+		font-weight: 600;
 	}
 	.empty h2 {
 		margin: 0;
-		font-size: 20px;
+		font-family: var(--ms-font-display);
+		letter-spacing: -0.01em;
+		font-size: 22px;
 		font-weight: 600;
 	}
 	.empty p,
@@ -356,7 +391,7 @@ export const appStyles = () => css`
 		gap: 12px;
 		padding: 11px 14px;
 		border: 1px solid var(--ml-color-border);
-		border-radius: 10px;
+		border-radius: 12px;
 		background: var(--ml-color-surface);
 		text-align: left;
 	}

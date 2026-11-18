@@ -196,8 +196,9 @@ function comparison(self: HistoryComponent, branch: string) {
 			overflow-y: auto;
 		}
 		.commit {
-			padding: 7px 12px;
-			border-bottom: 1px solid var(--ml-color-border-muted);
+			margin: 1px 6px;
+			padding: 7px 10px;
+			border-radius: 8px;
 		}
 		.commit:hover {
 			background: var(--ms-hover);
@@ -205,6 +206,7 @@ function comparison(self: HistoryComponent, branch: string) {
 		.commit.sel {
 			background: var(--ms-selected);
 			color: var(--ms-selected-fg);
+			box-shadow: inset 0 0 0 1px var(--ms-selected-ring);
 		}
 		.top {
 			display: flex;
@@ -255,7 +257,7 @@ function comparison(self: HistoryComponent, branch: string) {
 			height: 28px;
 			padding: 0 8px;
 			border: 1px solid var(--ml-color-border);
-			border-radius: 6px;
+			border-radius: 8px;
 			background: var(--ml-color-surface);
 			color: var(--ml-color-text-muted);
 		}

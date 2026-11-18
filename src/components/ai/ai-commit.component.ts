@@ -37,7 +37,7 @@ import { RepoStore } from '../../services/repo.store';
 			width: 24px;
 			height: 24px;
 			border-radius: 5px;
-			color: var(--ml-color-primary);
+			color: var(--ms-ai);
 		}
 		button:hover:not([disabled]) {
 			background: var(--ms-hover);
@@ -90,8 +90,8 @@ export class AiCommitButtonComponent {
 		}
 		.box {
 			padding: 9px 10px 10px;
-			border-top: 1px solid var(--ml-color-border);
-			background: var(--ml-color-primary-subtle);
+			border-top: 1px solid var(--ms-ai-border);
+			background: var(--ms-ai-subtle);
 		}
 		.k {
 			display: flex;
@@ -99,7 +99,7 @@ export class AiCommitButtonComponent {
 			gap: 5px;
 			font-size: 11px;
 			font-weight: 600;
-			color: var(--ml-color-primary);
+			color: var(--ms-ai);
 		}
 		.s {
 			margin-top: 4px;

@@ -64,12 +64,12 @@ import { markdownStyles, renderMarkdown } from './markdown';
 		}
 		.bar.ready {
 			align-items: flex-start;
-			background: var(--ml-color-primary-subtle);
+			background: var(--ms-ai-subtle);
 		}
 		.bar > ml-icon {
 			flex: none;
 			margin-top: 1px;
-			color: var(--ml-color-primary);
+			color: var(--ms-ai);
 		}
 		.bar > ml-button {
 			flex: none;
