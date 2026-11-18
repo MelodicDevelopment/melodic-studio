@@ -18,7 +18,7 @@
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import { computed, signal } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
-import { BackendService, type ClaudeHook } from './backend.service';
+import { BackendService, type ClaudeHook, type ClaudeSession } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ScreenPool } from './screens';
 import { FAILED_START_MS, folderName } from './terminal.store';
@@ -51,6 +51,10 @@ export interface Conversation {
 	title: string;
 	/** The title came from the first prompt (or the user); later prompts leave it alone. */
 	titled: boolean;
+	/** The first prompt, longer than the title (which tabs have to keep short). */
+	prompt?: string;
+	/** Started outside the app (a terminal) and not resumed here yet: it may still be open there. */
+	outside?: boolean;
 	/** Claude Code's session id: what `--resume` continues. Changes on /clear. */
 	sessionId: string | null;
 	state: ConvState;
@@ -179,6 +183,9 @@ export class WorkspaceStore {
 	readonly waiting = computed(() => this.conversations().filter((c) => c.state === 'waiting'));
 	readonly unread = computed(() => this.conversations().filter((c) => c.unread).length);
 	readonly working = computed(() => this.conversations().filter((c) => c.state === 'working').length);
+
+	/** Claude Code sessions started outside the app, by repository (read from Claude Code's transcripts). */
+	readonly elsewhere = signal<Record<string, ClaudeSession[]>>({});
 
 	private readonly _savedLayouts = read<Record<string, LayoutNode>>(LAYOUT_KEY, {});
 	/** Conversation id -> screen id in the pool. */
@@ -309,6 +316,60 @@ export class WorkspaceStore {
 		this.addTab(conv, options.pane);
 	}
 
+	// ---- sessions started outside the app --------------------------------------
+
+	/** Read a repository's Claude Code sessions from its transcripts again (cheap: Rust keeps what it read). */
+	async loadElsewhere(repoId: string): Promise<void> {
+		try {
+			const found = await this.backend.claudeSessions(repoId);
+			this.elsewhere.set({ ...this.elsewhere(), [repoId]: found });
+		} catch {
+			// A repository that is gone, or no Claude Code data: nothing to show (and nothing to ask again for).
+			this.elsewhere.set({ ...this.elsewhere(), [repoId]: [] });
+		}
+	}
+
+	/** A repository's outside sessions that are not one of our conversations already. */
+	elsewhereIn(repoId: string): ClaudeSession[] {
+		const ours = new Set(this.conversations().map((c) => c.sessionId));
+		return (this.elsewhere()[repoId] ?? []).filter((s) => !ours.has(s.id));
+	}
+
+	/**
+	 * Bring an outside session into the workspace as a saved conversation: a tab that offers
+	 * to continue it with `claude --resume`. Nothing runs until the user says so there.
+	 */
+	async adopt(repoId: string, s: ClaudeSession): Promise<void> {
+		const known = this.conversations().find((c) => c.sessionId === s.id);
+		if (known) {
+			return this.open(known.id);
+		}
+		if (this.repos.repo()?.id !== repoId) {
+			await this.repos.selectRepo(repoId);
+		}
+		const conv: Conversation = {
+			id: newId('c'),
+			kind: 'claude',
+			repoId,
+			cwd: s.cwd,
+			branch: s.branch,
+			title: s.title ?? plainSummary(s.prompt, 48),
+			titled: true,
+			prompt: s.prompt,
+			outside: true,
+			sessionId: s.id,
+			state: 'saved',
+			waitingFor: null,
+			lastSaid: s.lastSaid ?? '',
+			subagents: [],
+			created: s.modified,
+			updated: s.modified,
+			unread: false,
+		};
+		this.addTab(conv);
+		this.select(conv.id);
+	}
+
 	/** A plain shell in the checkout on screen. */
 	newShell(pane?: string): void {
 		const repo = this.repos.repo();
@@ -338,7 +399,7 @@ export class WorkspaceStore {
 		if (screen) {
 			this.pool.reset(screen);
 		}
-		this.patch(id, { state: 'starting' });
+		this.patch(id, { state: 'starting', outside: false });
 		this.open(id);
 	}
 
@@ -793,6 +854,7 @@ export class WorkspaceStore {
 					changes.lastSaid = plainSummary(prompt, 200);
 					if (!conv.titled) {
 						changes.title = plainSummary(prompt, 48);
+						changes.prompt = plainSummary(prompt, 600);
 						changes.titled = true;
 					}
 				}

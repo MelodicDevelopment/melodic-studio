@@ -56,6 +56,21 @@ export interface ChangedFile extends FileChange {
 	diff: string;
 }
 /** Everything a checkout holds that `base` does not: commits since, uncommitted edits, untracked files. */
+/** A Claude Code session started outside the app, read from its transcript (src-tauri/src/sessions.rs). */
+export interface ClaudeSession {
+	/** What `claude --resume` takes. */
+	id: string;
+	/** The checkout it ran in, spelled as worktrees() spells it. */
+	cwd: string;
+	branch: string | null;
+	/** Claude Code's own short title, when it wrote one. */
+	title: string | null;
+	prompt: string;
+	lastPrompt: string | null;
+	lastSaid: string | null;
+	/** When its transcript last changed (ms). */
+	modified: number;
+}
 export interface WorktreeDiff {
 	base: string;
 	head: string;
@@ -433,6 +448,8 @@ export class BackendService {
 	 * terminal: the term* calls and events work on the key it answers. `session` is the conversation's id, new or
 	 * (with `resume`) one to continue. Claude Code's hooks report on it as `claude-hook` events.
 	 */
+	/** Claude Code sessions in the repository's checkouts that were started outside the app, newest first. */
+	claudeSessions(id: string) { return this.call<ClaudeSession[]>('claude_sessions', { id }); }
 	claudeOpen(id: string, cwd: string, session: string, resume: boolean, cols: number, rows: number) { return this.call<string>('claude_open', { id, cwd, session, resume, cols, rows }); }
 	/** The servers Settings lists, looked for in the active checkout of `id`, the app's own folder and PATH. */
 	async lspServers(id: string | null) { return (await this.call<LanguageServer[] | undefined>('lsp_servers', { id })) ?? []; }
@@ -1165,6 +1182,13 @@ class DemoBackend {
 			}
 			case 'repo_init':
 				return this.handle('repo_add', { path: args.path });
+			case 'claude_sessions':
+				return args.id === DEMO_ID
+					? [
+							{ id: 'demo-cli-1', cwd: DEMO_ID, branch: 'main', title: 'Flaky upload test', prompt: 'The upload test fails about one run in ten on CI. Can you find out why?', lastPrompt: 'ok, make the fix', lastSaid: 'Fixed: the test waited on a timer instead of the upload promise. It passes 200 runs in a row now.', modified: Date.now() - 2 * 60_000 },
+							{ id: 'demo-cli-2', cwd: DEMO_ID, branch: 'main', title: null, prompt: 'Explain how the queue retries failed jobs', lastPrompt: null, lastSaid: 'Failed jobs go back on the queue with an exponential delay, up to five times.', modified: Date.now() - 26 * 3_600_000 },
+						]
+					: [];
 			case 'claude_open':
 			case 'term_open':
 			case 'term_write':

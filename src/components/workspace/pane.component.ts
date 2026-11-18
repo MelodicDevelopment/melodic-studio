@@ -5,6 +5,10 @@ import { WorkspaceStore, panesOf, type Conversation, type Drop, type Pane } from
 import { isMac } from '../../services/backend.service';
 import { paneStyles } from './workspace.styles';
 import { stateDot } from './conversation-state';
+import { relativeTime } from '../../shared/format';
+
+/** An outside session whose transcript changed this recently may still be open in a terminal. */
+const MAYBE_OPEN_MS = 10 * 60_000;
 
 /** How long a pane's size has to hold still before its program is told about it. */
 const SETTLE_MS = 60;
@@ -78,8 +82,16 @@ function body(self: PaneComponent, pane: Pane, conv: Conversation | null) {
 			<div class="start">
 				<div class="resume">
 					<ml-icon icon="clock-counter-clockwise" size="lg"></ml-icon>
-					<h3>${conv.title}</h3>
+					<h3 title=${conv.prompt ?? conv.title}>${conv.prompt ?? conv.title}</h3>
 					${conv.lastSaid ? html`<p class="said">${conv.lastSaid}</p>` : ''}
+					${conv.outside
+						? html`<p class="outside ${Date.now() - conv.updated < MAYBE_OPEN_MS ? 'warn' : ''}">
+								<ml-icon icon=${Date.now() - conv.updated < MAYBE_OPEN_MS ? 'warning' : 'terminal-window'} size="sm"></ml-icon>
+								<span>${Date.now() - conv.updated < MAYBE_OPEN_MS
+									? `Started outside Melodic Studio and active ${relativeTime(conv.updated)}: it may still be open in a terminal. Close it there first, or the two will write to the same conversation.`
+									: `Started outside Melodic Studio, last active ${relativeTime(conv.updated)}.`}</span>
+							</p>`
+						: ''}
 					<ml-button variant="primary" @ml:click=${() => self.store.resume(conv.id)}><ml-icon slot="icon-start" icon="play"></ml-icon>Resume conversation</ml-button>
 					<p class="hint">Continues it with <code>claude --resume</code> in ${conv.cwd}</p>
 				</div>

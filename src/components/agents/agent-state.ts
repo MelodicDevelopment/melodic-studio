@@ -1,10 +1,33 @@
 import { html } from '@melodicdev/core/template';
-import { STATE_LABELS, stateOf, type AgentSession } from '../../services/agents.store';
+import { STATE_LABELS, stateOf, type AgentSession, type AgentState } from '../../services/agents.store';
+import type { Conversation } from '../../services/workspace.store';
+import { CONV_STATE_LABELS } from '../workspace/conversation-state';
 
 /** How a session stands, as a small labelled pill: Working, Finished, Failed, Needs review, Stopped. */
 export function stateChip(s: AgentSession) {
 	const state = stateOf(s);
 	return html`<span class="chip ${state}">${state === 'working' ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<i></i>`}${STATE_LABELS[state]}</span>`;
+}
+
+/** A Claude conversation's state in the agents' colours: working, needs you (review), ready (finished), saved or ended (stopped). */
+export function convAgentState(c: Conversation): AgentState {
+	switch (c.state) {
+		case 'working':
+		case 'starting':
+			return 'working';
+		case 'waiting':
+			return 'review';
+		case 'idle':
+			return 'finished';
+		default:
+			return 'stopped';
+	}
+}
+
+/** The same pill as stateChip, for a Claude conversation of the workspace, with its own labels. */
+export function convChip(c: Conversation) {
+	const state = convAgentState(c);
+	return html`<span class="chip ${state}">${state === 'working' ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<i></i>`}${CONV_STATE_LABELS[c.state]}</span>`;
 }
 
 /** Plain text, to interpolate into a component's css template (as `listStyles` is). */

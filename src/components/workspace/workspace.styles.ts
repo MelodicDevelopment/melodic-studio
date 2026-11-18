@@ -201,7 +201,34 @@ export const paneStyles = () => css`
 	.resume h3 {
 		margin: 0;
 		font-size: 15px;
+		line-height: 1.45;
+		text-align: center;
 		color: var(--ml-color-text);
+		overflow-wrap: anywhere;
+		display: -webkit-box;
+		-webkit-line-clamp: 4;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.outside {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+		margin: 0;
+		font-size: 12px;
+		line-height: 1.5;
+		text-align: left;
+		color: var(--ml-color-text-muted);
+	}
+	.outside ml-icon {
+		flex: none;
+		margin-top: 1px;
+	}
+	.outside.warn {
+		padding: 8px 10px;
+		border-radius: 8px;
+		color: var(--ms-mod);
+		background: color-mix(in srgb, var(--ms-mod) 12%, transparent);
 	}
 	.said {
 		margin: 0;

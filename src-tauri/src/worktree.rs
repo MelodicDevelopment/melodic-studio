@@ -28,7 +28,7 @@ pub struct Worktree {
 }
 
 /// The checkouts git knows, main one first, without counting their changes.
-fn entries(git: &Git) -> Result<Vec<Worktree>> {
+pub(crate) fn entries(git: &Git) -> Result<Vec<Worktree>> {
     let out = git.run(&["worktree", "list", "--porcelain"])?;
     let mut trees = vec![];
     for block in out.split("\n\n") {

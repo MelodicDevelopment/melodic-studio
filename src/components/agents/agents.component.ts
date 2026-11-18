@@ -5,8 +5,11 @@ import { DialogService } from '@melodicdev/components/dialog';
 import { AgentsStore, MAX_ATTEMPTS, STATE_LABELS, attemptBranch, branchFor, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
-import type { AgentMode, Worktree } from '../../services/backend.service';
+import type { AgentMode, ClaudeSession, Worktree } from '../../services/backend.service';
 import { fileName, plural, relativeTime } from '../../shared/format';
+import { workspace, type Conversation } from '../../services/workspace.store';
+import { CONV_STATE_LABELS } from '../workspace/conversation-state';
+import { convAgentState } from './agent-state';
 
 type DialogId = Parameters<DialogService['close']>[0];
 
@@ -53,12 +56,64 @@ function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 	`;
 }
 
+/** A Claude conversation of the workspace: clicking it shows its tab there. */
+function convRow(c: Conversation) {
+	const state = convAgentState(c);
+	return html`
+		<div class="session ${c.unread ? 'unread' : ''}" title="Show this conversation in the Claude workspace" @click=${() => workspace().open(c.id)}>
+			<div class="top">
+				${state === 'working' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state}" title=${CONV_STATE_LABELS[c.state]}></span>`}
+				<span class="title">${c.title}</span>
+				${c.unread ? html`<span class="new" title="Something happened since you last looked"></span>` : ''}
+			</div>
+			<div class="meta">
+				<ml-icon icon="sparkle" size="xs"></ml-icon><span class="branch">${c.state === 'waiting' ? 'Needs you' : (c.branch ?? CONV_STATE_LABELS[c.state])}</span>
+				<span>${relativeTime(c.updated)}</span>
+			</div>
+		</div>
+	`;
+}
+
+/** Outside sessions shown before "Show more". */
+const ELSEWHERE_SHOWN = 8;
+/** A transcript that changed this recently may belong to a session still open in a terminal. */
+const RECENT_MS = 10 * 60_000;
+
+/** A Claude Code session started outside the app: clicking it adds it to the workspace, ready to resume. */
+function elsewhereRow(repoId: string, s: ClaudeSession) {
+	const recent = Date.now() - s.modified < RECENT_MS;
+	return html`
+		<div class="session" title=${`${s.prompt}\n\nStarted outside Melodic Studio. Click to continue it in the Claude workspace.`} @click=${() => workspace().adopt(repoId, s)}>
+			<div class="top">
+				<ml-icon class="lead" icon="terminal-window" size="xs"></ml-icon>
+				<span class="title">${s.title ?? s.prompt}</span>
+				${recent ? html`<span class="live" title="Its transcript changed in the last few minutes: it may still be open in a terminal">active</span>` : ''}
+			</div>
+			<div class="meta">
+				<ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'In a terminal'}</span>
+				<span>${relativeTime(s.modified)}</span>
+			</div>
+		</div>
+	`;
+}
+
 /** Sidebar "Agents" tab: sessions for this repository, its worktrees, and the dialogs for both. */
 @MelodicComponent({
 	selector: 'ms-agents',
 	template: (self: AgentsComponent) => {
 		const agents = self.agents;
 		const sessions = agents.current();
+		const repoId = self.repos.repo()?.id;
+		const convs = workspace()
+			.conversations()
+			.filter((c) => c.kind === 'claude' && c.repoId === repoId)
+			.sort((a, b) => b.updated - a.updated);
+		if (repoId && !(repoId in workspace().elsewhere())) {
+			// First look at this repository (the tab outlives a repository switch): read its sessions now, not at the next poll.
+			queueMicrotask(() => void workspace().loadElsewhere(repoId));
+		}
+		const elsewhere = repoId ? workspace().elsewhereIn(repoId) : [];
+		const shownElsewhere = self.allElsewhere ? elsewhere : elsewhere.slice(0, ELSEWHERE_SHOWN);
 		const comparing = agents.comparing();
 		const trees = agents.worktrees();
 		const doomed = self.doomed;
@@ -92,6 +147,25 @@ function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 						`
 							: sessionRow(self, g.sessions[0], false)
 				)}
+
+				${convs.length || elsewhere.length
+					? html`
+						<div class="group">Claude conversations</div>
+						${repeat(
+							convs,
+							(c) => c.id,
+							(c) => convRow(c)
+						)}
+						${repeat(
+							shownElsewhere,
+							(s) => s.id,
+							(s) => elsewhereRow(repoId!, s)
+						)}
+						${elsewhere.length > shownElsewhere.length
+							? html`<div class="more" @click=${() => (self.allElsewhere = true)}>Show ${elsewhere.length - shownElsewhere.length} more from the terminal</div>`
+							: ''}
+					`
+					: ''}
 
 				${trees.length > 1
 					? html`
@@ -256,6 +330,31 @@ function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 		}
 		.session:hover .new {
 			display: none;
+		}
+		.lead {
+			flex: none;
+			margin: 0 1px;
+			color: var(--ml-color-text-muted);
+		}
+		.live {
+			flex: none;
+			padding: 0 6px;
+			border-radius: 999px;
+			font-size: 10px;
+			font-weight: 600;
+			line-height: 16px;
+			color: var(--ms-run-text);
+			background: color-mix(in srgb, var(--ms-run) 14%, transparent);
+		}
+		.more {
+			padding: 7px 12px;
+			font-size: 12px;
+			color: var(--ml-color-text-link);
+			cursor: pointer;
+			border-bottom: 1px solid var(--ml-color-border-muted);
+		}
+		.more:hover {
+			background: var(--ms-hover);
 		}
 		.dot.review {
 			background: var(--ms-mod);
@@ -460,8 +559,29 @@ export class AgentsComponent {
 	/** The branch field follows the task text until it is edited by hand. */
 	private _branchTouched = false;
 
+	/** Every outside session, not just the newest few. */
+	allElsewhere = false;
+	private _poll: ReturnType<typeof setInterval> | null = null;
+	private readonly _refresh = (): void => {
+		const id = this.repos.repo()?.id;
+		if (id && !document.hidden) {
+			void workspace().loadElsewhere(id);
+		}
+	};
+
 	onCreate(): void {
 		void this.agents.init();
+		// Sessions started in a terminal come and go without telling us: look again now and then, and on focus.
+		this._refresh();
+		this._poll = setInterval(this._refresh, 20_000);
+		window.addEventListener('focus', this._refresh);
+	}
+
+	onDestroy(): void {
+		if (this._poll) {
+			clearInterval(this._poll);
+		}
+		window.removeEventListener('focus', this._refresh);
 	}
 
 	close(id: string): void {

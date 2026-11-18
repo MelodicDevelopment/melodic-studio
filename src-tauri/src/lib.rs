@@ -12,6 +12,7 @@ mod host_cli;
 mod lsp;
 mod paths;
 mod proc;
+mod sessions;
 mod terminal;
 mod worktree;
 
@@ -132,6 +133,7 @@ pub fn run() {
             terminal::term_resize,
             terminal::term_close,
             conversation::claude_open,
+            sessions::claude_sessions,
             lsp::lsp_servers,
             lsp::lsp_install,
             lsp::lsp_uninstall,
