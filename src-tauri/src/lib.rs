@@ -2,6 +2,7 @@ mod agent;
 mod ai_git;
 mod commands;
 mod config;
+mod conversation;
 mod dev;
 mod error;
 mod files;
@@ -45,6 +46,8 @@ pub fn run() {
             app.manage(lsp::Lsp::default());
             dev::start(app.handle());
             app.manage(terminal::Terminals::default());
+            app.manage(conversation::Hooks::default());
+            conversation::clean(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -123,6 +126,7 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_close,
+            conversation::claude_open,
             lsp::lsp_servers,
             lsp::lsp_install,
             lsp::lsp_uninstall,

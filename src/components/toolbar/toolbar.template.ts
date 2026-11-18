@@ -169,6 +169,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 				: ''}
 
 			<span class="spacer drag"></span>
+			<ms-workspace-button></ms-workspace-button>
 			<ms-agent-board></ms-agent-board>
 			${st?.host
 				? html`

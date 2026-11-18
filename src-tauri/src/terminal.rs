@@ -32,10 +32,17 @@ pub struct Pty {
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
+/// Markers Claude Code sets for the programs it starts. A dev build launched from inside a Claude Code
+/// session inherits them, and a `claude` started with them believes it is nested (it then, for one,
+/// saves no transcript, so the conversation could not be resumed).
+pub const CLAUDE_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"];
+
 /// The program a terminal runs, with its arguments.
 pub struct Shell {
     pub program: PathBuf,
     pub args: Vec<String>,
+    /// Variables of ours it must not inherit.
+    pub env_remove: Vec<&'static str>,
 }
 
 /// The user's shell. Unix: `$SHELL` as a login shell, so the profile runs (an
@@ -45,14 +52,14 @@ pub fn shell() -> Shell {
     if cfg!(windows) {
         for name in ["pwsh.exe", "powershell.exe"] {
             if let Some(program) = crate::proc::find(name) {
-                return Shell { program, args: vec!["-NoLogo".into()] };
+                return Shell { program, args: vec!["-NoLogo".into()], env_remove: CLAUDE_MARKERS.to_vec() };
             }
         }
         let program = std::env::var_os("COMSPEC").filter(|c| !c.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe"));
-        return Shell { program, args: vec![] };
+        return Shell { program, args: vec![], env_remove: CLAUDE_MARKERS.to_vec() };
     }
     let program = std::env::var_os("SHELL").map(PathBuf::from).filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("/bin/sh"));
-    Shell { program, args: vec!["-l".into()] }
+    Shell { program, args: vec!["-l".into()], env_remove: CLAUDE_MARKERS.to_vec() }
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -71,6 +78,9 @@ pub fn open(shell: &Shell, cwd: &Path, cols: u16, rows: u16, mut on_data: impl F
     let mut command = CommandBuilder::new(&shell.program);
     command.args(&shell.args);
     command.cwd(cwd);
+    for name in &shell.env_remove {
+        command.env_remove(name);
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     // A Mac app started from the Dock has no locale, and without one the shell garbles anything that is not ASCII.
@@ -160,14 +170,19 @@ pub async fn term_open(app: tauri::AppHandle, state: State<'_, AppState>, termin
     if !dir.is_dir() {
         return Err(AppError::msg("That folder no longer exists"));
     }
+    start(app, &terminals, &shell(), &dir, cols, rows, || {})
+}
+
+/// Run `program` in `dir` on a new pty under a new key. `on_end` runs once the program has ended.
+pub fn start(app: tauri::AppHandle, terminals: &Terminals, program: &Shell, dir: &Path, cols: u16, rows: u16, on_end: impl FnOnce() + Send + 'static) -> Result<String> {
     let key = format!("term-{}", terminals.last.fetch_add(1, Ordering::SeqCst) + 1);
     let (data_app, data_key) = (app.clone(), key.clone());
     let (exit_app, exit_key) = (app, key.clone());
-    // Held until the terminal is registered, so a shell that dies at once still finds itself in the map.
+    // Held until the terminal is registered, so a program that dies at once still finds itself in the map.
     let mut open_terminals = terminals.open.lock().unwrap();
     let pty = open(
-        &shell(),
-        &dir,
+        program,
+        dir,
         cols,
         rows,
         move |bytes| {
@@ -177,6 +192,7 @@ pub async fn term_open(app: tauri::AppHandle, state: State<'_, AppState>, termin
         move |code| {
             let gone = exit_app.state::<Terminals>().open.lock().unwrap().remove(&exit_key);
             drop(gone);
+            on_end();
             let _ = exit_app.emit("term-exit", TermExit { key: exit_key, code });
         },
     )?;
@@ -227,9 +243,9 @@ mod tests {
     /// A shell with no profile and no prompt theme, so what it prints is predictable.
     fn plain_shell() -> Shell {
         if cfg!(windows) {
-            Shell { program: std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe")), args: vec![] }
+            Shell { program: std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe")), args: vec![], env_remove: vec![] }
         } else {
-            Shell { program: PathBuf::from("/bin/sh"), args: vec![] }
+            Shell { program: PathBuf::from("/bin/sh"), args: vec![], env_remove: vec![] }
         }
     }
 

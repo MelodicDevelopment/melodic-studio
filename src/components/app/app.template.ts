@@ -206,6 +206,7 @@ export function appTemplate(self: AppComponent) {
 	const tab = store.tab();
 	const error = store.statusError();
 	const count = st?.files.length ?? 0;
+	const view = self.workspace.view();
 
 	return html`
 		<ms-repo-tabs></ms-repo-tabs>
@@ -232,17 +233,26 @@ export function appTemplate(self: AppComponent) {
 							<div class="work ${self.resizing ? 'resizing' : ''}">
 								<aside style="width: ${self.sidebarWidth}px">
 									<div class="tabs">
-										<button class="tab ${tab === 'changes' ? 'on' : ''}" @click=${() => store.setTab('changes')}>Changes${count ? html`<span class="count">${count}</span>` : ''}</button>
-										<button class="tab ${tab === 'history' ? 'on' : ''}" @click=${() => store.setTab('history')}>History</button>
-										<button class="tab ${tab === 'files' ? 'on' : ''}" @click=${() => store.setTab('files')}>Files</button>
-										<button class="tab ${tab === 'agents' ? 'on' : ''}" @click=${() => store.setTab('agents')}>Agents</button>
+										<button class="tab ${tab === 'files' ? 'on' : ''}" @click=${() => self.showTab('files')}>Files</button>
+										<button class="tab ${tab === 'changes' ? 'on' : ''}" @click=${() => self.showTab('changes')}>Changes${count ? html`<span class="count">${count}</span>` : ''}</button>
+										<button class="tab ${tab === 'history' ? 'on' : ''}" @click=${() => self.showTab('history')}>History</button>
+										<button class="tab ${tab === 'agents' ? 'on' : ''}" @click=${() => self.showTab('agents')}>Agents</button>
 									</div>
 									${tab === 'changes' ? html`<ms-changes></ms-changes>` : tab === 'history' ? html`<ms-history></ms-history>` : tab === 'agents' ? html`<ms-agents></ms-agents>` : html`<ms-explorer></ms-explorer>`}
 								</aside>
 								<div class="resizer" @pointerdown=${self.startResize} @dblclick=${() => self.resetWidth()}></div>
 								<div class="maincol">
-								<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
-								<ms-terminal></ms-terminal></div>
+									<div class="upper ${view} ${self.wsResizing ? 'resizing' : ''}">
+										<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
+										${view === 'hidden'
+											? ''
+											: html`
+												<div class="wsresizer" @pointerdown=${self.startWsResize} @pointermove=${self.moveWsResize} @pointerup=${self.endWsResize} @pointercancel=${self.endWsResize}></div>
+												<ms-workspace style=${view === 'side' ? `width: ${self.workspace.width()}px` : ''}></ms-workspace>
+											`}
+									</div>
+									<ms-terminal></ms-terminal>
+								</div>
 								${aiSidePanel()}
 							</div>
 						`}

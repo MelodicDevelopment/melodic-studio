@@ -68,6 +68,54 @@ export const appStyles = () => css`
 		min-height: 0;
 	}
 
+	/* ---- main pane and Claude workspace side by side ---- */
+	.upper {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+	}
+	.upper > main {
+		min-height: 0;
+	}
+	.upper.full > main,
+	.upper.full > .wsresizer {
+		display: none;
+	}
+	.upper ms-workspace {
+		flex: none;
+		/* Whatever width was saved, the main pane keeps some room. */
+		max-width: calc(100% - 280px);
+	}
+	.upper.full ms-workspace {
+		flex: 1;
+		max-width: none;
+	}
+	.wsresizer {
+		flex: none;
+		width: 1px;
+		position: relative;
+		z-index: 3;
+		background: var(--ml-color-border);
+		cursor: col-resize;
+		touch-action: none;
+	}
+	.wsresizer::after {
+		content: '';
+		position: absolute;
+		inset: 0 -3px;
+	}
+	.wsresizer:hover,
+	.upper.resizing .wsresizer {
+		background: var(--ml-color-primary);
+	}
+	.upper.resizing {
+		cursor: col-resize;
+		user-select: none;
+	}
+	.upper.resizing main {
+		pointer-events: none;
+	}
+
 	/* ---- sidebar tabs ---- */
 	.tabs {
 		flex: none;

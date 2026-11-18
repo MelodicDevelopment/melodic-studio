@@ -35,6 +35,8 @@ import './components/history/history.component';
 import './components/explorer/explorer.component';
 import './components/editor/editor.component';
 import './components/agents/agents.component';
+import './components/workspace/workspace.component';
+import './components/workspace/workspace-button.component';
 import './components/agents/agent-session.component';
 import './components/agents/worktree-banner.component';
 import './components/init/init-repo.component';

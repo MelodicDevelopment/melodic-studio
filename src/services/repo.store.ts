@@ -75,7 +75,7 @@ export class RepoStore {
 	readonly app = signal<AppStatus | null>(null);
 	readonly status = signal<RepoStatus | null>(null);
 	readonly statusError = signal<string | null>(null);
-	readonly tab = signal<Tab>('changes');
+	readonly tab = signal<Tab>('files');
 	readonly busy = signal<Busy>('');
 	readonly prompt = signal<Prompt>({});
 
@@ -216,7 +216,7 @@ export class RepoStore {
 	}
 
 	/** The active checkout changed (a worktree was selected): forget everything and re-read it. */
-	async switchContext(tab: Tab = 'changes'): Promise<void> {
+	async switchContext(tab: Tab = 'files'): Promise<void> {
 		this.resetRepoState();
 		this.tab.set(tab);
 		try {
@@ -257,7 +257,7 @@ export class RepoStore {
 		this.compareLoaded.set(false);
 		this.compareEnd.set(false);
 		this.compareCounts.set(new Map());
-		this.tab.set('changes');
+		this.tab.set('files');
 	}
 
 	/** Re-read the working tree. Cheap enough to run on focus and on a timer. */

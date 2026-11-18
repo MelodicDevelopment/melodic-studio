@@ -98,7 +98,9 @@ fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions) -> Result<V
 fn claude() -> Command {
     let mut c = crate::proc::command("claude");
     // Started from inside another Claude Code session these would make the child think it is nested.
-    c.env_remove("CLAUDECODE").env_remove("CLAUDE_CODE_ENTRYPOINT");
+    for name in crate::terminal::CLAUDE_MARKERS {
+        c.env_remove(name);
+    }
     c
 }
 

@@ -45,6 +45,16 @@ export class TerminalComponent {
 		this._observer.observe(screens);
 	}
 
+	/** The open repository (and so its terminals) can change without this component being rebuilt. */
+	private _shown: string | null | undefined = undefined;
+	onRender(): void {
+		const active = this.terminals.active();
+		if (active !== this._shown) {
+			this._shown = active;
+			this.terminals.layout();
+		}
+	}
+
 	onDestroy(): void {
 		window.removeEventListener('keydown', this.onKey, true);
 		window.clearTimeout(this._settle);

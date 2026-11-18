@@ -88,7 +88,7 @@ src/
 - Status is polled every 5 s while visible and on window focus; `GIT_OPTIONAL_LOCKS=0` keeps that from fighting a terminal.
 
 - Worktrees: `RepoRef.worktree` is the active checkout. `commands::repo()` resolves every command to it, so Changes, History, Files and language servers follow a worktree switch with no per-command work; `main_repo()` is for the few commands that must act on the main checkout. The frontend calls `RepoStore.switchContext()` after any switch.
-- Agents are Claude Code, not a reimplementation: `claude -p --output-format stream-json --verbose --permission-mode <mode> [--resume <id>]`, prompt on stdin (never argv), cwd checked against the repository's worktrees. Only assistant/user/result/init events are forwarded. `total_cost_usd` is the session's running total. Agents do not commit; the user reviews in the Changes tab of the agent's worktree, commits, then merges.
+- Agents are Claude Code, not a reimplementation: `claude -p --output-format stream-json --verbose --permission-mode <mode> [--resume <id>]`, prompt on stdin (never argv), cwd checked against the repository's worktrees. Only assistant/user/result/init events are forwarded. `total_cost_usd` is the session's running total. Agents do not commit; the user reviews in the Changes tab of the agent's worktree, commits, then merges. The Merge… dialog (agent-session.component.ts) lets the user pick the target: any local branch (merged where it is checked out: its worktree, else the main checkout switches to it first and must be clean) or a new branch made from one; or, for protected branches, "Open a pull request" switches to the agent's worktree and opens the normal PR dialog. `AgentsStore.merge(session, into, from)`.
 - Agent sessions have a `kind`. `task` is the above. `ask` is a read-only chat (Ask the repository, History questions): it runs in the active checkout, never a new worktree, in `default` permission mode with `RunOptions { tools, builtin, lean }`. `tools` (`ASK_TOOLS` in agents.store.ts) is the allow-list, `builtin` (`--tools`) limits the tools Claude can even see to the names in it, so the user's own settings cannot widen it; `lean` skips MCP servers and skills but keeps the session, so follow-ups `--resume`. History questions add `Bash(git log:*)`, `git show`, `git diff`, `git blame`. The first prompt (`askPrompt`) carries the rules; run against the real CLI it had to say "one plain git command, no `cd`, no `git -C`, no pipes", because those forms do not match the rules and are refused.
 - Agent text is never HTML. `rich-text.ts` parses the Markdown itself and renders through templates; the only links are made there: `path:line` (opens the Files tab at the line via `ExplorerStore.openAt`), commit hashes in history sessions (selects the commit, loading more history until it is found) and http(s) addresses (opener plugin). File detection is strict on purpose (`fileRef`): a link that opens nothing is worse than none.
 - Parallel attempts are ordinary task sessions sharing a `group`, on `branch`, `branch-2`, `branch-3`. Each records `base`, the commit its worktree started at; `worktree_diff` compares the checkout with it (commits since, uncommitted and untracked work) without touching the index or the files. "Keep this one" deletes the other attempts' worktrees and branches.
@@ -108,12 +108,29 @@ src/
 
 - `[profile.release.build-override] strip = false` in Cargo.toml is load-bearing: with a macOS deployment target of 13+ (ours is 14) recent Xcode's `strip` corrupts proc-macro libraries and the release build fails with "mis-aligned LINKEDIT string pool".
 
+## Claude workspace
+
+```
+src-tauri/src/conversation.rs      claude_open: the user's `claude` CLI, interactive, on a pty (terminal::start, so term_* work on it);
+                                   its hooks post to a 127.0.0.1 receiver here and arrive as `claude-hook` events
+src/services/screens.ts            ScreenPool: every xterm screen (bottom panel and workspace), started once it has a size
+src/services/workspace.store.ts    conversations + shells, the split layout per repository, hook-driven state, saved conversations
+src/components/workspace           ms-workspace (bar, split tree, overview), ms-ws-pane (tabs, drag to move/split), toolbar button
+```
+
+- A conversation is Claude Code itself in a terminal, nothing reimplemented. Status comes from HTTP hooks passed with `--settings <file>` (one file per conversation in the app cache dir, deleted when it ends): `UserPromptSubmit` (working; the first prompt becomes the title), `PreToolUse`/`PostToolUse` on `Task|Agent` (subagents), `Notification` (needs you; `idle_prompt` ignored), `Stop` (ready, carries `last_assistant_message`). They are added to the user's own hooks. Hook URLs carry a secret and a tag of ours, mapped to the terminal key in Rust. `SessionStart` does not reach HTTP hooks (checked with 2.1.327); nothing depends on it.
+- New conversations get `--session-id <uuid>` from the window; saved ones (localStorage `studio.conversations`, after a restart or a closed tab) continue with `--resume`, only on a click. Shells are not saved.
+- `CLAUDE_MARKERS` (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_CHILD_SESSION) are removed from every child: a dev build started from inside Claude Code would otherwise make `claude` think it is nested and save no transcript.
+- Layout: a tree of splits (`row`/`column`, shares adding up to 1) and panes (tabs); one per repository (`studio.workspace.layouts`). Tabs move with pointer events (no HTML drag and drop): the centre of a pane adds to it, an edge splits it. View: hidden / side (beside the main pane, `studio.workspace.width`) / full; Cmd/Ctrl+Shift+K toggles, Cmd/Ctrl+\ splits.
+- Screens move between shadow roots, so `ScreenPool.show` adopts xterm's CSS into each root it shows in (without it, xterm's measuring text shows as a line of `iiii7777wwww`).
+- The bottom terminal panel is per repository too: `TerminalStore.all` holds every shell, `tabs`/`active` are the open repository's.
+
 ## Integrated terminal
 
 ```
 src-tauri/src/terminal.rs          shells on a pseudo-terminal (portable-pty: Unix ptys, Windows ConPTY): term_open / term_write /
                                    term_resize / term_close, `term-data` and `term-exit` events
-src/services/terminal.store.ts     every terminal with its xterm.js screen; the panel's open/closed state and height (studio.terminal.*)
+src/services/terminal.store.ts     the panel's shells (per repository; screens in ScreenPool), open/closed state and height (studio.terminal.*)
 src/shared/xterm.ts                lazy xterm.js load, its CSS adopted into the shadow root, theme from --ml-*/--ms-* tokens
 src/components/terminal            ms-terminal: the panel under the main pane (tabs, top edge to drag, Ctrl+` / Ctrl+Shift+`)
 src/services/demo-terminal.ts      the pretend shell of the browser preview
@@ -121,7 +138,7 @@ src/services/demo-terminal.ts      the pretend shell of the browser preview
 
 - The shell is the user's own: `$SHELL -l` on Unix (a login shell, because a GUI-launched app has almost no environment), `pwsh.exe`, else `powershell.exe`, else `%COMSPEC%` on Windows. It starts in the active checkout (`commands::repo`), so a new terminal follows a worktree switch; terminals already open stay where they are.
 - Output travels as base64 of the raw bytes (a read can end inside a UTF-8 character) and can arrive before `term_open` has returned the key, so the store holds early events until it knows the key. Keystrokes are sent one write at a time: async commands may otherwise overtake each other.
-- The xterm `Terminal` objects live in `TerminalStore`, not in the component: the work area is rebuilt on a repository or worktree switch and the panel is hidden with `display: none`, and neither may cost a shell or its scrollback. `term.open()` runs only once its element is on screen (xterm measures glyphs).
+- The xterm `Terminal` objects live in `ScreenPool`, not in a component: the work area is rebuilt on a repository or worktree switch and the panel is hidden with `display: none`, and neither may cost a shell or its scrollback. `term.open()` runs only once its element is on screen (xterm measures glyphs).
 - The end of a shell comes from a thread waiting on the child, not from the output stream: ConPTY never reports end of stream. Closing a terminal hangs up (SIGHUP) on Unix and terminates on Windows; dropping the pty takes the rest along, and the window's `Destroyed` event closes them all.
 - Ctrl+` is Ctrl on every OS and is caught in the capture phase, or a focused terminal would send it to the shell. Off the Mac, copy and paste are Ctrl+Shift+C / Ctrl+Shift+V; Windows also gets Ctrl+V and Ctrl+C-with-a-selection.
 - Language servers: a project's own copy (`node_modules/.bin`) first, then the app's managed copy, then PATH. Nothing is bundled; managed copies are installed on request (Settings) into the app's data dir (`app_data_dir()/language-servers`: `node/` is an npm prefix, `dotnet/` a tool path, `storage/` server caches), never globally. The protocol is spoken in `lsp.service.ts` + `lsp/protocol.ts`; the Rust side only frames messages. The editor component knows nothing about it.

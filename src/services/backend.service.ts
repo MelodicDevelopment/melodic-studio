@@ -304,6 +304,22 @@ export interface LanguageServer {
 	/** For servers the app cannot install: the command that does. */
 	hint: string | null;
 }
+/** One Claude Code hook call for a conversation (see src-tauri/src/conversation.rs). */
+export interface ClaudeHook {
+	/** The conversation's terminal key. */
+	key: string;
+	event: 'SessionStart' | 'UserPromptSubmit' | 'PreToolUse' | 'PostToolUse' | 'Notification' | 'Stop' | 'SessionEnd';
+	sessionId: string | null;
+	transcriptPath: string | null;
+	/** Notification: what it waits for. UserPromptSubmit: the prompt. Stop: the last answer. */
+	text: string | null;
+	/** Notification: permission_prompt, idle_prompt, ... SessionStart: startup, resume, clear. */
+	kind: string | null;
+	toolUseId: string | null;
+	description: string | null;
+	subagentType: string | null;
+}
+
 export type OpenTarget = 'finder' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
 export type ResetMode = 'soft' | 'mixed' | 'hard';
 export interface AppError {
@@ -410,6 +426,12 @@ export class BackendService {
 	termWrite(key: string, data: string) { return this.call<void>('term_write', { key, data }); }
 	termResize(key: string, cols: number, rows: number) { return this.call<void>('term_resize', { key, cols, rows }); }
 	termClose(key: string) { return this.call<void>('term_close', { key }); }
+	/**
+	 * Start the user's `claude` interactively in `cwd` (the repository or one of its worktrees), on a pty like a
+	 * terminal: the term* calls and events work on the key it answers. `session` is the conversation's id, new or
+	 * (with `resume`) one to continue. Claude Code's hooks report on it as `claude-hook` events.
+	 */
+	claudeOpen(id: string, cwd: string, session: string, resume: boolean, cols: number, rows: number) { return this.call<string>('claude_open', { id, cwd, session, resume, cols, rows }); }
 	/** The servers Settings lists, looked for in the active checkout of `id`, the app's own folder and PATH. */
 	async lspServers(id: string | null) { return (await this.call<LanguageServer[] | undefined>('lsp_servers', { id })) ?? []; }
 	/** Installs into the app's data folder, never globally. Takes as long as npm or dotnet do. */
@@ -1138,6 +1160,7 @@ class DemoBackend {
 			}
 			case 'repo_init':
 				return this.handle('repo_add', { path: args.path });
+			case 'claude_open':
 			case 'term_open':
 			case 'term_write':
 			case 'term_resize':
