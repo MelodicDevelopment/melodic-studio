@@ -6,7 +6,7 @@ Pushing a tag like `v0.2.0` runs `.github/workflows/release.yml`, which builds i
 
 | Platform | Runner | Files |
 |---|---|---|
-| macOS (Apple silicon and Intel in one universal build, macOS 14+) | `macos-latest` | `.dmg`, `.app.tar.gz` |
+| macOS (Apple silicon only, macOS 14+; Intel Macs are not supported from 0.4.1) | `macos-latest` | `.dmg`, `.app.tar.gz` |
 | Windows (x64) | `windows-latest` | NSIS `-setup.exe`, `.msi` |
 | Linux (x64) | `ubuntu-22.04` | `.deb`, `.rpm`, `.AppImage` |
 
@@ -55,6 +55,11 @@ The workflow still builds. A platform whose secrets are missing is built unsigne
 Each published release carries `latest.json` beside the installers. The installed app asks GitHub for `releases/latest/download/latest.json` a few seconds after launch and every four hours, downloads a newer version in the background, verifies it against the public key, and shows "Version X is ready · Restart to update" in the toolbar (also under Settings, with a "Check now" button). Only a **published, non-draft, latest** release is seen. Development builds never check.
 
 The update address is `https://github.com/MelodicDevelopment/melodic-studio/...`; if the repository is named differently, change `plugins.updater.endpoints` in `src-tauri/tauri.conf.json` before the first release, because already-installed copies keep the address they were built with.
+
+## Before tagging
+
+CI on pushes to `main` runs on Linux only. When a change touched platform code (paths, processes, the window), run
+Actions → CI → Run workflow first: that is the full macOS / Windows / Linux check.
 
 ## Cutting a release
 

@@ -45,9 +45,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple silicon only: a universal build compiles everything twice. Intel Macs are not supported.
           - name: macOS
             platform: macos-latest
-            args: --target universal-apple-darwin --verbose
+            args: --target aarch64-apple-darwin --verbose
           - name: Linux
             # The oldest supported Ubuntu, so the binaries run on older distributions too.
             platform: ubuntu-22.04
@@ -72,7 +73,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:

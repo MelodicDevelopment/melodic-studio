@@ -1,9 +1,17 @@
 name: CI
 
+# Pushes to main are checked on Linux only (fast, and Linux runners are plentiful). The full three-OS check
+# runs on pull requests, once a week, and from "Run workflow" (do that before tagging a release when the
+# change touched platform code). Changes to docs alone are not checked at all.
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -17,10 +25,7 @@ jobs:
       # One platform failing must not hide what the other two say.
       fail-fast: false
       matrix:
-        include:
-          - { name: macOS, os: macos-latest }
-          - { name: Windows, os: windows-latest }
-          - { name: Linux, os: ubuntu-latest }
+        include: ${{ fromJSON(github.event_name == 'push' && '[{"name":"Linux","os":"ubuntu-latest"}]' || '[{"name":"macOS","os":"macos-latest"},{"name":"Windows","os":"windows-latest"},{"name":"Linux","os":"ubuntu-latest"}]') }}
     steps:
       - uses: actions/checkout@v7
 
