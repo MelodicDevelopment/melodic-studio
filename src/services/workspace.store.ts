@@ -739,9 +739,14 @@ export class WorkspaceStore {
 			}
 			return;
 		}
+		if (!code || ranFor > FAILED_START_MS) {
+			// Exiting Claude Code (/exit, Ctrl+D twice) closes the tab; a titled conversation stays saved and resumable.
+			this.close(id);
+			return;
+		}
 		this.patch(id, { state: 'ended', waitingFor: null, subagents: conv.subagents.map((s) => (s.running ? { ...s, running: false, ended: Date.now() } : s)) });
 		if (screen) {
-			this.pool.note(screen, code && ranFor < FAILED_START_MS ? `[Claude Code ended with exit code ${code}]` : '[Claude Code ended]');
+			this.pool.note(screen, `[Claude Code ended with exit code ${code}]`);
 		}
 		this.save();
 	}
