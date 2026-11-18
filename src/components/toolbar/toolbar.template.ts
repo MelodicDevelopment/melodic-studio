@@ -8,12 +8,20 @@ function hostIcon(provider: string): string {
 	return provider === 'github' ? 'github-logo' : provider === 'gitlab' ? 'gitlab-logo' : provider === 'azure' ? 'windows-logo' : 'globe';
 }
 
+/** "worktree" / "main checkout" for a branch another checkout holds (picking it switches there), else its date. */
+function holderLabel(self: ToolbarComponent, b: Branch) {
+	const h = self.holder(b);
+	return h
+		? html`<span class="when" title=${`Checked out at ${h.path}; picking it switches there`}>${h.isMain ? 'main checkout' : 'worktree'}</span>`
+		: html`<span class="when">${relativeTime(b.date)}</span>`;
+}
+
 function branchRow(self: ToolbarComponent, b: Branch) {
 	return html`
 		<div class="item ${b.isCurrent ? 'current' : ''}" @click=${() => self.pickBranch(b)} @contextmenu=${(e: MouseEvent) => self.branchMenu(e, b)}>
 			<ml-icon icon=${b.isCurrent ? 'check' : b.isRemote ? 'cloud' : 'git-branch'} size="sm"></ml-icon>
 			<span class="name">${b.name}</span>
-			<span class="when">${relativeTime(b.date)}</span>
+			${holderLabel(self, b)}
 			${b.isRemote
 				? html`
 					<span class="acts">

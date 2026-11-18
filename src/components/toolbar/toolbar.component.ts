@@ -3,7 +3,8 @@ import { Service } from '@melodicdev/core/injection';
 import { ToastService } from '@melodicdev/components/toast';
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
-import { isDesktop, isMac, isWindows, type Branch, type OpenTarget, type RepoSummary } from '../../services/backend.service';
+import { AgentsStore } from '../../services/agents.store';
+import { isDesktop, isMac, isWindows, type Branch, type OpenTarget, type RepoSummary, type Worktree } from '../../services/backend.service';
 import { toolbarTemplate } from './toolbar.template';
 import { toolbarStyles } from './toolbar.styles';
 
@@ -18,6 +19,7 @@ export type ToolbarMenu = ({ kind: 'repo'; repo: RepoSummary } | { kind: 'branch
 export class ToolbarComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(HostStore) readonly host!: HostStore;
+	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 	elementRef!: HTMLElement;
 
@@ -143,6 +145,7 @@ export class ToolbarComponent {
 	opened(id: PopoverId): void {
 		if (id === 'branch-pop') {
 			void this.store.loadBranches();
+			void this.agents.loadWorktrees();
 		}
 		const input = this.elementRef.shadowRoot?.querySelector(`#${id} ml-input`);
 		requestAnimationFrame(() => (input?.shadowRoot?.querySelector('input') as HTMLInputElement | null)?.focus());
@@ -157,9 +160,24 @@ export class ToolbarComponent {
 	pickBranch(branch: Branch): void {
 		this.close('branch-pop');
 		this.branchFilter = '';
-		if (!branch.isCurrent) {
+		if (branch.isCurrent) {
+			return;
+		}
+		// git refuses to check out a branch another worktree has; go to that checkout instead.
+		const holder = this.holder(branch);
+		if (holder) {
+			void this.agents.view(holder.isMain ? null : holder.path);
+		} else {
 			void this.store.checkout(branch);
 		}
+	}
+
+	/** The other checkout (main or a worktree) that has this local branch checked out, if any. */
+	holder(branch: Branch): Worktree | null {
+		if (branch.isRemote || branch.isCurrent) {
+			return null;
+		}
+		return this.agents.worktrees().find((w) => w.branch === branch.name && !w.active) ?? null;
 	}
 
 	openHost(target: OpenTarget): void {
