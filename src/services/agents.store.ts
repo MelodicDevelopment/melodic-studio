@@ -679,16 +679,52 @@ export class AgentsStore {
 		await this.view(session.isolated ? session.cwd : null);
 	}
 
-	/** Merge a session's branch into whatever the main checkout has checked out. */
-	async merge(session: AgentSession): Promise<void> {
-		if (!session.branch || !(await this.showRepo(session))) {
-			return;
+	/**
+	 * Merge a session's branch into `into`, a branch the user picked (protected branches are
+	 * left to a pull request instead). The merge happens where `into` is checked out: a worktree
+	 * that has it, else the main checkout, which switches to it first (refused while it has
+	 * uncommitted changes). With `from`, `into` is a new branch made from `from` in the main checkout.
+	 */
+	async merge(session: AgentSession, into: string, from: string | null = null): Promise<boolean> {
+		if (!session.branch || !into || into === session.branch || !(await this.showRepo(session))) {
+			return false;
 		}
-		await this.view(null, 'agents');
-		if (await this.repos.merge(session.branch)) {
-			this.update(session.id, (s) => ({ ...s, review: false }), false);
+		try {
+			const trees = await this.backend.worktrees(session.repoId);
+			const holder = from ? null : trees.find((w) => w.branch === into);
+			if (holder && !holder.isMain) {
+				await this.view(holder.path, 'agents');
+			} else {
+				await this.view(null, 'agents');
+				const main = trees.find((w) => w.isMain);
+				if (from) {
+					if (!(await this.repos.createBranch(into, from))) {
+						return false;
+					}
+				} else if (!holder) {
+					if (main?.changes) {
+						this.toast.error('The main checkout has uncommitted changes', `Commit or stash them before switching it to ${into}.`);
+						return false;
+					}
+					await this.repos.loadBranches();
+					const branch = this.repos.branches().find((b) => !b.isRemote && b.name === into);
+					if (!branch || !(await this.repos.checkout(branch))) {
+						return false;
+					}
+				}
+			}
+			const ok = await this.repos.merge(session.branch);
+			if (ok) {
+				this.update(session.id, (s) => ({ ...s, review: false }), false);
+			}
+			return ok;
+		} catch (e) {
+			this.fail(e);
+			return false;
+		} finally {
+			await this.loadWorktrees();
+			await this.repos.loadBranches();
 		}
-		await this.loadWorktrees();
 	}
 
 	private drop(id: string): void {

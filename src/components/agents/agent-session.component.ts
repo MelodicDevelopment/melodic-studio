@@ -3,10 +3,14 @@ import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
 import { AgentsStore, scopeOf, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
+import { HostStore } from '../../services/host.store';
+import { DialogService } from '@melodicdev/components/dialog';
 import type { AgentMode } from '../../services/backend.service';
 import { samePath } from '../../services/agent-paths';
 import { AGENT_MODES } from './agents.component';
 import { richText, richTextStyles, type RichOptions } from './rich-text';
+
+type DialogId = Parameters<DialogService['close']>[0];
 
 const TOOL_ICONS: Record<string, string> = { Read: 'file-text', Edit: 'pencil-simple', Write: 'file-plus', Bash: 'terminal-window', Grep: 'magnifying-glass', Glob: 'magnifying-glass', WebFetch: 'globe', WebSearch: 'globe', Task: 'robot', Agent: 'robot' };
 
@@ -15,6 +19,66 @@ function linking(self: AgentSessionComponent, s: AgentSession): RichOptions {
 	const repo = self.repos.repo();
 	const here = !!repo && repo.id === s.repoId && samePath(s.cwd, repo.worktree ?? repo.path);
 	return { files: s.kind === 'ask' || here, commits: s.kind === 'ask' && scopeOf(s) === 'history', root: s.cwd };
+}
+
+/** The "into" choice that makes a new branch instead of picking one. */
+const NEW_BRANCH = '\u0000new';
+
+/** Where an agent's branch goes: a branch the user picks (or a new one), or a pull request for a protected one. */
+function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: number) {
+	const trees = self.agents.worktrees();
+	const main = trees.find((w) => w.isMain);
+	const holderOf = (name: string) => trees.find((w) => w.branch === name);
+	const locals = self.repos.branches().filter((b) => !b.isRemote && b.name !== s.branch);
+	const options = [
+		...locals.map((b) => {
+			const holder = holderOf(b.name);
+			return { value: b.name, label: holder ? `${b.name} (${holder.isMain ? 'main checkout' : 'in a worktree'})` : b.name };
+		}),
+		{ value: NEW_BRANCH, label: 'New branch…' },
+	];
+	const creating = self.into === NEW_BRANCH;
+	const target = creating ? self.newName.trim() : self.into;
+	const holder = creating ? null : holderOf(self.into);
+	const blocked = !creating && !holder && !!main?.changes;
+	const host = self.repos.status()?.host;
+	const pr = host?.pulls ? host.pullsLabel.toLowerCase().replace(/s$/, '') : null;
+	let where = '';
+	if (creating) {
+		where = target ? `Creates ${target} from ${self.newFrom} in the main checkout, which switches to it, then merges.` : '';
+	} else if (holder?.isMain) {
+		where = `Merges in the main checkout, which has ${self.into} checked out.`;
+	} else if (holder) {
+		where = `Merges in the worktree that has ${self.into} checked out.`;
+	} else if (self.into) {
+		where = `The main checkout switches from ${main?.branch ?? 'its current commit'} to ${self.into}, then merges.`;
+	}
+	return html`
+		<ml-dialog #agent-merge style="--ml-dialog-max-width: 520px">
+			<h3 slot="dialog-header">Merge ${s.branch ?? ''}</h3>
+			<div class="dlg">
+				<ml-select label="Into" .options=${options} .value=${self.into} @ml:change=${(e: CustomEvent) => (self.into = e.detail.value)}></ml-select>
+				${creating
+					? html`
+						<ml-input label="New branch" .value=${self.newName} @ml:input=${(e: CustomEvent) => (self.newName = String(e.detail.value).replace(/\s+/g, '-'))}></ml-input>
+						<ml-select label="Starting from" .options=${locals.map((b) => ({ value: b.name, label: b.name }))} .value=${self.newFrom} @ml:change=${(e: CustomEvent) => (self.newFrom = e.detail.value)}></ml-select>
+					`
+					: ''}
+				${where ? html`<p class="hint">${where}</p>` : ''}
+				${blocked ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The main checkout has uncommitted changes. Commit or stash them before it switches to ${self.into}.</span></p>` : ''}
+				${uncommitted
+					? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent's worktree has ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Only committed work is merged: review and commit first.</span></p>`
+					: ''}
+				${pr ? html`<p class="hint">Branch protected? Push ${s.branch} and open a ${pr} instead.</p>` : ''}
+			</div>
+			<div slot="dialog-footer" class="foot">
+				${pr ? html`<ml-button variant="outline" @ml:click=${() => self.openPr(s)}><ml-icon slot="icon-start" icon="git-pull-request"></ml-icon>Open a ${pr}…</ml-button>` : ''}
+				<span class="grow"></span>
+				<ml-button variant="outline" @ml:click=${() => self.closeMerge()}>Cancel</ml-button>
+				<ml-button variant="primary" ?disabled=${!target || blocked || (creating && !self.newFrom)} ?loading=${self.repos.busy() === 'merge'} @ml:click=${() => self.merge(s)}>Merge</ml-button>
+			</div>
+		</ml-dialog>
+	`;
 }
 
 /** Main pane of the Agents tab: one session's transcript and the box to send it more, a new question, or a comparison of attempts. */
@@ -71,10 +135,11 @@ function linking(self: AgentSessionComponent, s: AgentSession): RichOptions {
 				${ask
 					? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.openAsk(scopeOf(s))}><ml-icon slot="icon-start" icon="plus"></ml-icon>New question</ml-button>`
 					: html`<ml-button variant="outline" size="sm" ?disabled=${running} @ml:click=${() => agents.review(s)}><ml-icon slot="icon-start" icon="git-diff"></ml-icon>Review changes</ml-button>`}
-				${!ask && s.isolated && mainBranch && mainBranch !== s.branch
-					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into ${mainBranch}. Commit the agent's work first.`} @ml:click=${() => agents.merge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge into ${mainBranch}</ml-button>`
+				${!ask && s.isolated && s.branch && s.branch !== mainBranch
+					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into a branch you choose, or open a pull request. Commit the agent's work first.`} @ml:click=${() => self.openMerge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>`
 					: ''}
 			</div>
+			${mergeDialog(self, s, tree?.changes ?? 0)}
 
 			<div class="log">
 				${s.items.map((item) =>
@@ -268,14 +333,58 @@ function linking(self: AgentSessionComponent, s: AgentSession): RichOptions {
 			font-size: 12px;
 			color: var(--ml-color-text-muted);
 		}
+		h3 {
+			margin: 0;
+			font-size: 16px;
+			font-weight: 600;
+		}
+		.dlg {
+			display: flex;
+			flex-direction: column;
+			gap: 14px;
+			color: var(--ml-color-text-secondary);
+		}
+		.dlg p {
+			margin: 0;
+			line-height: 1.5;
+		}
+		.dlg .hint {
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+		}
+		.warn {
+			display: flex;
+			gap: 8px;
+			padding: 9px 11px;
+			border-radius: 8px;
+			background: var(--ml-color-warning-subtle);
+			color: var(--ml-color-text);
+		}
+		.warn ml-icon {
+			flex: none;
+			margin-top: 1px;
+			color: var(--ml-color-warning);
+		}
+		.foot {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			width: 100%;
+		}
 	`,
 })
 export class AgentSessionComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
+	@Service(HostStore) readonly host!: HostStore;
+	@Service(DialogService) private readonly _dialogs!: DialogService;
 	elementRef!: HTMLElement;
 
 	draft = '';
+	/** Merge dialog: the branch picked (or NEW_BRANCH), and the new branch's name and starting point. */
+	into = '';
+	newName = '';
+	newFrom = '';
 	private _seen = 0;
 	private _shown: string | null = null;
 
@@ -305,6 +414,35 @@ export class AgentSessionComponent {
 			void this.agents.follow(s, ref);
 		}
 	};
+
+	async openMerge(s: AgentSession): Promise<void> {
+		await Promise.all([this.repos.loadBranches(), this.agents.loadWorktrees()]);
+		const main = this.agents.worktrees().find((w) => w.isMain)?.branch ?? '';
+		const tail = (s.branch ?? '').split('/').pop() ?? '';
+		this.into = main && main !== s.branch ? main : NEW_BRANCH;
+		this.newName = tail ? `feature/${tail}` : '';
+		this.newFrom = main || (this.repos.branches().find((b) => !b.isRemote && b.name !== s.branch)?.name ?? '');
+		this._dialogs.open('agent-merge' as DialogId);
+	}
+
+	closeMerge(): void {
+		this._dialogs.close('agent-merge' as DialogId);
+	}
+
+	async merge(s: AgentSession): Promise<void> {
+		const creating = this.into === NEW_BRANCH;
+		const into = creating ? this.newName.trim() : this.into;
+		if (await this.agents.merge(s, into, creating ? this.newFrom : null)) {
+			this.closeMerge();
+		}
+	}
+
+	/** A pull request is made from the checkout on screen, so the agent's worktree becomes it first. */
+	async openPr(s: AgentSession): Promise<void> {
+		this.closeMerge();
+		await this.agents.view(s.cwd, 'changes');
+		this.host.openPr();
+	}
 
 	send(): void {
 		const s = this.agents.selected();
