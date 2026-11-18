@@ -48,7 +48,7 @@ import { plural } from '../../shared/format';
 		}
 		.strip > ml-icon {
 			flex: none;
-			color: var(--ml-color-primary);
+			color: var(--ms-ai);
 		}
 		.grow {
 			flex: 1;

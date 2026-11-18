@@ -46,7 +46,7 @@ export const aiPanelStyles = () => css`
 		font-weight: 600;
 	}
 	.name ml-icon {
-		color: var(--ml-color-primary);
+		color: var(--ms-ai);
 	}
 	.tab {
 		all: unset;

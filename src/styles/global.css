@@ -1,91 +1,172 @@
-/* Melodic Studio theme. --ml-* overrides restyle Melodic components; --rm-* are
-   Melodic Studio-only tokens, each with a light and a dark value. `data-theme` on
-   <html> is set by applyTheme(); light is the base so dark wins on specificity. */
+/* Melodic Studio theme: "Night Studio", the melodic.dev palette (web/melodic.dev/design-system/tokens*.css)
+   applied to a desktop tool. --ml-* overrides restyle Melodic components; --ms-* are Melodic Studio-only
+   tokens, each with a light and a dark value. `data-theme` on <html> is set by applyTheme(); light is the
+   base so dark wins on specificity.
+
+   Colour roles: magenta (--ml-color-primary, --ms-you) is "you": the one main action of a view and anything
+   waiting on the user. Azure (--ms-run) is git state and running work. Purple (--ms-ai) is anything that
+   asks Claude or that Claude said. The brand gradient (--ms-signal) appears once: the rule under the toolbar. */
+
+/* The fonts themselves are bundled (@fontsource-variable, imported in main.ts), so nothing is fetched. */
 
 :root {
-	--ml-radius: 6px;
-	--ml-radius-md: 6px;
-	--ml-radius-lg: 10px;
-	--ml-radius-xl: 12px;
+	--ml-font-sans: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--ml-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--ms-font-display: 'Space Grotesk Variable', 'Space Grotesk', var(--ml-font-sans);
+
+	--ml-radius: 8px;
+	--ml-radius-md: 8px;
+	--ml-radius-lg: 12px;
+	--ml-radius-xl: 14px;
+
+	--ms-signal: linear-gradient(90deg, #ff0082, #b3179c, #49216d, #009dd9, #ff0082);
 }
 
 :root,
 :root[data-theme='light'] {
 	color-scheme: light;
 
-	--ml-color-background: #f6f7f9;
+	--ml-color-background: #fafafa;
 	--ml-color-surface: #ffffff;
-	--ml-color-primary: #3b62e0;
-	--ml-color-primary-hover: #3154c8;
-	--ml-color-primary-active: #2947ab;
-	--ml-color-primary-subtle: #e8edfd;
+	--ml-color-surface-raised: #f4f4f5;
+	--ml-color-surface-overlay: #ffffff;
+	--ml-color-surface-sunken: #f4f4f5;
+	--ml-color-input-bg: #ffffff;
+	--ml-color-border: #e4e4e7;
+	--ml-color-border-strong: #d4d4d8;
+	--ml-color-border-muted: #efeff1;
+	--ml-color-border-focus: #d6006a;
+	--ml-color-text: #18181b;
+	--ml-color-text-secondary: #3f3f46;
+	--ml-color-text-muted: #6b6b76;
+	--ml-color-text-subtle: #a1a1aa;
+	--ml-color-text-inverse: #ffffff;
+	--ml-color-text-link: #d6006a;
+	--ml-color-text-link-hover: #a3004f;
+	--ml-color-primary: #d6006a;
+	--ml-color-primary-hover: #b8005b;
+	--ml-color-primary-active: #9c004d;
+	--ml-color-primary-subtle: #fde7f2;
+	--ml-color-focus-ring: rgba(214, 0, 106, 0.35);
+	--ml-color-info: #0072a3;
+	--ml-color-info-subtle: #e6f4fa;
+	--ml-color-success: #15803d;
+	--ml-color-success-subtle: #e9f7ee;
+	--ml-color-warning: #b45309;
+	--ml-color-warning-subtle: #fdf3e2;
+	--ml-color-danger: #dc2626;
+	--ml-color-danger-hover: #b91c1c;
+	--ml-color-danger-subtle: #fdeded;
 
-	--ms-toolbar-bg: #1f2330;
-	--ms-toolbar-fg: #f2f4f8;
-	--ms-toolbar-muted: #9aa3b8;
-	--ms-toolbar-border: #333a4d;
-	--ms-toolbar-hover: #2b3142;
+	/* The toolbar stays night in both themes. */
+	--ms-toolbar-bg: #100b1c;
+	--ms-toolbar-fg: #eceaf3;
+	--ms-toolbar-muted: #aba4be;
+	--ms-toolbar-border: #241c35;
+	--ms-toolbar-hover: #221a33;
+	--ms-toolbar-raised: #161020;
+	--ms-strip-bg: #0b0814;
 	--ms-sidebar-bg: #ffffff;
-	--ms-hover: rgba(30, 40, 70, 0.06);
-	--ms-selected: #e3eafd;
-	--ms-selected-fg: #1c2b5e;
+	--ms-hover: rgba(24, 24, 27, 0.045);
+	--ms-selected: #fdf0f7;
+	--ms-selected-fg: #18181b;
+	--ms-selected-ring: rgba(214, 0, 106, 0.22);
+	--ms-seg-on: #ffffff;
+	--ms-seg-shadow: 0 1px 2px rgba(24, 24, 27, 0.12);
 
-	--ms-add: #1f8a55;
-	--ms-del: #cf3a3a;
-	--ms-mod: #b7791f;
-	--ms-ren: #3b62e0;
-	--ms-diff-add-bg: #e6f6ec;
-	--ms-diff-add-gutter: #cdeed9;
-	--ms-diff-del-bg: #fdecec;
-	--ms-diff-del-gutter: #f9d4d4;
-	--ms-diff-hunk-bg: #eef2fb;
-	--ms-diff-hunk-fg: #5a6a94;
-	--ms-diff-gutter-fg: #9aa1b0;
+	--ms-you: #d6006a;
+	--ms-run: #009dd9;
+	--ms-run-text: #0072a3;
+	--ms-ai: #7e22ce;
+	--ms-ai-subtle: rgba(126, 34, 206, 0.07);
+	--ms-ai-border: rgba(126, 34, 206, 0.3);
+	--ms-hash: #0072a3;
+
+	--ms-add: #15803d;
+	--ms-del: #dc2626;
+	--ms-mod: #b45309;
+	--ms-ren: #0072a3;
+	--ms-diff-add-bg: #e9f7ee;
+	--ms-diff-add-gutter: #d2f0dc;
+	--ms-diff-del-bg: #fdeded;
+	--ms-diff-del-gutter: #f9d6d6;
+	--ms-diff-hunk-bg: #eef7fc;
+	--ms-diff-hunk-fg: #0072a3;
+	--ms-diff-gutter-fg: #a1a1aa;
 }
 
 :root[data-theme='dark'] {
 	color-scheme: dark;
 
-	--ml-color-background: #0f1118;
-	--ml-color-surface: #161922;
-	--ml-color-surface-raised: #1e2230;
-	--ml-color-surface-overlay: #1e2230;
-	--ml-color-surface-sunken: #0c0e14;
-	--ml-color-input-bg: #11141c;
-	--ml-color-border: #2a2f3f;
-	--ml-color-border-strong: #3a4155;
-	--ml-color-border-muted: #1f2330;
-	--ml-color-text: #e8ebf2;
-	--ml-color-text-secondary: #c2c8d6;
-	--ml-color-text-muted: #8d95a8;
-	--ml-color-text-subtle: #687086;
-	--ml-color-text-inverse: #0f1118;
-	--ml-color-primary: #7c9cff;
-	--ml-color-primary-hover: #93adff;
-	--ml-color-primary-active: #a9beff;
-	--ml-color-primary-subtle: #1c2545;
+	--ml-color-background: #0b0814;
+	--ml-color-surface: #0c0917;
+	--ml-color-surface-raised: #161020;
+	--ml-color-surface-overlay: #161020;
+	--ml-color-surface-sunken: #08060f;
+	--ml-color-input-bg: #0b0814;
+	--ml-color-input-disabled-bg: #100b1c;
+	--ml-color-border: #241c35;
+	--ml-color-border-strong: #352a4a;
+	--ml-color-border-muted: #1a1328;
+	--ml-color-border-focus: #ff4da6;
+	--ml-color-text: #eceaf3;
+	--ml-color-text-secondary: #c4bed3;
+	--ml-color-text-muted: #948ca9;
+	--ml-color-text-subtle: #6f6884;
+	--ml-color-text-inverse: #0b0814;
+	--ml-color-text-link: #ff4da6;
+	--ml-color-text-link-hover: #ff5bae;
+	--ml-color-primary: #ff0082;
+	--ml-color-primary-hover: #ff2a95;
+	--ml-color-primary-active: #ff4da6;
+	--ml-color-primary-subtle: #331029;
+	--ml-color-focus-ring: rgba(255, 0, 130, 0.45);
+	--ml-color-info: #38c6f4;
+	--ml-color-info-subtle: #0b2433;
+	--ml-color-success: #34d399;
+	--ml-color-success-subtle: #0d2721;
+	--ml-color-warning: #fbbf24;
+	--ml-color-warning-subtle: #2e230c;
+	--ml-color-danger: #f87171;
+	--ml-color-danger-hover: #fca5a5;
+	--ml-color-danger-subtle: #331419;
+	--ml-tooltip-bg: #2c2340;
+	--ml-tooltip-text: #eceaf3;
 
-	--ms-toolbar-bg: #0b0d13;
-	--ms-toolbar-fg: #e8ebf2;
-	--ms-toolbar-muted: #8d95a8;
-	--ms-toolbar-border: #232838;
-	--ms-toolbar-hover: #171b27;
-	--ms-sidebar-bg: #13161e;
-	--ms-hover: rgba(200, 215, 255, 0.06);
-	--ms-selected: #223063;
-	--ms-selected-fg: #f2f5ff;
+	--ms-toolbar-bg: #100b1c;
+	--ms-toolbar-fg: #eceaf3;
+	--ms-toolbar-muted: #aba4be;
+	--ms-toolbar-border: #241c35;
+	--ms-toolbar-hover: #221a33;
+	--ms-toolbar-raised: #161020;
+	--ms-strip-bg: #0b0814;
+	--ms-sidebar-bg: #100b1c;
+	--ms-hover: rgba(236, 234, 243, 0.05);
+	--ms-selected: #221a33;
+	--ms-selected-fg: #ffffff;
+	--ms-selected-ring: rgba(255, 255, 255, 0.06);
+	--ms-seg-on: #221a33;
+	--ms-seg-shadow: none;
 
-	--ms-add: #5fd3a2;
-	--ms-del: #f0837c;
-	--ms-mod: #e2b25a;
-	--ms-ren: #7c9cff;
-	--ms-diff-add-bg: rgba(63, 185, 130, 0.14);
-	--ms-diff-add-gutter: rgba(63, 185, 130, 0.26);
-	--ms-diff-del-bg: rgba(240, 100, 92, 0.14);
-	--ms-diff-del-gutter: rgba(240, 100, 92, 0.26);
-	--ms-diff-hunk-bg: #181d2c;
-	--ms-diff-hunk-fg: #8996bd;
-	--ms-diff-gutter-fg: #596078;
+	--ms-you: #ff0082;
+	--ms-run: #38c6f4;
+	--ms-run-text: #38c6f4;
+	--ms-ai: #c77dff;
+	--ms-ai-subtle: rgba(199, 125, 255, 0.1);
+	--ms-ai-border: rgba(199, 125, 255, 0.35);
+	--ms-hash: #5ec9ee;
+
+	--ms-add: #34d399;
+	--ms-del: #f87171;
+	--ms-mod: #fcd34d;
+	--ms-ren: #38c6f4;
+	--ms-diff-add-bg: rgba(52, 211, 153, 0.1);
+	--ms-diff-add-gutter: rgba(52, 211, 153, 0.2);
+	--ms-diff-del-bg: rgba(248, 113, 113, 0.1);
+	--ms-diff-del-gutter: rgba(248, 113, 113, 0.2);
+	--ms-diff-hunk-bg: rgba(0, 157, 217, 0.1);
+	--ms-diff-hunk-fg: #5ec9ee;
+	--ms-diff-gutter-fg: #5b5470;
 }
 
 html,
@@ -98,6 +179,7 @@ body {
 	font-size: 13px;
 	line-height: 1.45;
 	-webkit-font-smoothing: antialiased;
+	font-feature-settings: 'cv11', 'ss01';
 	overflow: hidden;
 	user-select: none;
 	-webkit-user-select: none;

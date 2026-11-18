@@ -7,41 +7,105 @@ export const toolbarStyles = () => css`
 		flex: none;
 	}
 	.bar {
+		position: relative;
 		display: flex;
-		align-items: stretch;
-		height: 50px;
+		align-items: center;
+		gap: 6px;
+		height: 56px;
+		padding: 0 10px;
 		background: var(--ms-toolbar-bg);
 		color: var(--ms-toolbar-fg);
-		border-bottom: 1px solid var(--ms-toolbar-border);
 	}
 	.bar.mac {
 		padding-left: 84px;
 	}
-	.bar.mac ml-popover:first-of-type .seg {
-		border-left: 1px solid var(--ms-toolbar-border);
+	/* The signal line: the brand gradient under the toolbar. It flows while git is busy (a spinner shows). */
+	.bar::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		height: 2px;
+		background: var(--ms-signal);
+		background-size: 200% 100%;
+		pointer-events: none;
+	}
+	.bar:has(ml-spinner)::after {
+		animation: ms-signal 2.4s linear infinite;
+	}
+	@keyframes ms-signal {
+		from {
+			background-position: 0% 50%;
+		}
+		to {
+			background-position: 200% 50%;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.bar:has(ml-spinner)::after {
+			animation: none;
+		}
 	}
 	ml-popover {
 		display: flex;
 		--ml-popover-padding-x: 0;
 		--ml-popover-padding-y: 0;
 		--ml-popover-content-overflow: hidden;
-		--ml-popover-radius: 0 0 10px 10px;
+		--ml-popover-radius: 12px;
 	}
 	.seg {
 		all: unset;
 		box-sizing: border-box;
 		display: flex;
 		align-items: center;
-		gap: 10px;
-		width: 236px;
-		height: 49px;
-		padding: 0 14px;
-		border-right: 1px solid var(--ms-toolbar-border);
+		gap: 9px;
+		min-width: 150px;
+		max-width: 280px;
+		height: 38px;
+		padding: 0 12px;
+		border: 1px solid var(--ms-toolbar-border);
+		border-radius: 10px;
+		background: var(--ms-toolbar-raised);
 		color: var(--ms-toolbar-fg);
 		cursor: default;
+		transition: background-color 0.12s, border-color 0.12s;
 	}
 	.seg:hover:not([disabled]) {
 		background: var(--ms-toolbar-hover);
+	}
+	/* Repository and branch read as names, not as labelled fields. */
+	.seg:not(.sync) .k {
+		display: none;
+	}
+	#repo-pop .v {
+		font-family: var(--ms-font-display);
+		font-size: 15px;
+		letter-spacing: -0.01em;
+	}
+	#branch-pop .v {
+		font-family: var(--ml-font-mono);
+		font-size: 12.5px;
+		font-weight: 500;
+	}
+	#branch-pop .seg > ml-icon:first-child {
+		color: var(--ms-run);
+	}
+	/* Something to send or bring in: the sync button becomes the toolbar's one magenta action. */
+	.seg.sync:has(> ml-icon[icon='arrow-up'], > ml-icon[icon='arrow-down'], > ml-icon[icon='cloud-arrow-up']) {
+		background: var(--ms-you);
+		border-color: transparent;
+		color: #ffffff;
+	}
+	.seg.sync:has(> ml-icon[icon='arrow-up'], > ml-icon[icon='arrow-down'], > ml-icon[icon='cloud-arrow-up']):hover:not([disabled]) {
+		background: var(--ml-color-primary-hover);
+	}
+	.seg.sync:has(> ml-icon[icon='arrow-up'], > ml-icon[icon='arrow-down'], > ml-icon[icon='cloud-arrow-up']) :is(.k, ml-icon) {
+		color: rgba(255, 255, 255, 0.82);
+	}
+	.seg.sync:has(> ml-icon[icon='arrow-up'], > ml-icon[icon='arrow-down'], > ml-icon[icon='cloud-arrow-up']) .count {
+		background: rgba(0, 0, 0, 0.22);
+		border-color: transparent;
 	}
 	.seg:focus-visible {
 		outline: 2px solid var(--ml-color-primary);
@@ -95,13 +159,15 @@ export const toolbarStyles = () => css`
 		all: unset;
 		display: grid;
 		place-items: center;
-		width: 48px;
+		width: 38px;
+		height: 38px;
+		border-radius: 10px;
 		color: var(--ms-toolbar-muted);
 	}
 	.tool.wide {
 		width: auto;
-		height: 49px;
-		padding: 0 12px;
+		height: 38px;
+		padding: 0 10px;
 		display: flex;
 		align-items: center;
 		gap: 5px;
@@ -112,6 +178,10 @@ export const toolbarStyles = () => css`
 	.tool:hover {
 		background: var(--ms-toolbar-hover);
 		color: var(--ms-toolbar-fg);
+	}
+	.tool:focus-visible {
+		outline: 2px solid var(--ml-color-primary);
+		outline-offset: -2px;
 	}
 
 	/* ---- dropdown panels ---- */

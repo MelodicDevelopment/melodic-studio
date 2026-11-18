@@ -15,9 +15,10 @@ export const listStyles = `
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		min-height: 29px;
-		padding: 0 10px;
-		border-bottom: 1px solid var(--ml-color-border-muted);
+		min-height: 30px;
+		margin: 1px 6px;
+		padding: 0 8px;
+		border-radius: 8px;
 	}
 	.row:hover {
 		background: var(--ms-hover);
@@ -25,6 +26,7 @@ export const listStyles = `
 	.row.sel {
 		background: var(--ms-selected);
 		color: var(--ms-selected-fg);
+		box-shadow: inset 0 0 0 1px var(--ms-selected-ring);
 	}
 	.path {
 		flex: 1;
@@ -53,12 +55,13 @@ export const listStyles = `
 		flex: none;
 		display: grid;
 		place-items: center;
-		width: 16px;
-		height: 16px;
-		border-radius: 4px;
-		border: 1px solid currentColor;
-		font-size: 12px;
-		font-weight: 700;
+		width: 18px;
+		height: 18px;
+		border-radius: 5px;
+		background: color-mix(in srgb, currentColor 16%, transparent);
+		font-family: var(--ml-font-mono);
+		font-size: 10.5px;
+		font-weight: 600;
 		line-height: 1;
 	}
 	.mark.add {
@@ -87,7 +90,7 @@ export const ctxStyles = `
 		min-width: 200px;
 		padding: 5px;
 		border: 1px solid var(--ml-color-border);
-		border-radius: 8px;
+		border-radius: 10px;
 		background: var(--ml-color-surface-raised, var(--ml-color-surface));
 		box-shadow: var(--ml-shadow-lg);
 	}
@@ -96,7 +99,7 @@ export const ctxStyles = `
 		align-items: center;
 		gap: 8px;
 		padding: 6px 9px;
-		border-radius: 5px;
+		border-radius: 6px;
 	}
 	.ctx-item:hover {
 		background: var(--ms-hover);

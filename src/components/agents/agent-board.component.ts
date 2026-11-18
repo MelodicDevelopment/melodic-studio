@@ -142,6 +142,7 @@ function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 	styles: () => css`
 		:host {
 			display: flex;
+			align-items: center;
 		}
 		${stateStyles}
 		.tool {
@@ -149,7 +150,9 @@ function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 			position: relative;
 			display: grid;
 			place-items: center;
-			width: 48px;
+			width: 38px;
+			height: 38px;
+			border-radius: 10px;
 			color: var(--ms-toolbar-muted);
 		}
 		.tool:hover {
@@ -162,14 +165,14 @@ function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 		}
 		.count {
 			position: absolute;
-			top: 7px;
-			right: 4px;
+			top: 2px;
+			right: 0;
 			min-width: 16px;
 			padding: 0 4px;
 			box-sizing: border-box;
 			border-radius: 999px;
-			background: var(--ml-color-primary);
-			color: var(--ml-color-text-inverse);
+			background: var(--ms-run);
+			color: #0b0814;
 			font-size: 10px;
 			font-weight: 700;
 			line-height: 16px;
@@ -177,17 +180,19 @@ function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 		}
 		.badge {
 			position: absolute;
-			bottom: 11px;
-			right: 9px;
+			bottom: 6px;
+			right: 5px;
 			width: 8px;
 			height: 8px;
 			border: 2px solid var(--ms-toolbar-bg);
 			border-radius: 50%;
-			background: var(--ms-add);
+			background: var(--ms-you);
 		}
 		h3 {
 			margin: 0;
-			font-size: 16px;
+			font-family: var(--ms-font-display);
+			font-size: 18px;
+			letter-spacing: -0.01em;
 			font-weight: 600;
 		}
 		.board {
