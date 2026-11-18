@@ -29,7 +29,14 @@ import { isDesktop, isMac } from '../../services/backend.service';
 			<div class="strip drag ${self.mac ? 'mac' : ''}" @mousedown=${self.drag}>
 				${store.repoTabList().map(
 					(r) => html`
-						<div class="tab ${r.id === current ? 'on' : ''}" title=${r.path} @click=${() => store.selectRepo(r.id)} @auxclick=${(e: MouseEvent) => (e.button === 1 ? store.closeRepoTab(r.id) : undefined)}>
+						<div
+							class="tab ${r.id === current ? 'on' : ''}"
+							title=${r.path}
+							@pointerdown=${(e: PointerEvent) => self.down(e, r.id)}
+							@pointermove=${self.move}
+							@pointerup=${self.up}
+							@pointercancel=${self.cancel}
+							@click=${() => (self.dragged ? undefined : store.selectRepo(r.id))} @auxclick=${(e: MouseEvent) => (e.button === 1 ? store.closeRepoTab(r.id) : undefined)}>
 							${working.has(r.id) ? html`<ml-spinner size="xs"></ml-spinner>` : html`<ml-icon icon=${r.missing ? 'warning' : 'folder-simple'} size="sm"></ml-icon>`}
 							<span class="name">${r.name}</span>
 							<button title="Close tab" @click=${(e: Event) => (e.stopPropagation(), store.closeRepoTab(r.id))}><ml-icon icon="x" size="xs"></ml-icon></button>
@@ -67,6 +74,16 @@ import { isDesktop, isMac } from '../../services/backend.service';
 			padding: 0 8px 0 12px;
 			border-radius: 9px 9px 0 0;
 			font-size: 12px;
+			transition: transform 120ms ease;
+		}
+		/* Dragged to reorder: it follows the pointer, the others slide aside (RepoTabsComponent.move). */
+		.tab.dragging {
+			position: relative;
+			z-index: 1;
+			transition: none;
+			background: var(--ms-toolbar-hover);
+			color: var(--ms-toolbar-fg);
+			cursor: grabbing;
 		}
 		.tab:hover {
 			background: var(--ms-toolbar-hover);
@@ -135,6 +152,79 @@ export class RepoTabsComponent {
 
 	/** Leave room for the traffic lights the overlay title bar draws over the top row. */
 	readonly mac = isDesktop() && isMac();
+
+	/** A tab being dragged to a new place. Pointer events, not HTML drag and drop (the window handles file drops). */
+	private _drag: { id: string; el: HTMLElement; tabs: HTMLElement[]; rects: DOMRect[]; from: number; to: number; startX: number; moved: boolean } | null = null;
+	/** Set for the click that ends a drag, so dropping a tab does not also select it. */
+	dragged = false;
+
+	down(e: PointerEvent, id: string): void {
+		if (e.button !== 0 || (e.target as Element).closest('button')) {
+			return;
+		}
+		const el = e.currentTarget as HTMLElement;
+		const tabs = [...(el.parentElement?.querySelectorAll<HTMLElement>('.tab') ?? [])];
+		const from = tabs.indexOf(el);
+		if (from < 0 || tabs.length < 2) {
+			return;
+		}
+		this._drag = { id, el, tabs, rects: tabs.map((t) => t.getBoundingClientRect()), from, to: from, startX: e.clientX, moved: false };
+		el.setPointerCapture(e.pointerId);
+	}
+
+	readonly move = (e: PointerEvent): void => {
+		const d = this._drag;
+		if (!d) {
+			return;
+		}
+		let dx = e.clientX - d.startX;
+		if (!d.moved && Math.abs(dx) < 5) {
+			return;
+		}
+		d.moved = true;
+		d.el.classList.add('dragging');
+		const own = d.rects[d.from];
+		dx = Math.max(d.rects[0].left - own.left, Math.min(d.rects[d.rects.length - 1].right - own.right, dx));
+		d.el.style.transform = `translateX(${dx}px)`;
+		const centre = own.left + own.width / 2 + dx;
+		d.to = d.rects.filter((r, i) => i !== d.from && r.left + r.width / 2 < centre).length;
+		// The tabs between the old and the new place make room by one slot.
+		const slot = d.from + 1 < d.rects.length ? d.rects[d.from + 1].left - own.left : own.left - d.rects[d.from - 1].left;
+		d.tabs.forEach((t, i) => {
+			if (i !== d.from) {
+				const shift = d.from < d.to && i > d.from && i <= d.to ? -slot : d.to < d.from && i >= d.to && i < d.from ? slot : 0;
+				t.style.transform = shift ? `translateX(${shift}px)` : '';
+			}
+		});
+	};
+
+	readonly up = (): void => {
+		const d = this.finish();
+		if (d?.moved) {
+			this.dragged = true;
+			setTimeout(() => (this.dragged = false));
+			this.store.moveRepoTab(d.id, d.to);
+		}
+	};
+
+	readonly cancel = (): void => {
+		this.finish();
+	};
+
+	private finish(): typeof this._drag {
+		const d = this._drag;
+		this._drag = null;
+		if (d) {
+			d.el.classList.remove('dragging');
+			// No slide back: the strip re-renders in the new order.
+			for (const t of d.tabs) {
+				t.style.transition = 'none';
+				t.style.transform = '';
+				requestAnimationFrame(() => (t.style.transition = ''));
+			}
+		}
+		return d;
+	}
 
 	/** Ctrl+Tab and Ctrl+Shift+Tab move between tabs, on every OS. */
 	private readonly _keys = (e: KeyboardEvent): void => {

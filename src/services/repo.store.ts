@@ -427,6 +427,18 @@ export class RepoStore {
 		}
 	}
 
+	/** Move a tab to position `to` (dragged in the strip). */
+	moveRepoTab(id: string, to: number): void {
+		const tabs = this.repoTabList().map((r) => r.id);
+		const from = tabs.indexOf(id);
+		if (from < 0 || from === to) {
+			return;
+		}
+		tabs.splice(from, 1);
+		tabs.splice(Math.max(0, Math.min(to, tabs.length)), 0, id);
+		this.setRepoTabs(tabs);
+	}
+
 	/** Next (1) or previous (-1) tab, wrapping round. */
 	cycleRepoTab(step: 1 | -1): void {
 		const tabs = this.repoTabList().map((r) => r.id);
