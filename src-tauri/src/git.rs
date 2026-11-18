@@ -433,6 +433,17 @@ impl Git {
         ["main", "master"].iter().find(|n| self.run(&["rev-parse", "--verify", "-q", &format!("refs/remotes/{remote}/{n}")]).is_ok()).map(|n| n.to_string())
     }
 
+    /// The URL of `origin`, else of the first remote, in one git call.
+    pub fn origin_url(&self) -> Option<String> {
+        let out = self.run(&["config", "--get-regexp", r"^remote\..*\.url$"]).ok()?;
+        let urls: Vec<(&str, &str)> = out
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .filter_map(|(k, v)| Some((k.strip_prefix("remote.")?.strip_suffix(".url")?, v.trim())))
+            .collect();
+        urls.iter().find(|(n, _)| *n == "origin").or(urls.first()).map(|(_, u)| u.to_string()).filter(|u| !u.is_empty())
+    }
+
     pub fn remote_url(&self, remote: &str) -> Option<String> {
         self.run(&["remote", "get-url", remote]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
     }
@@ -1287,6 +1298,31 @@ pub fn host(remote: &str) -> Option<Host> {
     })
 }
 
+/// Where a repository lives and who it belongs to, for grouping the repository list.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Origin {
+    /// github | azure | gitlab | bitbucket | other
+    pub provider: String,
+    /// "GitHub", "Azure DevOps", ... or the host name for anything else.
+    pub label: String,
+    /// The GitHub owner, Azure DevOps `org/project`, GitLab group (with subgroups), Bitbucket workspace.
+    pub owner: String,
+}
+
+/// The `Origin` of a remote URL; `None` for a remote that is a folder.
+pub fn origin(remote: &str) -> Option<Origin> {
+    let h = host(remote)?;
+    let rest = h.web.strip_prefix("https://")?;
+    let segs: Vec<&str> = rest.split('/').skip(1).collect();
+    let owner = if h.provider == "azure" {
+        segs.iter().take(2).copied().collect::<Vec<_>>().join("/")
+    } else {
+        segs[..segs.len().saturating_sub(1)].join("/")
+    };
+    Some(Origin { provider: h.provider, label: h.name, owner })
+}
+
 /// The folder name a clone of `url` gets.
 pub fn repo_name(url: &str) -> String {
     let u = url.trim().trim_end_matches(['/', '\\']);
@@ -1429,6 +1465,31 @@ mod tests {
         assert_eq!(repo_name("https://github.com/owner/thing/"), "thing");
         assert_eq!(repo_name(r"C:\repos\thing.git"), "thing");
         assert_eq!(repo_name(r"C:\repos\thing\"), "thing");
+    }
+
+    #[test]
+    fn origins_group_by_owner() {
+        let o = |url: &str| origin(url).map(|o| (o.provider, o.label, o.owner));
+        let t = |p: &str, l: &str, w: &str| Some((p.to_string(), l.to_string(), w.to_string()));
+        assert_eq!(o("git@github.com:MelodicDevelopment/studio.git"), t("github", "GitHub", "MelodicDevelopment"));
+        assert_eq!(o("git@ssh.dev.azure.com:v3/org/Proj/repo"), t("azure", "Azure DevOps", "org/Proj"));
+        assert_eq!(o("https://org.visualstudio.com/DefaultCollection/Proj/_git/repo"), t("azure", "Azure DevOps", "org/Proj"));
+        assert_eq!(o("https://gitlab.com/group/sub/repo.git"), t("gitlab", "GitLab", "group/sub"));
+        assert_eq!(o("git@bitbucket.org:team/repo.git"), t("bitbucket", "Bitbucket", "team"));
+        assert_eq!(o("ssh://git@host.example:2222/repo.git"), t("other", "host.example", ""));
+        assert_eq!(o("/srv/git/thing.git"), None);
+    }
+
+    #[test]
+    fn origin_url_prefers_origin() {
+        let dir = scratch("origin-url");
+        let g = Git::at(&dir);
+        assert_eq!(g.origin_url(), None);
+        git(&dir, &["remote", "add", "fork", "git@github.com:me/x.git"]);
+        assert_eq!(g.origin_url().as_deref(), Some("git@github.com:me/x.git"));
+        git(&dir, &["remote", "add", "origin", "git@github.com:team/x.git"]);
+        assert_eq!(g.origin_url().as_deref(), Some("git@github.com:team/x.git"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

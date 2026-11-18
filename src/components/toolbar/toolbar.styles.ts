@@ -210,6 +210,41 @@ export const toolbarStyles = () => css`
 		text-transform: uppercase;
 		color: var(--ml-color-text-muted);
 	}
+	.grp {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 8px 14px 4px 10px;
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--ml-color-text-muted);
+		cursor: pointer;
+		user-select: none;
+	}
+	.grp:hover {
+		color: var(--ml-color-text);
+	}
+	.grp.owner {
+		padding: 4px 14px 2px 24px;
+		text-transform: none;
+		letter-spacing: 0;
+		font-size: 12px;
+	}
+	.grp-name {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.grp-count {
+		font-weight: 400;
+	}
+	.item.deep {
+		padding-left: 28px;
+	}
 	.none {
 		padding: 18px 14px;
 		text-align: center;

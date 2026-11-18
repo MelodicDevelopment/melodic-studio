@@ -6,11 +6,23 @@ import { HostWorkStore } from '../../services/host-work.store';
 import { HostStore } from '../../services/host.store';
 import { AgentsStore } from '../../services/agents.store';
 import { isDesktop, isMac, isWindows, type Branch, type OpenTarget, type RepoSummary, type Worktree } from '../../services/backend.service';
+import { groupByOrigin, type HostGroup } from '../../shared/repo-groups';
 import { toolbarTemplate } from './toolbar.template';
 import { toolbarStyles } from './toolbar.styles';
 
 type PopoverId = 'repo-pop' | 'branch-pop' | 'host-pop';
 export type ToolbarMenu = ({ kind: 'repo'; repo: RepoSummary } | { kind: 'branch'; branch: Branch }) & { x: number; y: number };
+
+const COLLAPSED_KEY = 'studio.repo-groups.collapsed';
+
+function loadCollapsed(): Set<string> {
+	try {
+		const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]');
+		return new Set(Array.isArray(v) ? v.filter((k) => typeof k === 'string') : []);
+	} catch {
+		return new Set();
+	}
+}
 
 @MelodicComponent({
 	selector: 'ms-toolbar',
@@ -28,6 +40,8 @@ export class ToolbarComponent {
 	menu: ToolbarMenu | null = null;
 
 	repoFilter = '';
+	/** Folded groups of the repository list (host or host/owner keys), remembered per machine. */
+	collapsed = loadCollapsed();
 	branchFilter = '';
 	/** Leave room for the traffic lights the overlay title bar draws over us. */
 	readonly mac = isDesktop() && isMac();
@@ -38,6 +52,24 @@ export class ToolbarComponent {
 		const q = this.repoFilter.trim().toLowerCase();
 		const repos = this.store.app()?.repos ?? [];
 		return q ? repos.filter((r) => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) : repos;
+	}
+
+	get repoGroups(): HostGroup<RepoSummary>[] {
+		return groupByOrigin(this.repos);
+	}
+
+	toggleGroup(key: string): void {
+		if (this.repoFilter.trim()) {
+			return;
+		}
+		const next = new Set(this.collapsed);
+		next.has(key) ? next.delete(key) : next.add(key);
+		this.collapsed = next;
+		try {
+			localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+		} catch {
+			// Only a convenience.
+		}
 	}
 
 	private filteredBranches(remote: boolean): Branch[] {

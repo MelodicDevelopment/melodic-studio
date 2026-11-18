@@ -11,6 +11,8 @@ src-tauri/src/
                 GitLab, Bitbucket from the remote URL. Tests run real git in temp repos.
   commands.rs   Tauri commands (thin, all async, camelCase DTOs). Only repositories in the config can be operated on.
   config.rs     registry of added repositories (app config dir, repositories.json)
+  scan.rs       Add a repository > Scan a folder: plain directory walk under a folder the user chose (depth, folder and
+                time limits), a `.git` folder is a hit and is not looked inside; `repo_scan` lists, `repo_add_many` adds
   error.rs      AppError -> {kind, message, paths}; kind: conflict | auth | git | error
   init.rs       turning a plain folder into a repository: inspect it, then git init with the wizard's choices
                 (default branch, .gitignore templates, README, first commit, per-repository identity)
@@ -47,6 +49,7 @@ src/
   components/editor     main pane of the Files tab: open-file tabs over one Monaco editor, save (Cmd/Ctrl+S), unsaved/conflict bar
   services/explorer.store.ts    Files tab state per repository: tree, open tabs, Monaco models (they outlive the editor component)
   shared/monaco.ts      lazy Monaco load, workers, theme from --ml-*/--ms-* tokens, copies Monaco's CSS into the shadow root
+  shared/repo-groups.ts groupByOrigin (host, then owner) for the repository dropdown and the scan results; hostIcon
   shared/paths.ts       the only place absolute paths are compared or taken apart (samePath, relativeTo, joinPath, fileName)
   shared/platform.ts    web view minimum check at startup; turns off the web view's reload keys and page menu in the packaged app
   services/agents.store.ts      agent sessions (persisted in localStorage), worktrees, review/merge/remove
@@ -113,6 +116,7 @@ src/
 - Two Melodic traps: a component that first renders an empty template (``html`` ``) never shows a later non-empty one, so render `nothing()` (ai-entry.ts) instead; and `computed()` created while a component renders is disposed with that component, so a store with computed fields is instantiated at module load (end of ai-features.store.ts) and its effects are created outside any component.
 
 - Repository tabs (`RepoStore.repoTabs`, localStorage `studio.repo-tabs`): `selectRepo(id)` switches in the current tab, `selectRepo(id, true)` / `openRepoTab` opens another. Each tab's view (sidebar tab, selected file, pinned diff tabs, unchecked files, draft message) is kept in memory by `keepView`/`restoreView`. The strip, not the toolbar, takes the macOS traffic-light padding while it is visible.
+- Repositories are grouped by `RepoSummary.origin` (`git::origin`: provider, label, owner = GitHub owner, Azure DevOps `org/project`, GitLab group, Bitbucket workspace) from `origin`, else the first remote. One `git config --get-regexp` per repository, run 8 at a time and cached in `AppState.origins` until that `.git/config` changes. Folded groups are localStorage `studio.repo-groups.collapsed`; filtering shows everything. A scan adds nothing by itself: the user ticks repositories, and adding them does not change the current one. It never starts from the home folder on its own (macOS would ask for Documents/Desktop access).
 - Opening a folder always goes through `InitService.open(path)`: a repository is added, anything else starts the setup wizard. The wizard never overwrites: .gitignore is appended to, an existing README is kept, and a folder inside another repository is refused. Creating the remote uses `host_repo_create` (the user's gh / az / glab), then the normal publish.
 - macOS dev builds run from `target/debug/Melodic Studio.app` (cargo runner `scripts/dev-app.sh`, set in `src-tauri/.cargo/config.toml`), because a bare binary shows in the Dock under its file name. The runner passes everything except the app binary straight through, so `cargo test` is unaffected.
 - A dev build (`cfg(dev)`) has no pages of its own, only `build.devUrl`. Opened without `npm run desktop:dev` (that bundle's Dock icon, Finder, `cargo run`) it used to be a white window; now `dev.rs` checks the address at startup and, when nothing answers, runs `node node_modules/vite/bin/vite.js` in the project (found through `CARGO_MANIFEST_DIR`), shows a plain page meanwhile or the reason it failed, and navigates to the app once the port answers. Vite is stopped on `RunEvent::Exit`, not a window event: quitting from the Dock or with Cmd+Q sends no `Destroyed`. Release builds contain none of this.

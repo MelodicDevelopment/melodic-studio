@@ -3,7 +3,7 @@
 
 use crate::config::RepoRef;
 use crate::error::{AppError, Result};
-use crate::git::{self, Branch, Commit, DiffResult, FileChange, FileRef, Git, Identity, RebaseStep, RepoStatus, UndoneCommit};
+use crate::git::{self, Branch, Commit, DiffResult, FileChange, FileRef, Git, Identity, Origin, RebaseStep, RepoStatus, UndoneCommit};
 use crate::AppState;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,8 @@ pub struct RepoSummary {
     pub missing: bool,
     /// Set while the app is looking at a linked worktree instead of the main checkout.
     pub worktree: Option<String>,
+    /// Where `origin` (else the first remote) lives; `None` without a remote. Groups the repository list.
+    pub origin: Option<Origin>,
 }
 
 #[derive(Serialize)]
@@ -32,8 +34,32 @@ pub struct AppStatus {
     pub app_version: String,
 }
 
-fn summary(r: &RepoRef) -> RepoSummary {
-    RepoSummary { id: r.id.clone(), name: r.name.clone(), path: r.path.to_string_lossy().to_string(), missing: !r.path.join(".git").exists(), worktree: r.worktree.as_ref().filter(|w| w.is_dir()).map(|w| w.to_string_lossy().to_string()) }
+fn summary(r: &RepoRef, origin: Option<Origin>) -> RepoSummary {
+    RepoSummary { id: r.id.clone(), name: r.name.clone(), path: r.path.to_string_lossy().to_string(), missing: !r.path.join(".git").exists(), worktree: r.worktree.as_ref().filter(|w| w.is_dir()).map(|w| w.to_string_lossy().to_string()), origin }
+}
+
+/// The origin of each repository. One git call per repository, run a few at a time and kept
+/// until that repository's `.git/config` changes, so listing a hundred repositories stays cheap.
+pub(crate) fn origins(state: &State<'_, AppState>, paths: &[PathBuf]) -> Vec<Option<Origin>> {
+    let stamp = |p: &Path| std::fs::metadata(p.join(".git").join("config")).and_then(|m| m.modified()).ok();
+    let stamps: Vec<_> = paths.iter().map(|p| stamp(p)).collect();
+    let mut out: Vec<Option<Option<Origin>>> = {
+        let cache = state.origins.lock().unwrap();
+        paths.iter().zip(&stamps).map(|(p, s)| cache.get(p).filter(|(t, _)| s.is_some() && t == s).map(|(_, o)| o.clone())).collect()
+    };
+    let missing: Vec<usize> = (0..paths.len()).filter(|&i| out[i].is_none()).collect();
+    for chunk in missing.chunks(8) {
+        let found: Vec<(usize, Option<Origin>)> = std::thread::scope(|s| {
+            let jobs: Vec<_> = chunk.iter().map(|&i| (i, s.spawn(move || Git::at(&paths[i]).origin_url().and_then(|u| git::origin(&u))))).collect();
+            jobs.into_iter().map(|(i, j)| (i, j.join().ok().flatten())).collect()
+        });
+        let mut cache = state.origins.lock().unwrap();
+        for (i, o) in found {
+            cache.insert(paths[i].clone(), (stamps[i], o.clone()));
+            out[i] = Some(o);
+        }
+    }
+    out.into_iter().map(Option::flatten).collect()
 }
 
 /// Only repositories the user added can be operated on.
@@ -57,17 +83,27 @@ pub(crate) fn save_worktree(state: &State<'_, AppState>, id: &str, worktree: Opt
     config.save(&state.config_path)
 }
 
-pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
+/// Add `path` to the list (once) and return its id.
+fn insert(config: &mut crate::config::AppConfig, path: &Path) -> String {
     let id = path.to_string_lossy().to_string();
-    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| id.clone());
-    let mut config = state.config.lock().unwrap();
     if config.find(&id).is_none() {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| id.clone());
         config.repos.push(RepoRef { id: id.clone(), name, path: path.to_path_buf(), worktree: None });
         config.repos.sort_by_key(|r| r.name.to_lowercase());
     }
-    config.current = Some(id.clone());
-    config.save(&state.config_path)?;
-    Ok(summary(config.find(&id).unwrap()))
+    id
+}
+
+pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
+    let r = {
+        let mut config = state.config.lock().unwrap();
+        let id = insert(&mut config, path);
+        config.current = Some(id.clone());
+        config.save(&state.config_path)?;
+        config.find(&id).unwrap().clone()
+    };
+    let origin = origins(state, std::slice::from_ref(&r.path)).pop().flatten();
+    Ok(summary(&r, origin))
 }
 
 /// Quit and start again, after an update has been installed. See `proc::relaunch`.
@@ -83,10 +119,12 @@ pub async fn app_relaunch(app: tauri::AppHandle) -> Result<()> {
 
 #[tauri::command]
 pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<AppStatus> {
-    let (repos, current) = {
+    let (refs, current) = {
         let config = state.config.lock().unwrap();
-        (config.repos.iter().map(summary).collect(), config.current.clone())
+        (config.repos.clone(), config.current.clone())
     };
+    let paths: Vec<PathBuf> = refs.iter().map(|r| r.path.clone()).collect();
+    let repos = refs.iter().zip(origins(&state, &paths)).map(|(r, o)| summary(r, o)).collect();
     Ok(AppStatus {
         repos,
         current,
@@ -103,6 +141,72 @@ pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
 pub async fn repo_add(state: State<'_, AppState>, path: String) -> Result<RepoSummary> {
     let top = Git::toplevel(&crate::paths::typed(&path))?;
     register(&state, &top)
+}
+
+/// A repository found by `repo_scan`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanHit {
+    pub path: String,
+    pub name: String,
+    /// Already in Melodic Studio.
+    pub added: bool,
+    pub origin: Option<Origin>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub repos: Vec<ScanHit>,
+    /// A depth, folder or time limit stopped the search before it saw everything.
+    pub truncated: bool,
+}
+
+/// Every repository under a folder the user chose. Adds nothing: `repo_add_many` does, with the ones they tick.
+#[tauri::command]
+pub async fn repo_scan(state: State<'_, AppState>, root: String) -> Result<ScanResult> {
+    let root = crate::paths::typed(&root);
+    if !root.is_dir() {
+        return Err(AppError::msg("That folder does not exist"));
+    }
+    let (found, truncated) = tauri::async_runtime::spawn_blocking(move || crate::scan::find(&root, crate::scan::MAX_DEPTH, crate::scan::MAX_FOLDERS, crate::scan::MAX_TIME))
+        .await
+        .map_err(|e| AppError::msg(format!("The scan stopped unexpectedly: {e}")))?;
+    // Compared by real path (`paths::same`), resolved once per side rather than per pair.
+    let added: Vec<PathBuf> = state.config.lock().unwrap().repos.iter().map(|r| r.path.canonicalize().unwrap_or_else(|_| r.path.clone())).collect();
+    let origins = origins(&state, &found);
+    let repos = found
+        .iter()
+        .zip(origins)
+        .map(|(p, origin)| {
+            let real = p.canonicalize().unwrap_or_else(|_| p.clone());
+            ScanHit { path: p.to_string_lossy().to_string(), name: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), added: added.contains(&real), origin }
+        })
+        .collect();
+    Ok(ScanResult { repos, truncated })
+}
+
+/// Add several repositories at once (the ones ticked after a scan). The current repository stays
+/// as it is unless there was none. Folders that are not repositories are skipped.
+#[tauri::command]
+pub async fn repo_add_many(state: State<'_, AppState>, paths: Vec<String>) -> Result<usize> {
+    let tops: Vec<PathBuf> = paths.iter().filter_map(|p| Git::toplevel(&crate::paths::typed(p)).ok()).collect();
+    if tops.is_empty() {
+        return Err(AppError::msg("None of those folders is a git repository"));
+    }
+    let mut config = state.config.lock().unwrap();
+    let before = config.repos.len();
+    for top in &tops {
+        if !config.repos.iter().any(|r| crate::paths::same(&r.path, top)) {
+            let id = insert(&mut config, top);
+            if config.current.is_none() {
+                config.current = Some(id);
+            }
+        }
+    }
+    let added = config.repos.len() - before;
+    config.save(&state.config_path)?;
+    Ok(added)
 }
 
 #[tauri::command]

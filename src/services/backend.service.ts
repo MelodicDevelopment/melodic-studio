@@ -3,6 +3,7 @@
  * (`npm run dev` outside Tauri) the app runs against a small in-memory demo
  * so the UI stays previewable.
  */
+import type { RepoOrigin } from '../shared/repo-groups';
 import { Injectable } from '@melodicdev/core/injection';
 import { demoFileOp, demoListDir, demoReadFile, demoWriteFile } from './demo-files';
 import { demoTerminal } from './demo-terminal';
@@ -28,6 +29,22 @@ export interface RepoSummary {
 	missing: boolean;
 	/** Set while the app is looking at a linked worktree instead of the main checkout. */
 	worktree?: string | null;
+	/** Where `origin` (else the first remote) lives; null without a remote. */
+	origin?: RepoOrigin | null;
+}
+export type { RepoOrigin };
+/** A repository found under the folder the user scanned. */
+export interface ScanHit {
+	path: string;
+	name: string;
+	/** Already in Melodic Studio. */
+	added: boolean;
+	origin: RepoOrigin | null;
+}
+export interface ScanResult {
+	repos: ScanHit[];
+	/** A depth, folder or time limit stopped the search early. */
+	truncated: boolean;
 }
 /** One checkout of the repository: the main one, or a linked worktree on its own branch. */
 export interface Worktree {
@@ -459,6 +476,10 @@ export class BackendService {
 	/** Quit and start again (after an update). Does not return in the desktop app. */
 	relaunch() { return this.call<void>('app_relaunch'); }
 	addRepo(path: string) { return this.call<RepoSummary>('repo_add', { path }); }
+	/** Finds repositories under `root`; adds nothing. */
+	scanRepos(root: string) { return this.call<ScanResult>('repo_scan', { root }); }
+	/** Adds the given repositories without changing the current one; returns how many were new. */
+	addRepos(paths: string[]) { return this.call<number>('repo_add_many', { paths }); }
 	createRepo(parent: string, name: string, readme: boolean) { return this.call<RepoSummary>('repo_create', { parent, name, readme }); }
 	cloneRepo(url: string, parent: string) { return this.call<RepoSummary>('repo_clone', { url, parent }); }
 	removeRepo(id: string) { return this.call<void>('repo_remove', { id }); }
@@ -900,11 +921,19 @@ function demoWorktreeDiff(path: string, trees: Worktree[]): WorktreeDiff {
 	return { base: 'b'.repeat(40), head: 'c'.repeat(40), files: sets[at % sets.length], tooLarge: false };
 }
 
+const DEMO_ORIGINS: Record<string, RepoOrigin> = {
+	tempo: { provider: 'github', label: 'GitHub', owner: 'melodic-demo' },
+	dotfiles: { provider: 'github', label: 'GitHub', owner: 'demo' },
+	'billing-api': { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Payments' },
+	ledger: { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Payments' },
+	site: { provider: 'bitbucket', label: 'Bitbucket', owner: 'studio-team' },
+};
+
 /** Nothing persists; enough behaviour to click through every screen. */
 class DemoBackend {
 	private repos: RepoSummary[] = [
-		{ id: DEMO_ID, name: 'harmony', path: DEMO_ID, missing: false },
-		{ id: '/Users/demo/Source/cadence', name: 'cadence', path: '/Users/demo/Source/cadence', missing: false },
+		{ id: DEMO_ID, name: 'harmony', path: DEMO_ID, missing: false, origin: { provider: 'github', label: 'GitHub', owner: 'melodic-demo' } },
+		{ id: '/Users/demo/Source/cadence', name: 'cadence', path: '/Users/demo/Source/cadence', missing: false, origin: { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Music' } },
 	];
 	private current: string | null = DEMO_ID;
 	private globalIdentity: Identity = { name: 'Demo Author', email: 'demo@example.com' };
@@ -1013,6 +1042,39 @@ class DemoBackend {
 				}
 				this.current = repo.id;
 				return repo;
+			}
+			case 'repo_scan': {
+				const root = String(args.root).replace(/[/\\]+$/, '');
+				const hits: [string, RepoOrigin | null][] = [
+					['harmony', { provider: 'github', label: 'GitHub', owner: 'melodic-demo' }],
+					['cadence', { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Music' }],
+					['tempo', { provider: 'github', label: 'GitHub', owner: 'melodic-demo' }],
+					['dotfiles', { provider: 'github', label: 'GitHub', owner: 'demo' }],
+					['billing-api', { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Payments' }],
+					['ledger', { provider: 'azure', label: 'Azure DevOps', owner: 'contoso/Payments' }],
+					['site', { provider: 'bitbucket', label: 'Bitbucket', owner: 'studio-team' }],
+					['scratch', null],
+				];
+				return {
+					repos: hits.map(([name, origin]) => {
+						const path = `${root}/${name}`;
+						return { path, name, origin, added: this.repos.some((r) => r.name === name) };
+					}),
+					truncated: false,
+				} satisfies ScanResult;
+			}
+			case 'repo_add_many': {
+				let added = 0;
+				for (const path of args.paths as string[]) {
+					const name = path.split('/').pop() ?? path;
+					if (!this.repos.some((r) => r.path === path || r.name === name)) {
+						const origin = DEMO_ORIGINS[name] ?? null;
+						this.repos = [...this.repos, { id: path, name, path, missing: false, origin }].sort((a, b) => a.name.localeCompare(b.name));
+						added++;
+					}
+				}
+				this.current ??= this.repos[0]?.id ?? null;
+				return added;
 			}
 			case 'repo_remove':
 				this.repos = this.repos.filter((r) => r.id !== args.id);

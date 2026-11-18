@@ -2,7 +2,8 @@ import { html } from '@melodicdev/core/template';
 import type { AddTab, DialogsComponent, SettingsTab } from './dialogs.component';
 import type { ThemeMode } from '../../shared/theme';
 import { plural } from '../../shared/format';
-import { isWindows } from '../../services/backend.service';
+import { isWindows, type ScanHit } from '../../services/backend.service';
+import { hostIcon } from '../../shared/repo-groups';
 
 const RESET_MODES = [
 	{ value: 'soft', label: 'Soft: keep the later changes staged' },
@@ -16,12 +17,62 @@ const THEMES = [
 	{ value: 'dark', label: 'Dark' },
 ];
 
-function folderField(self: DialogsComponent, label: string, field: 'addPath' | 'cloneParent' | 'createParent', placeholder: string) {
+function folderField(self: DialogsComponent, label: string, field: 'addPath' | 'cloneParent' | 'createParent' | 'scanRoot', placeholder: string) {
 	return html`
 		<div class="pathrow">
 			<ml-input label=${label} placeholder=${placeholder} .value=${self[field]} @ml:input=${(e: CustomEvent) => (self[field] = e.detail.value)}></ml-input>
 			<ml-button variant="outline" @ml:click=${() => self.browse(field)}>Choose…</ml-button>
 		</div>
+	`;
+}
+
+function groupBox(self: DialogsComponent, items: ScanHit[], label: string) {
+	const st = self.pickedState(items);
+	return html`<ml-checkbox size="sm" label=${label} .checked=${st.checked} .indeterminate=${st.mixed} ?disabled=${st.disabled} @ml:change=${(e: CustomEvent) => self.pick(items, e.detail.checked)}></ml-checkbox>`;
+}
+
+function scanTab(self: DialogsComponent) {
+	const result = self.scanResult;
+	const fresh = self.scanNew;
+	return html`
+		<p>Choose a folder and Melodic Studio looks through it for git repositories. Nothing is added until you tick the ones you want.</p>
+		<div class="pathrow">
+			<ml-input label="Folder" placeholder=${isWindows() ? 'C:\\Users\\me\\Source' : '~/Source'} .value=${self.scanRoot} @ml:input=${(e: CustomEvent) => (self.scanRoot = e.detail.value)} @keydown=${(e: KeyboardEvent) => e.key === 'Enter' && self.scan()}></ml-input>
+			<ml-button variant="outline" @ml:click=${() => self.browse('scanRoot')}>Choose…</ml-button>
+			<ml-button variant="outline" ?disabled=${!self.scanRoot.trim()} ?loading=${self.scanning} @ml:click=${() => self.scan()}><ml-icon slot="icon-start" icon="magnifying-glass"></ml-icon>Scan</ml-button>
+		</div>
+		${!result
+			? ''
+			: result.repos.length === 0
+				? html`<p class="scan-none">No repositories in that folder.</p>`
+				: html`
+					<div class="scan-head">
+						${groupBox(self, result.repos, `${result.repos.length} found${fresh.length < result.repos.length ? `, ${result.repos.length - fresh.length} already added` : ''}`)}
+						<span class="scan-count">${self.scanPicked.size} selected</span>
+					</div>
+					${result.truncated ? html`<div class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The folder is large, so the scan stopped early. Scan a folder closer to your repositories to see the rest.</span></div>` : ''}
+					<div class="scan-list">
+						${self.scanGroups.map(
+							(g) => html`
+								<div class="scan-host"><ml-icon icon=${hostIcon(g.provider)} size="sm"></ml-icon>${groupBox(self, g.owners.flatMap((o) => o.items), `${g.label} (${g.count})`)}</div>
+								${g.owners.map(
+									(o) => html`
+										${o.owner ? html`<div class="scan-owner">${groupBox(self, o.items, o.owner)}</div>` : ''}
+										${o.items.map(
+											(r) => html`
+												<div class="scan-row ${r.added ? 'added' : ''} ${o.owner ? 'deep' : ''}" title=${r.path}>
+													<ml-checkbox size="sm" .checked=${r.added || self.scanPicked.has(r.path)} ?disabled=${r.added} @ml:change=${(e: CustomEvent) => self.pick([r], e.detail.checked)}></ml-checkbox>
+													<span class="scan-name">${r.name}<span class="scan-path">${r.path}</span></span>
+													${r.added ? html`<span class="scan-tag">Added</span>` : ''}
+												</div>
+											`
+										)}
+									`
+								)}
+							`
+						)}
+					</div>
+				`}
 	`;
 }
 
@@ -34,11 +85,12 @@ export function dialogsTemplate(self: DialogsComponent) {
 	const files = prompt.files ?? [];
 
 	return html`
-		<ml-dialog #add-repo style="--ml-dialog-max-width: 520px" @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedAdd()}>
+		<ml-dialog #add-repo style=${`--ml-dialog-max-width: ${self.addTab === 'scan' ? 600 : 520}px`} @ml:open=${(e: Event) => e.target === e.currentTarget && self.openedAdd()}>
 			<h3 slot="dialog-header">Add a repository</h3>
 			<div class="dlg">
 				<ml-tabs size="sm" variant="pills" value=${self.addTab} @ml:change=${(e: CustomEvent) => (self.addTab = e.detail.value as AddTab)}>
 					<ml-tab slot="tab" value="add" label="Open a folder"></ml-tab>
+					<ml-tab slot="tab" value="scan" label="Scan a folder"></ml-tab>
 					<ml-tab slot="tab" value="clone" label="Clone"></ml-tab>
 					<ml-tab slot="tab" value="create" label="Create new"></ml-tab>
 				</ml-tabs>
@@ -47,6 +99,8 @@ export function dialogsTemplate(self: DialogsComponent) {
 						<p>Pick any folder on this computer. If it is not a git repository yet, Melodic Studio sets one up there.</p>
 						${folderField(self, 'Local path', 'addPath', isWindows() ? 'C:\\path\\to\\folder' : '/path/to/folder')}
 					`
+					: self.addTab === 'scan'
+						? scanTab(self)
 					: self.addTab === 'clone'
 						? html`
 							<p>Clone uses your own git setup, so SSH keys and credential helpers work as they do in a terminal.</p>
@@ -61,7 +115,7 @@ export function dialogsTemplate(self: DialogsComponent) {
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="outline" @ml:click=${() => store.closeDialog('add-repo')}>Cancel</ml-button>
 				<ml-button variant="primary" ?disabled=${!self.canAdd} ?loading=${busy === 'repo'} @ml:click=${() => self.submitAdd()}>
-					${self.addTab === 'add' ? 'Open folder' : self.addTab === 'clone' ? 'Clone' : 'Continue'}
+					${self.addTab === 'add' ? 'Open folder' : self.addTab === 'scan' ? (self.scanPicked.size ? `Add ${self.scanPicked.size}` : 'Add') : self.addTab === 'clone' ? 'Clone' : 'Continue'}
 				</ml-button>
 			</div>
 		</ml-dialog>

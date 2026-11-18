@@ -14,6 +14,7 @@ mod lsp;
 mod menu;
 mod paths;
 mod proc;
+mod scan;
 mod sessions;
 mod templates;
 mod terminal;
@@ -23,9 +24,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
 
+/// A repository's origin and the `.git/config` modification time it was read at.
+pub type OriginCache = std::collections::HashMap<PathBuf, (Option<std::time::SystemTime>, Option<git::Origin>)>;
+
 pub struct AppState {
     pub config_path: PathBuf,
     pub config: Mutex<config::AppConfig>,
+    /// Each repository's origin, kept until its `.git/config` changes (see `commands::origins`).
+    pub origins: Mutex<OriginCache>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -51,7 +57,7 @@ pub fn run() {
             std::fs::create_dir_all(&config_dir)?;
             let config_path = config_dir.join("repositories.json");
             let config = config::AppConfig::load(&config_path).unwrap_or_default();
-            app.manage(AppState { config_path, config: Mutex::new(config) });
+            app.manage(AppState { config_path, config: Mutex::new(config), origins: Mutex::default() });
             app.manage(agent::Agents::default());
             app.manage(lsp::Lsp::default());
             dev::start(app.handle());
@@ -65,6 +71,8 @@ pub fn run() {
             commands::app_status,
             commands::app_relaunch,
             commands::repo_add,
+            commands::repo_add_many,
+            commands::repo_scan,
             commands::repo_create,
             commands::repo_clone,
             commands::repo_remove,

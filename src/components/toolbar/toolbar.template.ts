@@ -1,11 +1,52 @@
 import { html } from '@melodicdev/core/template';
 import type { ToolbarComponent } from './toolbar.component';
 import { relativeTime } from '../../shared/format';
-import type { Branch } from '../../services/backend.service';
+import type { Branch, RepoSummary } from '../../services/backend.service';
+import { hostIcon } from '../../shared/repo-groups';
 import { terminals } from '../../services/terminal.store';
 
-function hostIcon(provider: string): string {
-	return provider === 'github' ? 'github-logo' : provider === 'gitlab' ? 'gitlab-logo' : provider === 'azure' ? 'windows-logo' : 'globe';
+function repoRow(self: ToolbarComponent, r: RepoSummary, deep: boolean) {
+	const repo = self.store.repo();
+	return html`
+		<div class="item ${r.id === repo?.id ? 'current' : ''} ${deep ? 'deep' : ''}" @click=${(e: MouseEvent) => self.pickRepo(r, e.metaKey || e.ctrlKey)} @contextmenu=${(e: MouseEvent) => self.repoMenu(e, r)}>
+			<ml-icon icon=${r.missing ? 'warning' : r.id === repo?.id ? 'check' : 'folder-simple'} size="sm"></ml-icon>
+			<span class="name">${r.name}<span class="path">${r.missing ? 'Folder not found' : r.path}</span></span>
+			<span class="acts">
+				${r.id === repo?.id || r.missing ? '' : html`<button title="Open in a new tab" @click=${(e: Event) => (e.stopPropagation(), self.pickRepo(r, true))}><ml-icon icon="browsers" size="sm"></ml-icon></button>`}
+				<button title="Remove from Melodic Studio" @click=${(e: Event) => self.ask('repo-pop', 'remove-repo', { repo: r }, e)}><ml-icon icon="x" size="sm"></ml-icon></button>
+			</span>
+		</div>
+	`;
+}
+
+/** The repository list, grouped by host and then owner; a header click folds its group (not while filtering). */
+function repoGroups(self: ToolbarComponent) {
+	const filtering = !!self.repoFilter.trim();
+	const open = (key: string) => filtering || !self.collapsed.has(key);
+	return self.repoGroups.map(
+		(g) => html`
+			<div class="grp" @click=${() => self.toggleGroup(g.key)}>
+				<ml-icon icon=${open(g.key) ? 'caret-down' : 'caret-right'} size="xs"></ml-icon>
+				<ml-icon icon=${hostIcon(g.provider)} size="sm"></ml-icon>
+				<span class="grp-name">${g.label}</span>
+				<span class="grp-count">${g.count}</span>
+			</div>
+			${open(g.key)
+				? g.owners.map(
+						(o) => html`
+							${o.owner
+								? html`<div class="grp owner" @click=${() => self.toggleGroup(o.key)}>
+										<ml-icon icon=${open(o.key) ? 'caret-down' : 'caret-right'} size="xs"></ml-icon>
+										<span class="grp-name">${o.owner}</span>
+										<span class="grp-count">${o.items.length}</span>
+									</div>`
+								: ''}
+							${!o.owner || open(o.key) ? o.items.map((r) => repoRow(self, r, !!o.owner)) : ''}
+						`
+					)
+				: ''}
+		`
+	);
 }
 
 /** "worktree" / "main checkout" for a branch another checkout holds (picking it switches there), else its date. */
@@ -117,18 +158,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 					</div>
 					<div class="list">
 						${self.repos.length === 0 ? html`<div class="none">No repositories${self.repoFilter ? ' match' : ' yet'}.</div>` : ''}
-						${self.repos.map(
-							(r) => html`
-								<div class="item ${r.id === repo?.id ? 'current' : ''}" @click=${(e: MouseEvent) => self.pickRepo(r, e.metaKey || e.ctrlKey)} @contextmenu=${(e: MouseEvent) => self.repoMenu(e, r)}>
-									<ml-icon icon=${r.missing ? 'warning' : r.id === repo?.id ? 'check' : 'folder-simple'} size="sm"></ml-icon>
-									<span class="name">${r.name}<span class="path">${r.missing ? 'Folder not found' : r.path}</span></span>
-									<span class="acts">
-										${r.id === repo?.id || r.missing ? '' : html`<button title="Open in a new tab" @click=${(e: Event) => (e.stopPropagation(), self.pickRepo(r, true))}><ml-icon icon="browsers" size="sm"></ml-icon></button>`}
-										<button title="Remove from Melodic Studio" @click=${(e: Event) => self.ask('repo-pop', 'remove-repo', { repo: r }, e)}><ml-icon icon="x" size="sm"></ml-icon></button>
-									</span>
-								</div>
-							`
-						)}
+						${repoGroups(self)}
 					</div>
 					<div class="foot">
 						<ml-button variant="outline" size="sm" full-width @ml:click=${() => self.ask('repo-pop', 'add-repo')}><ml-icon slot="icon-start" icon="plus"></ml-icon>Add repository…</ml-button>

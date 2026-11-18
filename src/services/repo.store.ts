@@ -6,7 +6,7 @@ import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
 import { DialogService } from '@melodicdev/components/dialog';
-import { BackendService, asAppError, type AppStatus, type Branch, type BranchCompare, type Commit, type FileChange, type RebaseStep, type Identities, type Identity, type OpenTarget, type RepoStatus, type RepoSummary, type ResetMode } from './backend.service';
+import { BackendService, asAppError, type AppStatus, type Branch, type BranchCompare, type Commit, type FileChange, type RebaseStep, type Identities, type Identity, type OpenTarget, type RepoStatus, type RepoSummary, type ResetMode, type ScanResult } from './backend.service';
 import { parseDiff, type ParsedDiff } from '../shared/diff';
 import { fileName, plural } from '../shared/format';
 
@@ -20,7 +20,7 @@ export interface Prompt {
 	files?: FileChange[];
 	repo?: RepoSummary;
 	/** Which tab the Add repository dialog opens on. */
-	tab?: 'add' | 'clone' | 'create';
+	tab?: 'add' | 'scan' | 'clone' | 'create';
 	/** Which section Settings opens on. */
 	settingsTab?: 'general' | 'editor' | 'accounts' | 'language-servers';
 	/** Add repository dialog: open the result in a new tab instead of replacing the current one. */
@@ -525,6 +525,40 @@ export class RepoStore {
 	}
 	createRepo(parent: string, name: string, readme: boolean): Promise<boolean> {
 		return this.openRepo(() => this.backend.createRepo(parent, name, readme));
+	}
+
+	/** Repositories under `root`, for the user to pick from. Adds nothing. */
+	async scanRepos(root: string): Promise<ScanResult | null> {
+		try {
+			return await this.backend.scanRepos(root);
+		} catch (e) {
+			this.fail(e);
+			return null;
+		}
+	}
+
+	/** Adds the repositories picked after a scan. The current repository stays, unless there was none. */
+	async addRepos(paths: string[]): Promise<boolean> {
+		if (this.busy() || paths.length === 0) {
+			return false;
+		}
+		const hadRepo = !!this.id;
+		this.busy.set('repo');
+		try {
+			const added = await this.backend.addRepos(paths);
+			await this.reloadApp();
+			this.toast.success(added === 0 ? 'Those repositories were already added' : `Added ${added} ${added === 1 ? 'repository' : 'repositories'}`);
+		} catch (e) {
+			this.fail(e);
+			return false;
+		} finally {
+			this.busy.set('');
+		}
+		if (!hadRepo && this.id) {
+			await this.refresh();
+			void this.loadBranches();
+		}
+		return true;
 	}
 
 	async removeRepo(id: string): Promise<void> {

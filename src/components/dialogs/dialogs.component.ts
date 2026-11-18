@@ -4,12 +4,13 @@ import { RepoStore } from '../../services/repo.store';
 import { AgentsStore } from '../../services/agents.store';
 import { InitService } from '../init/init-repo.component';
 import { joinPath } from '../../shared/paths';
-import type { ResetMode, Worktree } from '../../services/backend.service';
+import type { ResetMode, ScanHit, ScanResult, Worktree } from '../../services/backend.service';
+import { groupByOrigin, type HostGroup } from '../../shared/repo-groups';
 import { savedTheme, setTheme, type ThemeMode } from '../../shared/theme';
 import { dialogsTemplate } from './dialogs.template';
 import { dialogsStyles } from './dialogs.styles';
 
-export type AddTab = 'add' | 'clone' | 'create';
+export type AddTab = 'add' | 'scan' | 'clone' | 'create';
 export type SettingsTab = 'general' | 'editor' | 'accounts' | 'language-servers';
 
 /** Every dialog in the app. They are opened by id through `RepoStore.ask()`. */
@@ -30,6 +31,12 @@ export class DialogsComponent {
 	cloneParent = '';
 	createName = '';
 	createParent = '';
+	/** Scan a folder: where, the result, and the paths ticked for adding. */
+	scanRoot = '';
+	scanning = false;
+	scanResult: ScanResult | null = null;
+	scanGroups: HostGroup<ScanHit>[] = [];
+	scanPicked = new Set<string>();
 
 	branchName = '';
 	/** Git refused a safe delete; the next click forces it. */
@@ -57,9 +64,48 @@ export class DialogsComponent {
 		this.addPath = '';
 		this.cloneUrl = '';
 		this.createName = '';
+		this.scanResult = null;
+		this.scanGroups = [];
+		this.scanPicked = new Set();
 	}
 
-	async browse(field: 'addPath' | 'cloneParent' | 'createParent'): Promise<void> {
+	async scan(): Promise<void> {
+		const root = this.scanRoot.trim();
+		if (!root || this.scanning) {
+			return;
+		}
+		this.scanning = true;
+		this.scanResult = null;
+		this.scanPicked = new Set();
+		const result = await this.store.scanRepos(root);
+		this.scanning = false;
+		this.scanResult = result;
+		this.scanGroups = result ? groupByOrigin(result.repos) : [];
+	}
+
+	/** The scanned repositories not in Melodic Studio yet. */
+	get scanNew(): ScanHit[] {
+		return this.scanResult?.repos.filter((r) => !r.added) ?? [];
+	}
+
+	pick(items: ScanHit[], on: boolean): void {
+		const next = new Set(this.scanPicked);
+		for (const r of items) {
+			if (!r.added) {
+				on ? next.add(r.path) : next.delete(r.path);
+			}
+		}
+		this.scanPicked = next;
+	}
+
+	/** checked / indeterminate for a group's checkbox. */
+	pickedState(items: ScanHit[]): { checked: boolean; mixed: boolean; disabled: boolean } {
+		const open = items.filter((r) => !r.added);
+		const n = open.filter((r) => this.scanPicked.has(r.path)).length;
+		return { checked: open.length > 0 && n === open.length, mixed: n > 0 && n < open.length, disabled: open.length === 0 };
+	}
+
+	async browse(field: 'addPath' | 'cloneParent' | 'createParent' | 'scanRoot'): Promise<void> {
 		const picked = await this.store.pickFolder();
 		if (picked) {
 			this[field] = picked;
@@ -70,6 +116,8 @@ export class DialogsComponent {
 		switch (this.addTab) {
 			case 'add':
 				return !!this.addPath.trim();
+			case 'scan':
+				return this.scanPicked.size > 0;
 			case 'clone':
 				return !!this.cloneUrl.trim() && !!this.cloneParent.trim();
 			default:
@@ -79,6 +127,12 @@ export class DialogsComponent {
 
 	async submitAdd(): Promise<void> {
 		if (!this.canAdd) {
+			return;
+		}
+		if (this.addTab === 'scan') {
+			if (await this.store.addRepos([...this.scanPicked])) {
+				this.store.closeDialog('add-repo');
+			}
 			return;
 		}
 		// A folder that is not a repository yet (or a brand new one) goes through the setup wizard.
