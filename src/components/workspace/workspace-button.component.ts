@@ -26,13 +26,16 @@ import { isMac } from '../../services/backend.service';
 	styles: () => css`
 		:host {
 			display: flex;
+			align-items: center;
 		}
 		.tool {
 			all: unset;
 			position: relative;
 			display: grid;
 			place-items: center;
-			width: 48px;
+			width: 38px;
+			height: 38px;
+			border-radius: 10px;
 			color: var(--ms-toolbar-muted);
 		}
 		.tool:hover {
@@ -48,8 +51,8 @@ import { isMac } from '../../services/backend.service';
 		}
 		.count {
 			position: absolute;
-			top: 7px;
-			right: 4px;
+			top: 2px;
+			right: 0;
 			min-width: 16px;
 			padding: 0 4px;
 			box-sizing: border-box;
@@ -64,8 +67,8 @@ import { isMac } from '../../services/backend.service';
 		.busy,
 		.unread {
 			position: absolute;
-			top: 11px;
-			right: 11px;
+			top: 7px;
+			right: 7px;
 			width: 7px;
 			height: 7px;
 			border-radius: 50%;
