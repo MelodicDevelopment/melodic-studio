@@ -230,9 +230,44 @@ pub(crate) fn failure(what: &str, out: &Output) -> AppError {
     }
 }
 
+/// On Windows `az` is `az.cmd`, so its arguments pass through cmd.exe, which gives `& | % ^ < > ( ) ! "` meaning
+/// and reads text in the console code page; Rust refuses to start a batch file with arguments it cannot quote
+/// safely. Any such value (a project called "R&D", a branch with a non-ASCII name) is handed to az through a
+/// file instead: `--flag=@file`, or `@file` for a bare argument, which az expands to the file's text. Done on
+/// every OS so the path is the same one everywhere. The files are deleted when the returned guards drop.
+pub(crate) fn az_safe_args<S: AsRef<str>>(program: &str, args: &[S]) -> Result<(Vec<String>, Vec<TempText>)> {
+    let risky = |v: &str| v.chars().any(|c| matches!(c, '&' | '|' | '%' | '^' | '<' | '>' | '(' | ')' | '!' | '"' | '\n' | '\r') || !c.is_ascii());
+    let mut out = Vec::with_capacity(args.len());
+    let mut files = Vec::new();
+    for arg in args {
+        let arg = arg.as_ref();
+        if program != "az" || !risky(arg) {
+            out.push(arg.to_string());
+            continue;
+        }
+        match arg.split_once('=') {
+            // `--flag=value`: only the value goes to the file, and a value that is already `@file` stays.
+            Some((flag, value)) if flag.starts_with("--") && !value.starts_with('@') => {
+                let file = TempText::new("az-arg", value)?;
+                out.push(file.arg(flag));
+                files.push(file);
+            }
+            Some((flag, _)) if flag.starts_with("--") => out.push(arg.to_string()),
+            // A bare value (`project=R&D` after --route-parameters): the whole token.
+            _ => {
+                let file = TempText::new("az-arg", arg)?;
+                out.push(format!("@{}", file.path()));
+                files.push(file);
+            }
+        }
+    }
+    Ok((out, files))
+}
+
 pub(crate) fn run_ok(dir: &Path, program: &str, args: &[String], stdin: Option<Vec<u8>>, timeout: Duration) -> Result<String> {
+    let (args, _files) = az_safe_args(program, args)?;
     let mut c = tool(program, dir);
-    c.args(args);
+    c.args(&args);
     let out = run(c, stdin, timeout, program)?;
     if out.ok {
         Ok(out.stdout)
@@ -329,8 +364,9 @@ fn az_has_devops(version_json: &str) -> bool {
 
 fn sign_in_problem(g: &Git, target: &Target) -> Option<Problem> {
     let check = |program: &str, args: Vec<String>| -> std::result::Result<Output, Problem> {
+        let (args, _files) = az_safe_args(program, &args).map_err(|e| Problem::Other(e.to_string()))?;
         let mut c = tool(program, &g.dir);
-        c.args(args);
+        c.args(&args);
         run(c, None, STATUS_TIMEOUT, program).map_err(|e| Problem::Other(e.to_string()))
     };
     let outcome = match target {
@@ -1027,8 +1063,9 @@ fn azure_org_url(org: &str) -> Result<String> {
 /// Who is signed in, or why the tool cannot be used. `Ok(None)` is signed in without a name to show.
 fn account(target: &Target, dir: &Path) -> std::result::Result<Option<String>, Problem> {
     let ask = |program: &str, list: &[&str]| -> std::result::Result<Output, Problem> {
+        let (list, _files) = az_safe_args(program, list).map_err(|e| Problem::Other(e.to_string()))?;
         let mut c = tool(program, dir);
-        c.args(list);
+        c.args(&list);
         run(c, None, STATUS_TIMEOUT, program).map_err(|e| Problem::Other(e.to_string()))
     };
     let refused = |program: &str, o: &Output| if looks_offline(&o.stderr) { Problem::Other(failure(program, o).to_string()) } else { Problem::SignedOut };
@@ -1437,6 +1474,29 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn az_values_cmd_would_mangle_go_through_files() {
+        let args = ["repos", "--project=R&D", "--org=https://dev.azure.com/o", "--title=@already", "project=Équipe", "--branch=feature/x", "50%"];
+        let (out, files) = az_safe_args("az", &args).unwrap();
+        assert_eq!(files.len(), 3);
+        assert_eq!(out[0], "repos");
+        assert!(out[1].starts_with("--project=@"));
+        assert_eq!(std::fs::read_to_string(out[1].trim_start_matches("--project=@")).unwrap(), "R&D");
+        assert_eq!(out[2], "--org=https://dev.azure.com/o");
+        assert_eq!(out[3], "--title=@already");
+        assert!(out[4].starts_with('@'));
+        assert_eq!(std::fs::read_to_string(&out[4][1..]).unwrap(), "project=Équipe");
+        assert_eq!(out[5], "--branch=feature/x");
+        assert_eq!(std::fs::read_to_string(&out[6][1..]).unwrap(), "50%");
+        // Other tools take their arguments as they are.
+        let (gh, none) = az_safe_args("gh", &args).unwrap();
+        assert_eq!((gh[1].as_str(), none.len()), ("--project=R&D", 0));
+        // The files go when the guards do.
+        let path = out[1].trim_start_matches("--project=@").to_string();
+        drop(files);
+        assert!(!std::path::Path::new(&path).exists());
     }
 
     #[test]
