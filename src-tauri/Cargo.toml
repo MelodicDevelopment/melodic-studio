@@ -1,6 +1,6 @@
 [package]
 name = "melodic-studio"
-version = "0.3.3"
+version = "0.4.0"
 description = "Melodic Studio — git, code and agents in one window"
 edition = "2021"
 rust-version = "1.88"
