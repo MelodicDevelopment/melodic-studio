@@ -96,12 +96,20 @@ export function dialogsTemplate(self: DialogsComponent) {
 				${prompt.remote
 					? html`<p>Delete <b>${self.branch}</b> on the remote? Everyone who uses that remote loses the branch. Local branches are left alone.</p>`
 					: html`<p>Delete the local branch <b>${self.branch}</b>? The remote copy, if there is one, is left alone.</p>
-						${store.status()?.branch === self.branch && !store.status()?.detached ? html`<p>It is checked out, so Melodic Studio switches to <b>${store.fallbackBranch(self.branch) ?? 'another branch'}</b> first.</p>` : ''}`}
+						${store.status()?.branch === self.branch && !store.status()?.detached ? html`<p>It is checked out, so Melodic Studio switches to <b>${store.fallbackBranch(self.branch) ?? 'another branch'}</b> first.</p>` : ''}
+						${self.branchHolder?.isMain
+							? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>It is checked out in the main checkout. Switch that to another branch first.</span></p>`
+							: self.branchHolder
+								? html`<p title=${self.branchHolder.path}>It is checked out in a worktree, which is removed too.</p>
+									${self.branchHolder.changes
+										? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>That worktree has ${self.branchHolder.changes === 1 ? '1 uncommitted change' : `${self.branchHolder.changes} uncommitted changes`}. They are lost.</span></p>`
+										: ''}`
+								: ''}`}
 				${self.unmerged ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>This branch has commits that are not merged anywhere. Deleting it loses them.</span></p>` : ''}
 			</div>
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="outline" @ml:click=${() => store.closeDialog('delete-branch')}>Cancel</ml-button>
-				<ml-button variant="danger" ?loading=${busy === 'branch'} @ml:click=${() => self.deleteBranch()}>${self.unmerged ? 'Delete anyway' : 'Delete'}</ml-button>
+				<ml-button variant="danger" ?disabled=${!prompt.remote && !!self.branchHolder?.isMain} ?loading=${busy === 'branch'} @ml:click=${() => self.deleteBranch()}>${self.unmerged ? 'Delete anyway' : !prompt.remote && self.branchHolder ? 'Delete branch and worktree' : 'Delete'}</ml-button>
 			</div>
 		</ml-dialog>
 

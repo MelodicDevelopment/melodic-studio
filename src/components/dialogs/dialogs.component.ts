@@ -1,9 +1,10 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { RepoStore } from '../../services/repo.store';
+import { AgentsStore } from '../../services/agents.store';
 import { InitService } from '../init/init-repo.component';
 import { joinPath } from '../../shared/paths';
-import type { ResetMode } from '../../services/backend.service';
+import type { ResetMode, Worktree } from '../../services/backend.service';
 import { savedTheme, setTheme, type ThemeMode } from '../../shared/theme';
 import { dialogsTemplate } from './dialogs.template';
 import { dialogsStyles } from './dialogs.styles';
@@ -19,6 +20,7 @@ export type AddTab = 'add' | 'clone' | 'create';
 export class DialogsComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(InitService) private readonly _init!: InitService;
+	@Service(AgentsStore) readonly agents!: AgentsStore;
 
 	addTab: AddTab = 'add';
 	addPath = '';
@@ -94,6 +96,13 @@ export class DialogsComponent {
 	openedBranch(prefill: string): void {
 		this.branchName = prefill;
 		this.unmerged = false;
+		void this.agents.loadWorktrees();
+	}
+
+	/** Another checkout that has the branch being deleted checked out: git refuses while one does. */
+	get branchHolder(): Worktree | null {
+		const name = this.branch;
+		return (name && this.agents.worktrees().find((w) => w.branch === name && !w.active)) || null;
 	}
 
 	/** Git branch names cannot hold spaces; turn them into dashes as GitHub Desktop does. */
@@ -118,6 +127,15 @@ export class DialogsComponent {
 			if (await this.store.deleteRemoteBranch(this.branch)) {
 				this.store.closeDialog('delete-branch');
 			}
+			return;
+		}
+		const holder = this.branchHolder;
+		if (holder?.isMain) {
+			return;
+		}
+		// The worktree goes first (its uncommitted changes with it, as the dialog said); the branch
+		// itself is then deleted as usual, so unmerged commits still get the "Delete anyway" question.
+		if (holder && !(await this.agents.removeWorktree(holder.path, holder.changes > 0, null, false))) {
 			return;
 		}
 		const result = await this.store.deleteBranch(this.branch, this.unmerged);

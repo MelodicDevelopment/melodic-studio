@@ -764,10 +764,10 @@ export class AgentsStore {
 	}
 
 	/**
-	 * Remove a worktree. `force` also discards uncommitted changes in it and deletes its branch.
-	 * `repoId` is for a repository other than the open one.
+	 * Remove a worktree. `force` also discards uncommitted changes in it and deletes its branch
+	 * (unless `deleteBranch` says otherwise). `repoId` is for a repository other than the open one.
 	 */
-	async removeWorktree(path: string, force: boolean, repoId: string | null = null): Promise<boolean> {
+	async removeWorktree(path: string, force: boolean, repoId: string | null = null, deleteBranch = force): Promise<boolean> {
 		const id = repoId ?? this.repos.repo()?.id;
 		if (!id) {
 			return false;
@@ -775,7 +775,7 @@ export class AgentsStore {
 		const open = id === this.repos.repo()?.id;
 		const wasActive = open && this.worktrees().some((w) => samePath(w.path, path) && w.active);
 		try {
-			await this.backend.removeWorktree(id, path, force, force);
+			await this.backend.removeWorktree(id, path, force, deleteBranch);
 			if (open) {
 				if (wasActive) {
 					await this.repos.switchContext('agents');
