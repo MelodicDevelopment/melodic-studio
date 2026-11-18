@@ -247,8 +247,3 @@ function applyMonacoTheme(monaco: MonacoApi): void {
 	monaco.editor.defineTheme(THEME, { base: dark ? 'vs-dark' : 'vs', inherit: true, rules: [], colors });
 	monaco.editor.setTheme(THEME);
 }
-
-/** The app's monospace stack, resolved for Monaco (it measures glyphs, so it needs real names). */
-export function monoFont(): string {
-	return getComputedStyle(document.documentElement).getPropertyValue('--ml-font-mono').trim() || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-}

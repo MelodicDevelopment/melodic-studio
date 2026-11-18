@@ -9,6 +9,7 @@
     "core:window:allow-set-theme",
     "core:window:allow-toggle-maximize",
     "core:webview:allow-internal-toggle-devtools",
+    "core:webview:allow-set-webview-zoom",
     "dialog:default",
     "opener:default",
     "updater:default",

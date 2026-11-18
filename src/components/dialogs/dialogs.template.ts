@@ -1,5 +1,5 @@
 import { html } from '@melodicdev/core/template';
-import type { AddTab, DialogsComponent } from './dialogs.component';
+import type { AddTab, DialogsComponent, SettingsTab } from './dialogs.component';
 import type { ThemeMode } from '../../shared/theme';
 import { plural } from '../../shared/format';
 import { isWindows } from '../../services/backend.service';
@@ -186,39 +186,49 @@ export function dialogsTemplate(self: DialogsComponent) {
 			</div>
 		</ml-dialog>
 
-		<ml-dialog #settings style="--ml-dialog-max-width: 480px" @ml:open=${() => self.openedSettings()}>
+		<ml-dialog #settings style="--ml-dialog-max-width: 560px" @ml:open=${() => self.openedSettings()}>
 			<h3 slot="dialog-header">Settings</h3>
-			<div class="dlg">
-				<ml-select label="Appearance" .options=${THEMES} .value=${self.theme} @ml:change=${(e: CustomEvent) => self.pickTheme(e.detail.value as ThemeMode)}></ml-select>
-				<section class="who">
-					<h4>Commits as</h4>
-					<div class="pair">
-						<ml-input label="Name" .value=${self.globalName} @ml:input=${(e: CustomEvent) => (self.globalName = e.detail.value)}></ml-input>
-						<ml-input label="Email" type="email" .value=${self.globalEmail} @ml:input=${(e: CustomEvent) => (self.globalEmail = e.detail.value)}></ml-input>
-					</div>
-					<small>Every repository, through git's global config.</small>
-					${store.repo()
-						? html`
-							<ml-checkbox label=${`Use a different name and email in ${store.repo()!.name}`} .checked=${self.override} @ml:change=${(e: CustomEvent) => self.toggleOverride(e.detail.checked)}></ml-checkbox>
-							${self.override
-								? html`
-									<div class="pair">
-										<ml-input label="Name" .value=${self.repoName} @ml:input=${(e: CustomEvent) => (self.repoName = e.detail.value)}></ml-input>
-										<ml-input label="Email" type="email" .value=${self.repoEmail} @ml:input=${(e: CustomEvent) => (self.repoEmail = e.detail.value)}></ml-input>
-									</div>
-								`
-								: ''}
-						`
-						: ''}
-				</section>
-				<ms-language-servers></ms-language-servers>
-				<dl>
-					<dt>Git</dt>
-					<dd>${app?.gitVersion ?? 'Not found on this computer'}</dd>
-					<dt>Melodic Studio</dt>
-					<dd>${app?.appVersion ?? ''}</dd>
-				</dl>
-				<ms-update-status></ms-update-status>
+			<div class="dlg settings">
+				<ml-tabs size="sm" variant="pills" value=${self.settingsTab} @ml:change=${(e: CustomEvent) => (self.settingsTab = e.detail.value as SettingsTab)}>
+					<ml-tab slot="tab" value="general" label="General"></ml-tab>
+					<ml-tab slot="tab" value="editor" label="Editor"></ml-tab>
+					<ml-tab slot="tab" value="accounts" label="Accounts"></ml-tab>
+					<ml-tab slot="tab" value="language-servers" label="Language servers"></ml-tab>
+				</ml-tabs>
+				<div class="pane" style=${self.settingsTab === 'general' ? '' : 'display: none'}>
+					<ml-select label="Appearance" .options=${THEMES} .value=${self.theme} @ml:change=${(e: CustomEvent) => self.pickTheme(e.detail.value as ThemeMode)}></ml-select>
+					<section class="who">
+						<h4>Commits as</h4>
+						<div class="pair">
+							<ml-input label="Name" .value=${self.globalName} @ml:input=${(e: CustomEvent) => (self.globalName = e.detail.value)}></ml-input>
+							<ml-input label="Email" type="email" .value=${self.globalEmail} @ml:input=${(e: CustomEvent) => (self.globalEmail = e.detail.value)}></ml-input>
+						</div>
+						<small>Every repository, through git's global config.</small>
+						${store.repo()
+							? html`
+								<ml-checkbox label=${`Use a different name and email in ${store.repo()!.name}`} .checked=${self.override} @ml:change=${(e: CustomEvent) => self.toggleOverride(e.detail.checked)}></ml-checkbox>
+								${self.override
+									? html`
+										<div class="pair">
+											<ml-input label="Name" .value=${self.repoName} @ml:input=${(e: CustomEvent) => (self.repoName = e.detail.value)}></ml-input>
+											<ml-input label="Email" type="email" .value=${self.repoEmail} @ml:input=${(e: CustomEvent) => (self.repoEmail = e.detail.value)}></ml-input>
+										</div>
+									`
+									: ''}
+							`
+							: ''}
+					</section>
+					<dl>
+						<dt>Git</dt>
+						<dd>${app?.gitVersion ?? 'Not found on this computer'}</dd>
+						<dt>Melodic Studio</dt>
+						<dd>${app?.appVersion ?? ''}</dd>
+					</dl>
+					<ms-update-status></ms-update-status>
+				</div>
+				<div class="pane" style=${self.settingsTab === 'editor' ? '' : 'display: none'}><ms-editor-settings></ms-editor-settings></div>
+				<div class="pane" style=${self.settingsTab === 'accounts' ? '' : 'display: none'}><ms-accounts .active=${self.settingsTab === 'accounts'}></ms-accounts></div>
+				<div class="pane" style=${self.settingsTab === 'language-servers' ? '' : 'display: none'}><ms-language-servers></ms-language-servers></div>
 			</div>
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="primary" @ml:click=${() => void self.doneSettings()}>Done</ml-button>

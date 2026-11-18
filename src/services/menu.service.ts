@@ -6,8 +6,9 @@ import { Injectable, Injector } from '@melodicdev/core/injection';
 import { BackendService, isDesktop, isMac } from './backend.service';
 import { RepoStore } from './repo.store';
 import { UpdatesService } from './updates.service';
+import { EditorSettingsStore } from './editor-settings.store';
 
-export type MenuAction = 'new-project' | 'add-repo' | 'clone-repo' | 'settings' | 'check-updates';
+export type MenuAction = 'new-project' | 'add-repo' | 'clone-repo' | 'settings' | 'check-updates' | 'zoom-in' | 'zoom-out' | 'zoom-reset';
 
 @Injectable()
 export class MenuService {
@@ -23,6 +24,7 @@ export class MenuService {
 			return;
 		}
 		this._started = true;
+		void Injector.get(EditorSettingsStore).applyZoom();
 		void Injector.get(BackendService).listen<string>('menu', (id) => this.run(id as MenuAction));
 		if (!isDesktop() || !isMac()) {
 			window.addEventListener('keydown', this._keys, true);
@@ -43,6 +45,11 @@ export class MenuService {
 			case 'settings':
 				this.repo.ask('settings');
 				break;
+			case 'zoom-in':
+			case 'zoom-out':
+			case 'zoom-reset':
+				Injector.get(EditorSettingsStore).stepZoom(action === 'zoom-in' ? 1 : action === 'zoom-out' ? -1 : 0);
+				break;
 			case 'check-updates':
 				this.repo.ask('settings');
 				void Injector.get(UpdatesService).check();
@@ -51,11 +58,26 @@ export class MenuService {
 	}
 
 	private readonly _keys = (e: KeyboardEvent): void => {
-		if (!(e.metaKey || e.ctrlKey) || e.altKey || document.querySelector('ml-dialog[open]')) {
+		if (!(e.metaKey || e.ctrlKey) || e.altKey) {
 			return;
 		}
-		const action: MenuAction | null = e.key === ',' && !e.shiftKey ? 'settings' : e.key.toLowerCase() === 'n' && e.shiftKey ? 'new-project' : e.key.toLowerCase() === 'o' && !e.shiftKey ? 'add-repo' : null;
-		if (action) {
+		const key = e.key.toLowerCase();
+		const action: MenuAction | null =
+			key === ',' && !e.shiftKey
+				? 'settings'
+				: key === 'n' && e.shiftKey
+					? 'new-project'
+					: key === 'o' && !e.shiftKey
+						? 'add-repo'
+						: key === '=' || key === '+'
+							? 'zoom-in'
+							: key === '-' || key === '_'
+								? 'zoom-out'
+								: key === '0' && !e.shiftKey
+									? 'zoom-reset'
+									: null;
+		// A dialog already open keeps the keyboard, except for zooming.
+		if (action && (action.startsWith('zoom') || !document.querySelector('ml-dialog[open]'))) {
 			e.preventDefault();
 			e.stopPropagation();
 			this.run(action);

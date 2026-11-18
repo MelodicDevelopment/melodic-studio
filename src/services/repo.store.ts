@@ -21,6 +21,8 @@ export interface Prompt {
 	repo?: RepoSummary;
 	/** Which tab the Add repository dialog opens on. */
 	tab?: 'add' | 'clone' | 'create';
+	/** Which section Settings opens on. */
+	settingsTab?: 'general' | 'editor' | 'accounts' | 'language-servers';
 	/** Add repository dialog: open the result in a new tab instead of replacing the current one. */
 	newTab?: boolean;
 	/** A commit the dialog acts on (branch from, tag, reset to). */

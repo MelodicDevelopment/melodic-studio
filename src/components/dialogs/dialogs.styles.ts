@@ -12,6 +12,12 @@ export const dialogsStyles = () => css`
 		gap: 14px;
 		color: var(--ml-color-text-secondary);
 	}
+	.settings .pane {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		min-height: 360px;
+	}
 	.dlg p {
 		margin: 0;
 		line-height: 1.5;

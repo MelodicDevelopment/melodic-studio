@@ -112,7 +112,3 @@ export function xtermTheme(): ITheme {
 	return theme;
 }
 
-/** The app's monospace stack, resolved (xterm measures glyphs, so it needs real font names). */
-export function termFont(): string {
-	return getComputedStyle(document.documentElement).getPropertyValue('--ml-font-mono').trim() || 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-}

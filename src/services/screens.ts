@@ -13,7 +13,9 @@ import { Injectable, Injector } from '@melodicdev/core/injection';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import { BackendService, isMac } from './backend.service';
-import { adoptXtermStyles, loadXterm, termFont, xtermTheme } from '../shared/xterm';
+import { adoptXtermStyles, loadXterm, xtermTheme } from '../shared/xterm';
+import { effect } from '@melodicdev/core/signals';
+import { EditorSettingsStore } from './editor-settings.store';
 
 interface TermData {
 	key: string;
@@ -73,6 +75,9 @@ export class ScreenPool {
 	private _listening: Promise<void> | null = null;
 	private _seq = 0;
 
+	private get settings(): EditorSettingsStore {
+		return Injector.get(EditorSettingsStore);
+	}
 	private get backend(): BackendService {
 		return Injector.get(BackendService);
 	}
@@ -96,8 +101,8 @@ export class ScreenPool {
 		await (this._listening ??= this.listen());
 		const id = `s${++this._seq}`;
 		const term = new xterm.Terminal({
-			fontFamily: termFont(),
-			fontSize: 12,
+			fontFamily: this.settings.font(),
+			fontSize: this.settings.settings().terminalFontSize,
 			theme: xtermTheme(),
 			cursorBlink: true,
 			scrollback: 10000,
@@ -325,6 +330,22 @@ export class ScreenPool {
 				screen.events.exit(e.code, Date.now() - screen.started);
 			}),
 		);
+		// Settings > Editor: the code font and the terminal's text size, on every screen at once.
+		effect(() => {
+			const size = this.settings.settings().terminalFontSize;
+			const font = this.settings.font();
+			this._screens.forEach((screen) => {
+				if (screen.term.options.fontSize !== size || screen.term.options.fontFamily !== font) {
+					screen.term.options.fontSize = size;
+					screen.term.options.fontFamily = font;
+					try {
+						screen.fit.fit();
+					} catch {
+						/* not on screen */
+					}
+				}
+			});
+		});
 		// xterm wants real colours, so the theme is resolved again whenever the app switches light/dark.
 		new MutationObserver(() => {
 			const theme = xtermTheme();

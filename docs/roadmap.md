@@ -174,3 +174,16 @@ The recorded rule stays: no stored tokens, the app calls no host API.
   this repository"), and by spotting issue keys (`ABC-123`) in branch names.
 - After an install or sign-in, re-check on window focus so the notice goes away without a restart.
 - Nothing is installed for the user (as today: `AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no`).
+
+## 7. Editor settings (built 2026-11-18)
+
+Settings > Editor (`EditorSettingsStore`, localStorage `studio.editor` / `studio.zoom`): font family (any installed
+font by name, falling back to the app's JetBrains Mono), size, line spacing, tab size (or detect from the file),
+spaces/tabs shown, word wrap, minimap, line numbers, sticky scroll, bracket colours, ligatures, cursor blink,
+terminal text size; Restore defaults. The diff view follows through `--ms-code-*`, terminals through
+`ScreenPool`. Window zoom is the webview's own (View > Zoom In / Out / Actual Size, Cmd/Ctrl + = - 0); the editor's
+text alone is Cmd/Ctrl+Alt + = - 0.
+
+Later, if missed: format on save (needs LSP `textDocument/formatting`), trim trailing whitespace / final newline on
+save (opt-in: it changes files), auto-save after a delay, rulers at a column, `.editorconfig` respected, per-language
+tab size, a separate UI font size.

@@ -10,6 +10,9 @@ pub const ADD_REPO: &str = "add-repo";
 pub const CLONE_REPO: &str = "clone-repo";
 pub const SETTINGS: &str = "settings";
 pub const CHECK_UPDATES: &str = "check-updates";
+pub const ZOOM_IN: &str = "zoom-in";
+pub const ZOOM_OUT: &str = "zoom-out";
+pub const ZOOM_RESET: &str = "zoom-reset";
 
 /// Shortcuts are only shown on macOS, where the menu bar takes them before the page sees the key.
 /// Elsewhere the page catches the same keys itself (a focused WebView2 does not pass them to the menu).
@@ -54,6 +57,16 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
             &PredefinedMenuItem::copy(app, None)?,
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let view = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &item(ZOOM_IN, "Zoom In", key("CmdOrCtrl+="))?,
+            &item(ZOOM_OUT, "Zoom Out", key("CmdOrCtrl+-"))?,
+            &item(ZOOM_RESET, "Actual Size", key("CmdOrCtrl+0"))?,
         ],
     )?;
     let window = Submenu::with_items(
@@ -102,19 +115,19 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 &PredefinedMenuItem::quit(app, None)?,
             ],
         )?;
-        Menu::with_items(app, &[&app_menu, &file, &edit, &window, &help])
+        Menu::with_items(app, &[&app_menu, &file, &edit, &view, &window, &help])
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = about;
-        Menu::with_items(app, &[&file, &edit, &window, &help])
+        Menu::with_items(app, &[&file, &edit, &view, &window, &help])
     }
 }
 
 /// Our items reach the page as `menu` events carrying the item's id.
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEvent) {
     let id = event.id().0.as_str();
-    if [NEW_PROJECT, ADD_REPO, CLONE_REPO, SETTINGS, CHECK_UPDATES].contains(&id) {
+    if [NEW_PROJECT, ADD_REPO, CLONE_REPO, SETTINGS, CHECK_UPDATES, ZOOM_IN, ZOOM_OUT, ZOOM_RESET].contains(&id) {
         let _ = app.emit("menu", id);
     }
 }

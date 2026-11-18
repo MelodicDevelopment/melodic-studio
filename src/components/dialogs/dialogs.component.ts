@@ -10,6 +10,7 @@ import { dialogsTemplate } from './dialogs.template';
 import { dialogsStyles } from './dialogs.styles';
 
 export type AddTab = 'add' | 'clone' | 'create';
+export type SettingsTab = 'general' | 'editor' | 'accounts' | 'language-servers';
 
 /** Every dialog in the app. They are opened by id through `RepoStore.ask()`. */
 @MelodicComponent({
@@ -23,6 +24,7 @@ export class DialogsComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 
 	addTab: AddTab = 'add';
+	settingsTab: SettingsTab = 'general';
 	addPath = '';
 	cloneUrl = '';
 	cloneParent = '';
@@ -193,6 +195,7 @@ export class DialogsComponent {
 	}
 
 	openedSettings(): void {
+		this.settingsTab = this.store.prompt().settingsTab ?? 'general';
 		this.theme = savedTheme();
 		const app = this.store.app();
 		this.globalName = app?.authorName ?? '';

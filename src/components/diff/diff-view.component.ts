@@ -75,9 +75,9 @@ function noteRow(n: DiffNote, focus: number | null) {
 			display: inline-block;
 			min-width: 100%;
 			padding-bottom: 24px;
-			font-family: var(--ml-font-mono);
-			font-size: 12px;
-			line-height: 20px;
+			font-family: var(--ms-code-font, var(--ml-font-mono));
+			font-size: var(--ms-code-size, 12px);
+			line-height: var(--ms-code-line, 20px);
 		}
 		.row {
 			display: flex;

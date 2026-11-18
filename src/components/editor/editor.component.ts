@@ -1,12 +1,14 @@
 import type * as Monaco from 'monaco-editor';
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
+import { effect, untracked } from '@melodicdev/core/signals';
+import { EditorSettingsStore } from '../../services/editor-settings.store';
 import { html, css } from '@melodicdev/core/template';
 import { RepoStore } from '../../services/repo.store';
 import { ExplorerStore, type OpenFile } from '../../services/explorer.store';
 import { isMac } from '../../services/backend.service';
 import { dirName, fileName } from '../../shared/format';
-import { adoptMonacoStyles, loadMonaco, monoFont, releaseMonacoStyles } from '../../shared/monaco';
+import { adoptMonacoStyles, loadMonaco, releaseMonacoStyles } from '../../shared/monaco';
 
 function message(icon: string, text: string) {
 	return html`<div class="state"><ml-icon icon=${icon} size="lg"></ml-icon><div>${text}</div></div>`;
@@ -245,6 +247,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 export class EditorComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(ExplorerStore) readonly explorer!: ExplorerStore;
+	@Service(EditorSettingsStore) private readonly _settings!: EditorSettingsStore;
 
 	elementRef!: HTMLElement;
 	/** Monaco is loaded and mounted. */
@@ -259,6 +262,40 @@ export class EditorComponent {
 	onCreate(): void {
 		this.explorer.sync();
 		void this.mount();
+		// Settings changes apply to the open editor at once.
+		effect(() => {
+			this._settings.settings();
+			untracked(() => this.applySettings());
+		});
+	}
+
+	/** The editor options that Settings > Editor controls. */
+	private options(): Monaco.editor.IEditorOptions & Monaco.editor.IGlobalEditorOptions {
+		const s = this._settings.settings();
+		return {
+			fontFamily: this._settings.font(),
+			fontSize: s.fontSize,
+			lineHeight: this._settings.lineHeightPx(),
+			fontLigatures: s.ligatures,
+			wordWrap: s.wordWrap ? 'on' : 'off',
+			minimap: { enabled: s.minimap },
+			lineNumbers: s.lineNumbers ? 'on' : 'off',
+			stickyScroll: { enabled: s.stickyScroll },
+			bracketPairColorization: { enabled: s.bracketColors },
+			guides: { bracketPairs: s.bracketColors ? 'active' : false, indentation: true },
+			renderWhitespace: s.whitespace,
+			cursorBlinking: s.cursorBlink ? 'blink' : 'solid',
+			detectIndentation: s.tabSize === 0,
+			...(s.tabSize ? { tabSize: s.tabSize } : {}),
+		};
+	}
+
+	private applySettings(): void {
+		this._editor?.updateOptions(this.options());
+		const tab = this._settings.settings().tabSize;
+		if (tab) {
+			this._editor?.getModel()?.updateOptions({ tabSize: tab });
+		}
 	}
 
 	onRender(): void {
@@ -299,16 +336,16 @@ export class EditorComponent {
 		const editor = monaco.editor.create(host, {
 			model: null,
 			automaticLayout: true,
-			fontFamily: monoFont(),
-			fontSize: 12,
-			lineHeight: 20,
 			padding: { top: 6 },
 			scrollBeyondLastLine: false,
 			smoothScrolling: true,
-			renderWhitespace: 'selection',
 			fixedOverflowWidgets: true,
-			stickyScroll: { enabled: false },
+			...this.options(),
 		});
+		// Cmd/Ctrl + = / - / 0: the editor's text size alone (the window's zoom is the View menu's).
+		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Equal, () => this._settings.nudgeFont(1));
+		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Minus, () => this._settings.nudgeFont(-1));
+		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Digit0, () => this._settings.nudgeFont(0));
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
 			if (this._shown) {
 				void this.explorer.save(this._shown);
@@ -340,6 +377,10 @@ export class EditorComponent {
 			return;
 		}
 		editor.setModel(model);
+		const tabSize = this._settings.settings().tabSize;
+		if (tabSize) {
+			model?.updateOptions({ tabSize });
+		}
 		const view = path ? this.explorer.view(path) : null;
 		if (view) {
 			editor.restoreViewState(view);
