@@ -25,6 +25,15 @@ export interface EditorSettings {
 	whitespace: Whitespace;
 	cursorBlink: boolean;
 	terminalFontSize: number;
+	/** Columns for vertical guides, e.g. "80, 120". */
+	rulers: string;
+	/** `delay`: a second after typing stops; `focus`: when the window loses focus. */
+	autoSave: 'off' | 'delay' | 'focus';
+	trimTrailing: boolean;
+	finalNewline: boolean;
+	formatOnSave: boolean;
+	/** Follow the repository's `.editorconfig`, which wins over the settings above for its files. */
+	editorconfig: boolean;
 }
 
 export const EDITOR_DEFAULTS: EditorSettings = {
@@ -41,6 +50,12 @@ export const EDITOR_DEFAULTS: EditorSettings = {
 	whitespace: 'selection',
 	cursorBlink: true,
 	terminalFontSize: 12,
+	rulers: '',
+	autoSave: 'off',
+	trimTrailing: false,
+	finalNewline: false,
+	formatOnSave: false,
+	editorconfig: true,
 };
 
 export const FONT_SIZES = { min: 8, max: 32 };
@@ -69,6 +84,8 @@ function clean(s: EditorSettings): EditorSettings {
 		lineHeight: typeof s.lineHeight === 'number' && s.lineHeight >= 1 && s.lineHeight <= 2.5 ? s.lineHeight : EDITOR_DEFAULTS.lineHeight,
 		tabSize: [0, 2, 4, 8].includes(s.tabSize) ? s.tabSize : 0,
 		whitespace: ['none', 'boundary', 'selection', 'all'].includes(s.whitespace) ? s.whitespace : 'selection',
+		rulers: typeof s.rulers === 'string' ? s.rulers : '',
+		autoSave: ['off', 'delay', 'focus'].includes(s.autoSave) ? s.autoSave : 'off',
 	};
 }
 
@@ -107,6 +124,15 @@ export class EditorSettingsStore {
 		const chosen = this.settings().fontFamily;
 		const quoted = chosen && !/[,'"]/.test(chosen) ? `"${chosen}"` : chosen;
 		return [quoted, app || FALLBACK_MONO].filter(Boolean).join(', ');
+	}
+
+	/** The ruler columns, plus `extra` (an .editorconfig max_line_length). */
+	rulers(extra?: number): number[] {
+		const cols = this.settings()
+			.rulers.split(/[\s,]+/)
+			.map(Number)
+			.filter((n) => Number.isInteger(n) && n > 0 && n < 1000);
+		return [...new Set(extra ? [...cols, extra] : cols)].sort((a, b) => a - b);
 	}
 
 	lineHeightPx(): number {

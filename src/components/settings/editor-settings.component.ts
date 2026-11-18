@@ -21,6 +21,11 @@ const WHITESPACE = [
 	{ value: 'boundary', label: 'Between words and at line ends' },
 	{ value: 'all', label: 'Always' },
 ];
+const AUTO_SAVE = [
+	{ value: 'off', label: `Off: save with ${isMac() ? '⌘' : 'Ctrl+'}S` },
+	{ value: 'delay', label: 'A second after typing stops' },
+	{ value: 'focus', label: 'When the window loses focus' },
+];
 const ZOOM_LABELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map((z) => ({ value: String(z), label: `${Math.round(z * 100)}%` }));
 
 /** Settings > Editor: how code looks in the editor, the diff view and the terminals, and the window's zoom. */
@@ -54,6 +59,15 @@ const ZOOM_LABELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map(
 				${toggle('bracketColors', 'Colour matching brackets')}
 				${toggle('ligatures', 'Font ligatures', 'For fonts that have them (Fira Code, JetBrains Mono)')}
 				${toggle('cursorBlink', 'Blinking cursor')}
+			</div>
+			<ml-input label="Rulers" placeholder="80, 120" hint="Columns to draw a guide at. An .editorconfig max_line_length adds one." .value=${s.rulers} @ml:input=${(e: CustomEvent) => store.set('rulers', e.detail.value)}></ml-input>
+			<h4>Saving</h4>
+			<ml-select label="Auto-save" .options=${AUTO_SAVE} .value=${s.autoSave} @ml:change=${(e: CustomEvent) => store.set('autoSave', e.detail.value as EditorSettings['autoSave'])}></ml-select>
+			<div class="toggles">
+				${toggle('formatOnSave', 'Format on save', `${mod}S formats the file first, with its language server or the editor's own formatter`)}
+				${toggle('trimTrailing', 'Trim trailing spaces on save')}
+				${toggle('finalNewline', 'End files with a newline on save')}
+				${toggle('editorconfig', "Follow the repository's .editorconfig", 'Indentation, trimming and the final newline per file type; it wins over the settings here')}
 			</div>
 			<div class="grid">
 				<ml-input label="Terminal text size" type="number" min=${FONT_SIZES.min} max=${FONT_SIZES.max} .value=${String(s.terminalFontSize)} @ml:change=${(e: CustomEvent) => store.set('terminalFontSize', Number(e.detail.value))}></ml-input>
@@ -91,6 +105,11 @@ const ZOOM_LABELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map(
 		.toggles {
 			display: grid;
 			gap: 8px;
+		}
+		h4 {
+			margin: 6px 0 -4px;
+			color: var(--ml-color-text);
+			font-weight: 600;
 		}
 		.end {
 			display: flex;

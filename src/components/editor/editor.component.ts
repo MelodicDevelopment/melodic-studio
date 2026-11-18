@@ -287,15 +287,42 @@ export class EditorComponent {
 			cursorBlinking: s.cursorBlink ? 'blink' : 'solid',
 			detectIndentation: s.tabSize === 0,
 			...(s.tabSize ? { tabSize: s.tabSize } : {}),
+			rulers: this._settings.rulers(this._shown ? this.explorer.configFor(this._shown).maxLineLength : undefined),
 		};
+	}
+
+	/** Indentation for the file on screen: `.editorconfig` first, then Settings' tab size, else what Monaco detected. */
+	private indent(model: Monaco.editor.ITextModel | null, path: string | null): void {
+		if (!model || !path) {
+			return;
+		}
+		const ec = this.explorer.configFor(path);
+		const size = ec.indentSize ?? ec.tabWidth ?? (this._settings.settings().tabSize || undefined);
+		model.updateOptions({ ...(size ? { tabSize: size, indentSize: size } : {}), ...(ec.indentStyle ? { insertSpaces: ec.indentStyle === 'space' } : {}) });
+	}
+
+	/** Cmd/Ctrl+S: format first when Settings asks (the language server's formatter, or Monaco's own), then save. */
+	private async saveShown(): Promise<void> {
+		const path = this._shown;
+		const editor = this._editor;
+		if (!path || !editor) {
+			return;
+		}
+		if (this._settings.settings().formatOnSave) {
+			try {
+				await editor.getAction('editor.action.formatDocument')?.run();
+			} catch {
+				/* no formatter for this language */
+			}
+		}
+		if (this._shown === path) {
+			await this.explorer.save(path);
+		}
 	}
 
 	private applySettings(): void {
 		this._editor?.updateOptions(this.options());
-		const tab = this._settings.settings().tabSize;
-		if (tab) {
-			this._editor?.getModel()?.updateOptions({ tabSize: tab });
-		}
+		this.indent(this._editor?.getModel() ?? null, this._shown);
 	}
 
 	onRender(): void {
@@ -346,11 +373,7 @@ export class EditorComponent {
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Equal, () => this._settings.nudgeFont(1));
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Minus, () => this._settings.nudgeFont(-1));
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Digit0, () => this._settings.nudgeFont(0));
-		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-			if (this._shown) {
-				void this.explorer.save(this._shown);
-			}
-		});
+		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void this.saveShown());
 		this._editor = editor;
 		this.ready = true;
 		void this.show();
@@ -377,10 +400,8 @@ export class EditorComponent {
 			return;
 		}
 		editor.setModel(model);
-		const tabSize = this._settings.settings().tabSize;
-		if (tabSize) {
-			model?.updateOptions({ tabSize });
-		}
+		this.indent(model, path);
+		editor.updateOptions({ rulers: this.options().rulers });
 		const view = path ? this.explorer.view(path) : null;
 		if (view) {
 			editor.restoreViewState(view);

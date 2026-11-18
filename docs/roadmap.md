@@ -184,6 +184,8 @@ terminal text size; Restore defaults. The diff view follows through `--ms-code-*
 `ScreenPool`. Window zoom is the webview's own (View > Zoom In / Out / Actual Size, Cmd/Ctrl + = - 0); the editor's
 text alone is Cmd/Ctrl+Alt + = - 0.
 
-Later, if missed: format on save (needs LSP `textDocument/formatting`), trim trailing whitespace / final newline on
-save (opt-in: it changes files), auto-save after a delay, rulers at a column, `.editorconfig` respected, per-language
-tab size, a separate UI font size.
+Also (built the same day): rulers, auto-save (a second after typing stops, or on leaving the window), trim trailing
+whitespace and end with a newline on save (both off by default: they change files), format on save (the language
+server's `textDocument/formatting`, else Monaco's own), and the repository root's `.editorconfig` (indentation,
+trimming, final newline, `max_line_length` as a ruler; `shared/editorconfig.ts`), which wins over Settings for its
+files and so covers per-language tab sizes. Not done: nested `.editorconfig` files, a separate UI font size.

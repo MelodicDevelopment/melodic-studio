@@ -10,6 +10,8 @@ import { BackendService, type FileContent, type OnConflict, type Placed, type Tr
 import { RepoStore } from './repo.store';
 import { loadMonaco } from '../shared/monaco';
 import { joinPath } from '../shared/paths';
+import { EditorSettingsStore } from './editor-settings.store';
+import { editorConfigFor, parseEditorConfig, type EditorConfig, type ParsedEditorConfig } from '../shared/editorconfig';
 
 export interface OpenFile {
 	path: string;
@@ -73,12 +75,19 @@ export class ExplorerStore {
 	private readonly _snapshots = new Map<string, Snapshot>();
 	private readonly _buffers = new Map<string, Buffer>();
 	private _scan = 0;
+	/** Each checkout's `.editorconfig`, read on every rescan. */
+	private readonly _editorconfig = new Map<string, ParsedEditorConfig>();
+	private readonly _autoSave = new Map<string, ReturnType<typeof setTimeout>>();
+	private _blurHooked = false;
 
 	private get backend(): BackendService {
 		return Injector.get(BackendService);
 	}
 	private get repo(): RepoStore {
 		return Injector.get(RepoStore);
+	}
+	private get settings(): EditorSettingsStore {
+		return Injector.get(EditorSettingsStore);
 	}
 	private key(path: string, id = this._repoId): string {
 		return `${id}\n${path}`;
@@ -128,7 +137,8 @@ export class ExplorerStore {
 			return;
 		}
 		const scan = ++this._scan;
-		await Promise.all(['', ...this.expanded()].map((dir) => this.loadDir(dir)));
+		this.hookBlur();
+		await Promise.all([...['', ...this.expanded()].map((dir) => this.loadDir(dir)), this.loadEditorConfig(id)]);
 		if (scan !== this._scan || id !== this._repoId) {
 			return;
 		}
@@ -329,6 +339,7 @@ export class ExplorerStore {
 				model.onDidChangeContent(() => {
 					if (!buf.quiet && id === this._repoId) {
 						this.setDirty(path, model.getAlternativeVersionId() !== buf.savedVersion);
+						this.scheduleAutoSave(path);
 					}
 				});
 			}
@@ -374,6 +385,7 @@ export class ExplorerStore {
 					return false;
 				}
 			}
+			this.tidyModel(path, buf.model);
 			const text = buf.model.getValue();
 			const version = buf.model.getAlternativeVersionId();
 			if (id !== this._repoId) {
@@ -452,6 +464,92 @@ export class ExplorerStore {
 
 	dismissNotice(): void {
 		this.notice.set(null);
+	}
+
+
+	// ---- .editorconfig, tidying on save, auto-save -----------------------------
+
+	private async loadEditorConfig(id: string): Promise<void> {
+		let text = '';
+		try {
+			const file = await this.backend.readFile(this._callId, '.editorconfig');
+			text = file.binary || file.tooLarge ? '' : file.text;
+		} catch {
+			/* none */
+		}
+		this._editorconfig.set(id, parseEditorConfig(text));
+	}
+
+	/** What the repository's `.editorconfig` says about one file (nothing when Settings turns it off). */
+	configFor(path: string): EditorConfig {
+		const parsed = this._repoId ? this._editorconfig.get(this._repoId) : undefined;
+		return parsed && this.settings.settings().editorconfig ? editorConfigFor(parsed, path) : {};
+	}
+
+	/** Trailing whitespace and the final newline, as Settings and `.editorconfig` ask, as edits (undoable, cursor kept). */
+	private tidyModel(path: string, model: Monaco.editor.ITextModel): void {
+		const s = this.settings.settings();
+		const ec = this.configFor(path);
+		const trim = ec.trimTrailingWhitespace ?? s.trimTrailing;
+		const finalNewline = ec.insertFinalNewline ?? s.finalNewline;
+		if (!trim && !finalNewline) {
+			return;
+		}
+		const edits: Monaco.editor.IIdentifiedSingleEditOperation[] = [];
+		const lines = model.getLineCount();
+		if (trim) {
+			for (let n = 1; n <= lines; n++) {
+				const line = model.getLineContent(n);
+				const kept = line.replace(/[ \t]+$/, '').length;
+				if (kept < line.length) {
+					edits.push({ range: { startLineNumber: n, startColumn: kept + 1, endLineNumber: n, endColumn: line.length + 1 }, text: '' });
+				}
+			}
+		}
+		const last = model.getLineContent(lines);
+		if (finalNewline && model.getValueLength() > 0 && last.replace(trim ? /[ \t]+$/ : /$^/, '').length > 0) {
+			edits.push({ range: { startLineNumber: lines, startColumn: last.length + 1, endLineNumber: lines, endColumn: last.length + 1 }, text: model.getEOL() });
+		}
+		if (edits.length) {
+			model.pushEditOperations(null, edits, () => null);
+		}
+	}
+
+	private scheduleAutoSave(path: string): void {
+		if (this.settings.settings().autoSave !== 'delay') {
+			return;
+		}
+		const key = this.key(path);
+		clearTimeout(this._autoSave.get(key));
+		const id = this._repoId;
+		this._autoSave.set(
+			key,
+			setTimeout(() => {
+				this._autoSave.delete(key);
+				if (id === this._repoId && this.tabs().some((t) => t.path === path && t.dirty)) {
+					void this.save(path);
+				}
+			}, 1000)
+		);
+	}
+
+	/** Every tab with unsaved edits, saved (auto-save on leaving the window). */
+	async saveAll(): Promise<void> {
+		for (const tab of this.tabs().filter((t) => t.dirty && t.kind === 'text')) {
+			await this.save(tab.path);
+		}
+	}
+
+	private hookBlur(): void {
+		if (this._blurHooked || typeof window === 'undefined') {
+			return;
+		}
+		this._blurHooked = true;
+		window.addEventListener('blur', () => {
+			if (this.settings.settings().autoSave === 'focus') {
+				void this.saveAll();
+			}
+		});
 	}
 
 	// ---- file operations ----------------------------------------------------

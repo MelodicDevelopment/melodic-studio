@@ -138,6 +138,7 @@ export class LspService {
 				provideReferences: (model, position) => this.locations('textDocument/references', model, position, { context: { includeDeclaration: true } }),
 			});
 			monaco.languages.registerDocumentSymbolProvider(language, { provideDocumentSymbols: (model) => this.symbols(model) });
+			monaco.languages.registerDocumentFormattingEditProvider(language, { provideDocumentFormattingEdits: (model, options) => this.format(model, options) });
 		}
 
 		// Go to definition in another file: Monaco only knows models, the Files tab knows how to open a path.
@@ -409,6 +410,17 @@ export class LspService {
 		const client = await this.ready(model);
 		const result = await client?.request<unknown>(method, { ...this.where(model, position), ...extra });
 		return locations(result).map((l) => ({ uri: this._monaco!.Uri.parse(l.uri), range: l.range }));
+	}
+
+	/** The server's formatting of the whole file; none (and Monaco's own, if any) when it cannot format. */
+	async format(model: Monaco.editor.ITextModel, options: Monaco.languages.FormattingOptions): Promise<Monaco.languages.TextEdit[]> {
+		const client = await this.ready(model);
+		try {
+			const edits = await client?.request<{ range: LspRange; newText: string }[] | null>('textDocument/formatting', { textDocument: { uri: model.uri.toString() }, options: { tabSize: options.tabSize, insertSpaces: options.insertSpaces } });
+			return (edits ?? []).map((e) => ({ range: editorRange(e.range), text: e.newText }));
+		} catch {
+			return []; // the server has no formatter
+		}
 	}
 
 	async symbols(model: Monaco.editor.ITextModel): Promise<Monaco.languages.DocumentSymbol[]> {

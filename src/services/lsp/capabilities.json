@@ -6,6 +6,7 @@
 		"definition": { "linkSupport": true },
 		"references": {},
 		"documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+		"formatting": { "dynamicRegistration": false },
 		"publishDiagnostics": {}
 	}
 }

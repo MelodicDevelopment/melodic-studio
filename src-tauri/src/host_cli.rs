@@ -24,16 +24,16 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tauri::State;
 
-const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
-const LIST_TIMEOUT: Duration = Duration::from_secs(45);
-const CREATE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const LIST_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const CREATE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How many issues the list shows; the search box narrows it down.
 const MAX_ISSUES: usize = 100;
-const MAX_BODY_CHARS: usize = 20_000;
+pub(crate) const MAX_BODY_CHARS: usize = 20_000;
 /// A tool that prints more than this is not answering the question we asked.
 const MAX_OUTPUT_BYTES: u64 = 32 * 1024 * 1024;
 /// Azure DevOps refuses longer pull request descriptions and titles.
-const AZURE_MAX_DESCRIPTION: usize = 4000;
+pub(crate) const AZURE_MAX_DESCRIPTION: usize = 4000;
 const AZURE_MAX_TITLE: usize = 400;
 /// Longer links are refused by the hosts (and by some browsers).
 const MAX_URL_BYTES: usize = 7000;
@@ -54,7 +54,7 @@ pub(crate) enum Target {
 }
 
 /// A name that is safe to hand to a tool: `-x` would be an option, and az reads `@x` as a file.
-fn usable(s: &str) -> bool {
+pub(crate) fn usable(s: &str) -> bool {
     !s.is_empty() && !s.starts_with('-') && !s.starts_with('@') && !s.chars().any(char::is_control)
 }
 
@@ -80,7 +80,7 @@ pub(crate) fn target(host: &Host) -> Target {
 
 impl Target {
     /// The program that serves this host.
-    fn program(&self) -> Option<&'static str> {
+    pub(crate) fn program(&self) -> Option<&'static str> {
         match self {
             Target::GitHub { .. } => Some("gh"),
             Target::Azure { .. } => Some("az"),
@@ -90,7 +90,7 @@ impl Target {
     }
 
     /// The `--repo=` value for gh and glab.
-    fn repo_arg(&self) -> String {
+    pub(crate) fn repo_arg(&self) -> String {
         match self {
             Target::GitHub { domain, repo } if domain == "github.com" => format!("--repo={repo}"),
             Target::GitHub { domain, repo } => format!("--repo={domain}/{repo}"),
@@ -101,13 +101,13 @@ impl Target {
     }
 }
 
-fn remote(g: &Git) -> Result<(Host, Target)> {
+pub(crate) fn remote(g: &Git) -> Result<(Host, Target)> {
     let host = g.default_remote().and_then(|r| g.remote_url(&r)).and_then(|u| git::host(&u)).ok_or_else(|| AppError::msg("This repository has no remote on a host Melodic Studio knows"))?;
     let target = target(&host);
     Ok((host, target))
 }
 
-fn decode(s: &str) -> String {
+pub(crate) fn decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -127,12 +127,12 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-fn encode(s: &str) -> String {
+pub(crate) fn encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 /// At most `max` characters, never cut inside one.
-fn clip(s: &str, max: usize) -> String {
+pub(crate) fn clip(s: &str, max: usize) -> String {
     match s.char_indices().nth(max) {
         Some((at, _)) => s[..at].to_string(),
         None => s.to_string(),
@@ -140,7 +140,7 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// Branch names go on command lines: nothing that could be an option, a range or a file reference.
-fn check_branch(name: &str) -> Result<()> {
+pub(crate) fn check_branch(name: &str) -> Result<()> {
     if !usable(name) || name.contains(char::is_whitespace) || name.contains("..") {
         return Err(AppError::msg(format!("\"{name}\" is not a valid branch name")));
     }
@@ -156,7 +156,7 @@ pub(crate) struct Output {
     pub stderr: String,
 }
 
-fn tool(program: &str, dir: &Path) -> Command {
+pub(crate) fn tool(program: &str, dir: &Path) -> Command {
     let mut c = crate::proc::command(program);
     c.current_dir(dir)
         .env("NO_COLOR", "1")
@@ -217,7 +217,7 @@ pub(crate) fn run(mut c: Command, stdin: Option<Vec<u8>>, timeout: Duration, wha
 }
 
 /// The tool's own words for what went wrong, short enough for a toast.
-fn failure(what: &str, out: &Output) -> AppError {
+pub(crate) fn failure(what: &str, out: &Output) -> AppError {
     let text = if out.stderr.trim().is_empty() { out.stdout.trim() } else { out.stderr.trim() };
     if what == "az" && az_wants_login(text) {
         return AppError::msg("Azure DevOps is not signed in. Run `az login` in a terminal (or `az devops login` to use a personal access token).");
@@ -230,7 +230,7 @@ fn failure(what: &str, out: &Output) -> AppError {
     }
 }
 
-fn run_ok(dir: &Path, program: &str, args: &[String], stdin: Option<Vec<u8>>, timeout: Duration) -> Result<String> {
+pub(crate) fn run_ok(dir: &Path, program: &str, args: &[String], stdin: Option<Vec<u8>>, timeout: Duration) -> Result<String> {
     let mut c = tool(program, dir);
     c.args(args);
     let out = run(c, stdin, timeout, program)?;
@@ -243,10 +243,10 @@ fn run_ok(dir: &Path, program: &str, args: &[String], stdin: Option<Vec<u8>>, ti
 
 /// Text az reads from a file (`--flag=@path`) instead of the command line: no length
 /// limit, no quoting through `az.cmd` on Windows, and a value starting with `-` or `@` stays a value.
-struct TempText(PathBuf);
+pub(crate) struct TempText(PathBuf);
 
 impl TempText {
-    fn new(label: &str, text: &str) -> Result<Self> {
+    pub(crate) fn new(label: &str, text: &str) -> Result<Self> {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let name = format!("melodic-studio-{label}-{}-{nanos}-{}.txt", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
@@ -256,7 +256,7 @@ impl TempText {
         Ok(TempText(path))
     }
 
-    fn arg(&self, flag: &str) -> String {
+    pub(crate) fn arg(&self, flag: &str) -> String {
         format!("{flag}=@{}", self.0.to_string_lossy())
     }
 }
@@ -375,7 +375,7 @@ fn status(g: &Git) -> Result<CliStatus> {
 }
 
 /// The tool for this host, or the sentence that says what to install.
-fn require(target: &Target) -> Result<&'static str> {
+pub(crate) fn require(target: &Target) -> Result<&'static str> {
     let program = target.program().ok_or_else(|| AppError::msg(hint(target, &Problem::Missing)))?;
     if crate::proc::find(program).is_none() {
         return Err(AppError::msg(hint(target, &Problem::Missing)));
@@ -405,11 +405,11 @@ pub struct Issue {
     pub kind: String,
 }
 
-fn text(v: &Value, key: &str) -> String {
+pub(crate) fn text(v: &Value, key: &str) -> String {
     v[key].as_str().unwrap_or("").to_string()
 }
 
-fn unexpected(what: &str) -> AppError {
+pub(crate) fn unexpected(what: &str) -> AppError {
     AppError::msg(format!("{what} answered with something Melodic Studio could not read"))
 }
 
@@ -504,7 +504,7 @@ fn az_query_args(org_url: &str, wiql_file: &TempText) -> Vec<String> {
 
 /// Work item descriptions are HTML. The UI shows plain text only, so reduce it to that:
 /// block ends become line breaks, list items get a dash, everything else is dropped.
-fn html_to_text(html: &str) -> String {
+pub(crate) fn html_to_text(html: &str) -> String {
     if !html.contains('<') && !html.contains('&') {
         return html.trim().to_string();
     }
@@ -641,7 +641,7 @@ pub struct PrWebUrl {
     pub body: bool,
 }
 
-fn current_branch(g: &Git) -> Option<String> {
+pub(crate) fn current_branch(g: &Git) -> Option<String> {
     g.run(&["symbolic-ref", "--short", "-q", "HEAD"]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
@@ -701,7 +701,7 @@ fn pr_context_of(g: &Git) -> Result<PrContext> {
 }
 
 /// The ref to compare against: the remote's copy of `base` when there is one.
-fn base_ref(g: &Git, base: &str) -> Result<String> {
+pub(crate) fn base_ref(g: &Git, base: &str) -> Result<String> {
     check_branch(base)?;
     let remote_name = g.default_remote().unwrap_or_else(|| "origin".into());
     [format!("refs/remotes/{remote_name}/{base}"), format!("refs/heads/{base}")]
@@ -739,7 +739,7 @@ fn clip_stat(stat: &str, max: usize) -> String {
     format!("{}\n …\n{total}", clip(stat, max).trim_end())
 }
 
-fn one_line(s: &str) -> String {
+pub(crate) fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -989,7 +989,7 @@ fn args(list: &[&str]) -> Vec<String> {
 }
 
 /// A failed call that never reached the host says nothing about the sign-in.
-fn looks_offline(stderr: &str) -> bool {
+pub(crate) fn looks_offline(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
     ["error connecting", "dial tcp", "no such host", "timeout", "timed out", "network is unreachable", "connection refused"].iter().any(|m| s.contains(m))
 }
@@ -1337,7 +1337,7 @@ fn create_repo(provider: &str, name: &str, owner: Option<&str>, private: bool, o
 // ---- commands -----------------------------------------------------------------
 
 /// These wait on other programs and the network; keep them off the async workers.
-async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+pub(crate) async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tauri::async_runtime::spawn_blocking(work).await.map_err(|e| AppError::msg(format!("That stopped unexpectedly: {e}")))?
 }
 
