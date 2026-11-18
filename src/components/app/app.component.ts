@@ -5,6 +5,7 @@ import { RepoStore } from '../../services/repo.store';
 import { AgentsStore } from '../../services/agents.store';
 import { HostStore } from '../../services/host.store';
 import { WorkspaceStore } from '../../services/workspace.store';
+import { MenuService } from '../../services/menu.service';
 import { appTemplate } from './app.template';
 import { appStyles } from './app.styles';
 
@@ -33,6 +34,7 @@ export class AppComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
+	@Service(MenuService) private readonly _menu!: MenuService;
 
 	sidebarWidth = savedWidth();
 	resizing = false;
@@ -41,6 +43,7 @@ export class AppComponent {
 	onCreate(): void {
 		this._toast.setPosition('bottom-right');
 		void this.store.init();
+		this._menu.start();
 	}
 
 	onDestroy(): void {

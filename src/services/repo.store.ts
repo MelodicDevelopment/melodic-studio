@@ -12,7 +12,7 @@ import { fileName, plural } from '../shared/format';
 
 export type Busy = '' | 'fetch' | 'pull' | 'push' | 'commit' | 'checkout' | 'branch' | 'repo' | 'discard' | 'undo' | 'merge' | 'stash' | 'history';
 export type Tab = 'changes' | 'history' | 'files' | 'agents';
-export type DialogName = 'add-repo' | 'new-branch' | 'rename-branch' | 'delete-branch' | 'merge-branch' | 'publish' | 'discard' | 'remove-repo' | 'settings' | 'new-tag' | 'reset' | 'force-push' | 'cherry-pick' | 'rebase-interactive';
+export type DialogName = 'add-repo' | 'new-branch' | 'rename-branch' | 'delete-branch' | 'merge-branch' | 'publish' | 'discard' | 'remove-repo' | 'settings' | 'new-tag' | 'reset' | 'force-push' | 'cherry-pick' | 'rebase-interactive' | 'new-project';
 
 /** What a confirmation dialog is about. */
 export interface Prompt {
@@ -105,6 +105,8 @@ export class RepoStore {
 
 	// ---- comparing with another branch (History tab) ----
 	/** The branch the History tab compares the current one with; null shows the plain history. */
+	/** History tab: only the commits that touched this file. */
+	readonly historyPath = signal<string | null>(null);
 	readonly compareBranch = signal<string | null>(null);
 	/** Which side of the comparison is listed: false = behind (what merging it would bring in), true = ahead. */
 	readonly compareAhead = signal(false);
@@ -245,6 +247,7 @@ export class RepoStore {
 		this.commits.set([]);
 		this.historyLoaded.set(false);
 		this.historyEnd.set(false);
+		this.historyPath.set(null);
 		this.selectedHash.set(null);
 		this.commitFiles.set([]);
 		this.selectedCommitPath.set(null);
@@ -771,7 +774,7 @@ export class RepoStore {
 		const token = ++this._historyToken;
 		const skip = reset ? 0 : this.commits().length;
 		try {
-			const page = await this.backend.history(id, skip, PAGE);
+			const page = await this.backend.history(id, skip, PAGE, this.historyPath());
 			if (token !== this._historyToken) {
 				return;
 			}
@@ -795,6 +798,20 @@ export class RepoStore {
 				this.fail(e);
 			}
 		}
+	}
+
+	/** The History tab limited to one file's commits (null shows them all again). */
+	async showFileHistory(path: string | null): Promise<void> {
+		if (path && this.compareBranch()) {
+			await this.setCompare(null);
+		}
+		this.historyPath.set(path);
+		this.selectedHash.set(null);
+		this.historyLoaded.set(false);
+		if (path) {
+			this.setTab('history');
+		}
+		await this.loadHistory(true);
 	}
 
 	// ---- comparing with another branch ---------------------------------------

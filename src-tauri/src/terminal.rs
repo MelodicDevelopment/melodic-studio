@@ -165,8 +165,16 @@ struct TermExit {
 /// Open a terminal in the active checkout of repository `id`. Returns the key
 /// that names it in the other commands and in `term-data` / `term-exit` events.
 #[tauri::command]
-pub async fn term_open(app: tauri::AppHandle, state: State<'_, AppState>, terminals: State<'_, Terminals>, id: String, cols: u16, rows: u16) -> Result<String> {
-    let dir = repo(&state, &id)?.dir;
+pub async fn term_open(app: tauri::AppHandle, state: State<'_, AppState>, terminals: State<'_, Terminals>, id: String, cols: u16, rows: u16, at: Option<String>) -> Result<String> {
+    let g = repo(&state, &id)?;
+    // `at`: a repository-relative folder (or a file, meaning its folder) to start in instead of the checkout's root.
+    let dir = match at.as_deref().filter(|a| !a.is_empty()) {
+        Some(rel) => {
+            let found = crate::files::locate(&g, rel)?;
+            if found.is_dir() { found } else { found.parent().map(Path::to_path_buf).unwrap_or(g.dir.clone()) }
+        }
+        None => g.dir.clone(),
+    };
     if !dir.is_dir() {
         return Err(AppError::msg("That folder no longer exists"));
     }

@@ -275,8 +275,12 @@ pub async fn undo_commit(state: State<'_, AppState>, id: String) -> Result<Undon
 // ---- history ----------------------------------------------------------------
 
 #[tauri::command]
-pub async fn history(state: State<'_, AppState>, id: String, skip: usize, limit: usize) -> Result<Vec<Commit>> {
-    repo(&state, &id)?.log(skip, limit.clamp(1, 500))
+pub async fn history(state: State<'_, AppState>, id: String, skip: usize, limit: usize, path: Option<String>) -> Result<Vec<Commit>> {
+    let g = repo(&state, &id)?;
+    match path.filter(|p| !p.is_empty()) {
+        Some(path) => g.file_log(&path, skip, limit.clamp(1, 500)),
+        None => g.log(skip, limit.clamp(1, 500)),
+    }
 }
 
 #[tauri::command]
@@ -379,7 +383,8 @@ pub async fn remote_set(state: State<'_, AppState>, id: String, url: String) -> 
 
 // ---- the world outside ------------------------------------------------------
 
-/// Open the repository somewhere else: `finder`, `terminal`, or a page on its
+/// Open the repository somewhere else: `finder`, `reveal` (entries in `arg`, one per line), `terminal`
+/// (at the folder `arg`, when given), or a page on its
 /// host: `remote` (the repository), `issues`, `pulls`, `new-pull` (for the current branch)
 /// or `commit` (with `arg` the hash).
 #[tauri::command]
@@ -389,6 +394,11 @@ pub async fn open_in(app: tauri::AppHandle, state: State<'_, AppState>, id: Stri
     let dir = g.dir.to_string_lossy().to_string();
     match target.as_str() {
         "finder" => app.opener().open_path(dir, None::<&str>).map_err(|e| AppError::msg(e.to_string())),
+        // Select entries (repository-relative, one per line in `arg`) in the file manager.
+        "reveal" => {
+            let found = arg.as_deref().unwrap_or_default().lines().map(|rel| crate::files::locate(&g, rel)).collect::<Result<Vec<_>>>()?;
+            app.opener().reveal_items_in_dir(found).map_err(|e| AppError::msg(e.to_string()))
+        }
         "remote" | "issues" | "pulls" | "new-pull" | "commit" | "branch" => {
             let host = g.default_remote().and_then(|r| g.remote_url(&r)).and_then(|u| git::host(&u)).ok_or_else(|| AppError::msg("This repository has no web page to open"))?;
             let url = match target.as_str() {
@@ -405,7 +415,14 @@ pub async fn open_in(app: tauri::AppHandle, state: State<'_, AppState>, id: Stri
             .ok_or_else(|| AppError::msg(format!("Melodic Studio does not know that page on {}", host.name)))?;
             app.opener().open_url(url, None::<&str>).map_err(|e| AppError::msg(e.to_string()))
         }
-        "terminal" => crate::proc::open_terminal(&dir),
+        "terminal" => match arg.as_deref().filter(|a| !a.is_empty()) {
+            Some(rel) => {
+                let at = crate::files::locate(&g, rel)?;
+                let folder = if at.is_dir() { at } else { at.parent().map(Path::to_path_buf).unwrap_or_else(|| g.dir.clone()) };
+                crate::proc::open_terminal(&folder.to_string_lossy())
+            }
+            None => crate::proc::open_terminal(&dir),
+        },
         _ => Err(AppError::msg("Unknown target")),
     }
 }
@@ -461,6 +478,43 @@ pub async fn write_file(state: State<'_, AppState>, id: String, path: String, te
         return Err(AppError::msg("The active checkout changed, so nothing was saved. Open the file again and retry."));
     }
     crate::files::write_file(&g, &path, &text)
+}
+
+/// The checkout a Files tab action was aimed at, refusing it when another one has become active since.
+fn checkout(state: &State<'_, AppState>, id: &str, root: &str) -> Result<Git> {
+    let g = repo(state, id)?;
+    if !crate::files::same_dir(&g.dir, Path::new(root)) {
+        return Err(AppError::msg("The active checkout changed, so nothing was done. Try again."));
+    }
+    Ok(g)
+}
+
+#[tauri::command]
+pub async fn files_create(state: State<'_, AppState>, id: String, root: String, dir: String, name: String, is_dir: bool) -> Result<String> {
+    crate::files::create(&checkout(&state, &id, &root)?, &dir, &name, is_dir)
+}
+
+/// Move `paths` into folder `to`; with `rename`, the single path also takes that name.
+#[tauri::command]
+pub async fn files_move(state: State<'_, AppState>, id: String, root: String, paths: Vec<String>, to: String, rename: Option<String>, on_conflict: crate::files::OnConflict) -> Result<crate::files::Placed> {
+    crate::files::relocate(&checkout(&state, &id, &root)?, &paths, &to, rename.as_deref(), on_conflict)
+}
+
+#[tauri::command]
+pub async fn files_duplicate(state: State<'_, AppState>, id: String, root: String, path: String) -> Result<String> {
+    crate::files::duplicate(&checkout(&state, &id, &root)?, &path)
+}
+
+#[tauri::command]
+pub async fn files_trash(state: State<'_, AppState>, id: String, root: String, paths: Vec<String>) -> Result<()> {
+    crate::files::trash(&checkout(&state, &id, &root)?, &paths)
+}
+
+/// Copy files dropped on the window from outside (absolute paths) into folder `to`.
+#[tauri::command]
+pub async fn files_import(state: State<'_, AppState>, id: String, root: String, sources: Vec<String>, to: String, on_conflict: crate::files::OnConflict) -> Result<crate::files::Placed> {
+    let sources: Vec<PathBuf> = sources.iter().map(PathBuf::from).collect();
+    crate::files::import(&checkout(&state, &id, &root)?, &sources, &to, on_conflict)
 }
 
 #[tauri::command]

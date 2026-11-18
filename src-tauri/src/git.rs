@@ -688,7 +688,16 @@ impl Git {
     // ---- history ------------------------------------------------------------
 
     pub fn log(&self, skip: usize, limit: usize) -> Result<Vec<Commit>> {
-        self.log_range(None, skip, limit)
+        self.log_range(None, None, skip, limit)
+    }
+
+    /// The commits that touched one file, following it across renames.
+    pub fn file_log(&self, path: &str, skip: usize, limit: usize) -> Result<Vec<Commit>> {
+        if path.is_empty() || path.starts_with('-') {
+            return Err(AppError::msg("Not a file in this repository"));
+        }
+        // git applies `--skip` before `--follow` filters, so page here instead.
+        Ok(self.log_range(None, Some(path), 0, skip + limit)?.into_iter().skip(skip).collect())
     }
 
     /// Comparing with another branch: the commits `branch` has that HEAD lacks (`ahead == false`, what a merge
@@ -696,7 +705,7 @@ impl Git {
     pub fn compare_log(&self, branch: &str, ahead: bool, skip: usize, limit: usize) -> Result<Vec<Commit>> {
         check_ref(branch)?;
         let range = if ahead { format!("{branch}..HEAD") } else { format!("HEAD..{branch}") };
-        self.log_range(Some(&range), skip, limit)
+        self.log_range(Some(&range), None, skip, limit)
     }
 
     /// How far HEAD is `(ahead, behind)` of `branch`.
@@ -707,7 +716,8 @@ impl Git {
         Ok((n.next().unwrap_or(0), n.next().unwrap_or(0)))
     }
 
-    fn log_range(&self, range: Option<&str>, skip: usize, limit: usize) -> Result<Vec<Commit>> {
+    /// `path`: only the commits that touched that one file, following renames.
+    fn log_range(&self, range: Option<&str>, path: Option<&str>, skip: usize, limit: usize) -> Result<Vec<Commit>> {
         if !self.has_commits() {
             return Ok(vec![]);
         }
@@ -719,8 +729,17 @@ impl Git {
         let s = format!("--skip={skip}");
         let mut args = vec!["log", "--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%D%x1f%s%x1f%b%x1e", &n, &s];
         if let Some(range) = range {
-            // `--` so a file that happens to share the branch's name cannot make the range ambiguous.
-            args.extend([range, "--"]);
+            args.push(range);
+        }
+        if path.is_some() {
+            args.push("--follow");
+        }
+        // `--` so a file that happens to share the branch's name cannot make the range ambiguous.
+        if range.is_some() || path.is_some() {
+            args.push("--");
+        }
+        if let Some(path) = path {
+            args.push(path);
         }
         let out = self.run(&args)?;
         Ok(out
@@ -911,7 +930,7 @@ impl Git {
             check_ref(u)?;
         }
         let range = upstream.map(|u| format!("{u}..HEAD")).unwrap_or_else(|| "HEAD".into());
-        let mut list = self.log_range(Some(&range), 0, REBASE_LIMIT + 1)?;
+        let mut list = self.log_range(Some(&range), None, 0, REBASE_LIMIT + 1)?;
         if list.len() > REBASE_LIMIT {
             return Err(AppError::msg(format!("That is more than {REBASE_LIMIT} commits to rewrite. Start from a later commit.")));
         }
@@ -1315,6 +1334,24 @@ mod tests {
 
     /// A file name full of pathspec magic. `*` cannot be in a file name on Windows; brackets can.
     const ODD: &str = if cfg!(windows) { "b [1].txt" } else { "b *.txt" };
+
+    #[test]
+    fn file_history_follows_renames() {
+        let dir = scratch("file-log");
+        let g = Git::at(&dir);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        std::fs::write(dir.join("other.txt"), "x\n").unwrap();
+        g.commit(&["a.txt".into(), "other.txt".into()], "add", "", false).unwrap();
+        std::fs::write(dir.join("other.txt"), "y\n").unwrap();
+        g.commit(&["other.txt".into()], "other only", "", false).unwrap();
+        git(&dir, &["mv", "a.txt", ODD]);
+        g.commit(&["a.txt".into(), ODD.into()], "rename", "", false).unwrap();
+        let subjects: Vec<String> = g.file_log(ODD, 0, 50).unwrap().into_iter().map(|c| c.summary).collect();
+        assert_eq!(subjects, ["rename", "add"]);
+        assert_eq!(g.file_log(ODD, 1, 50).unwrap().len(), 1);
+        assert!(g.file_log("--all", 0, 50).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn compare_with_branch() {

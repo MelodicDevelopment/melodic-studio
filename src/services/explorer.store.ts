@@ -6,7 +6,7 @@
 import type * as Monaco from 'monaco-editor';
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed } from '@melodicdev/core/signals';
-import { BackendService, type FileContent, type TreeEntry } from './backend.service';
+import { BackendService, type FileContent, type OnConflict, type Placed, type TreeEntry } from './backend.service';
 import { RepoStore } from './repo.store';
 import { loadMonaco } from '../shared/monaco';
 import { joinPath } from '../shared/paths';
@@ -31,6 +31,8 @@ interface Buffer {
 	model: Monaco.editor.ITextModel | null;
 	/** The model version that matches `disk`. */
 	savedVersion: number;
+	/** Unsaved text to start the model with (a file renamed while it had edits). */
+	pending?: string;
 	view: Monaco.editor.ICodeEditorViewState | null;
 	/** Set while the model is being replaced from disk, so that is not seen as an edit. */
 	quiet: boolean;
@@ -59,6 +61,8 @@ export class ExplorerStore {
 	readonly preview = signal<string | null>(null);
 	readonly notice = signal<Notice | null>(null);
 	readonly saving = signal<string | null>(null);
+	/** Rows picked in the tree (Cmd/Ctrl- and Shift-click); the context menu and keys act on all of them. */
+	readonly selected = signal<ReadonlySet<string>>(new Set());
 
 	readonly activeTab = computed<OpenFile | null>(() => this.tabs().find((t) => t.path === this.active()) ?? null);
 
@@ -111,6 +115,7 @@ export class ExplorerStore {
 			this.tabs.set(saved?.tabs ?? []);
 			this.active.set(saved?.active ?? null);
 			this.preview.set(saved?.preview ?? null);
+			this.selected.set(new Set());
 			this.notice.set(null);
 		}
 		void this.rescan();
@@ -316,9 +321,11 @@ export class ExplorerStore {
 			if (!buf.model) {
 				// The real path gives Monaco the file's language, and keeps two repositories' files apart.
 				const uri = monaco.Uri.file(joinPath(id, path));
-				const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(buf.disk, undefined, uri);
+				const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(buf.pending ?? buf.disk, undefined, uri);
 				buf.model = model;
-				buf.savedVersion = model.getAlternativeVersionId();
+				// Text carried over from before a rename is an edit until it is saved.
+				buf.savedVersion = buf.pending !== undefined && buf.pending !== buf.disk ? -1 : model.getAlternativeVersionId();
+				buf.pending = undefined;
 				model.onDidChangeContent(() => {
 					if (!buf.quiet && id === this._repoId) {
 						this.setDirty(path, model.getAlternativeVersionId() !== buf.savedVersion);
@@ -446,4 +453,181 @@ export class ExplorerStore {
 	dismissNotice(): void {
 		this.notice.set(null);
 	}
+
+	// ---- file operations ----------------------------------------------------
+
+	/** The checkout on screen, absolute; every file operation names it so a worktree switch in between refuses. */
+	get root(): string {
+		return this._repoId ?? '';
+	}
+
+	select(paths: Iterable<string>): void {
+		this.selected.set(new Set(paths));
+	}
+
+	/** Tabs open on `path` or anything under it. */
+	openUnder(path: string): OpenFile[] {
+		return this.tabs().filter((t) => t.path === path || t.path.startsWith(`${path}/`));
+	}
+
+	/** Reload the folders an operation touched and let the Changes tab know. */
+	private async touched(dirs: string[]): Promise<void> {
+		const open = this.expanded();
+		await Promise.all([...new Set(dirs)].filter((d) => d === '' || open.has(d) || this.children().has(d)).map((d) => this.loadDir(d)));
+		void this.repo.refresh();
+	}
+
+	private expand(dir: string): void {
+		const next = new Set(this.expanded());
+		for (let i = dir.indexOf('/'); i > 0; i = dir.indexOf('/', i + 1)) {
+			next.add(dir.slice(0, i));
+		}
+		if (dir) {
+			next.add(dir);
+		}
+		this.expanded.set(next);
+	}
+
+	/** A new empty file (opened) or folder in `dir`. Resolves to its path, or null when refused. */
+	async create(dir: string, name: string, isDir: boolean): Promise<string | null> {
+		try {
+			const path = await this.backend.createEntry(this._callId, this.root, dir, name.trim(), isDir);
+			this.expand(dir);
+			await this.touched([dir]);
+			this.select([path]);
+			if (!isDir) {
+				this.open(path, true);
+			}
+			return path;
+		} catch (e) {
+			this.repo.fail(e);
+			return null;
+		}
+	}
+
+	/**
+	 * Move entries into folder `to` (`rename`: the one entry's new name). With `onConflict` 'ask' a clash changes
+	 * nothing and comes back in `conflicts`, for the caller to ask about. Open tabs follow what moved.
+	 */
+	async move(paths: string[], to: string, rename: string | null, onConflict: OnConflict = 'ask'): Promise<Placed | null> {
+		// Moving a folder and something inside it: the folder brings it along.
+		const roots = paths.filter((p) => !paths.some((q) => q !== p && p.startsWith(`${q}/`)));
+		try {
+			const placed = await this.backend.moveEntries(this._callId, this.root, roots, to, rename, onConflict);
+			if (placed.conflicts.length) {
+				return placed;
+			}
+			placed.done.forEach((dest, i) => this.renamed(placed.sources[i], dest));
+			if (to) {
+				this.expand(to);
+			}
+			await this.touched([to, ...roots.map(parent)]);
+			this.select(placed.done);
+			return placed;
+		} catch (e) {
+			this.repo.fail(e);
+			return null;
+		}
+	}
+
+	/** Copy files dropped from outside the app into folder `to`. Same conflict handling as `move`. */
+	async importFiles(sources: string[], to: string, onConflict: OnConflict = 'ask'): Promise<Placed | null> {
+		try {
+			const placed = await this.backend.importEntries(this._callId, this.root, sources, to, onConflict);
+			if (placed.conflicts.length) {
+				return placed;
+			}
+			this.expand(to);
+			await this.touched([to]);
+			this.select(placed.done);
+			return placed;
+		} catch (e) {
+			this.repo.fail(e);
+			return null;
+		}
+	}
+
+	async duplicate(path: string): Promise<string | null> {
+		try {
+			const copy = await this.backend.duplicateEntry(this._callId, this.root, path);
+			await this.touched([parent(path)]);
+			this.select([copy]);
+			return copy;
+		} catch (e) {
+			this.repo.fail(e);
+			return null;
+		}
+	}
+
+	/** Move entries to the OS trash and close their tabs (edits included: the caller has asked). */
+	async trash(paths: string[]): Promise<boolean> {
+		try {
+			await this.backend.trashEntries(this._callId, this.root, paths);
+			for (const p of paths) {
+				for (const tab of this.openUnder(p)) {
+					this.close(tab.path, true);
+				}
+			}
+			this.select([]);
+			await this.touched(paths.map(parent));
+			return true;
+		} catch (e) {
+			this.repo.fail(e);
+			await this.touched(paths.map(parent));
+			return false;
+		}
+	}
+
+	/** Show entries selected in Finder / Explorer / the file manager. */
+	async reveal(paths: string[]): Promise<void> {
+		try {
+			await this.backend.openIn(this._callId, 'reveal', paths.join('\n'));
+		} catch (e) {
+			this.repo.fail(e);
+		}
+	}
+
+	/** Tabs, buffers and folder state that were under `from` now live under `to`. */
+	private renamed(from: string, to: string): void {
+		const move = (p: string) => (p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : p);
+		const tabs = this.tabs();
+		if (tabs.some((t) => move(t.path) !== t.path)) {
+			for (const tab of tabs) {
+				const next = move(tab.path);
+				if (next === tab.path) {
+					continue;
+				}
+				const buf = this.buffer(tab.path);
+				if (buf) {
+					// The model is keyed by its path, so it is made again under the new one, edits and all.
+					buf.pending = buf.model ? buf.model.getValue() : buf.pending;
+					buf.model?.dispose();
+					buf.model = null;
+					buf.view = null;
+					this._buffers.delete(this.key(tab.path));
+					this._buffers.set(this.key(next), buf);
+				}
+			}
+			this.tabs.set(tabs.map((t) => ({ ...t, path: move(t.path) })));
+			const active = this.active();
+			if (active) {
+				this.active.set(move(active));
+			}
+			const preview = this.preview();
+			if (preview) {
+				this.preview.set(move(preview));
+			}
+			const notice = this.notice();
+			if (notice) {
+				this.notice.set({ ...notice, path: move(notice.path) });
+			}
+		}
+		const expanded = [...this.expanded()];
+		if (expanded.some((d) => move(d) !== d)) {
+			this.expanded.set(new Set(expanded.map(move)));
+		}
+	}
 }
+
+const parent = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf('/')));
+

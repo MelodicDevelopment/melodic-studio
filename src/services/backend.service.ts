@@ -4,7 +4,7 @@
  * so the UI stays previewable.
  */
 import { Injectable } from '@melodicdev/core/injection';
-import { demoListDir, demoReadFile, demoWriteFile } from './demo-files';
+import { demoFileOp, demoListDir, demoReadFile, demoWriteFile } from './demo-files';
 import { demoTerminal } from './demo-terminal';
 import { demoHost, demoPullRequestAnswer } from './demo-host';
 
@@ -220,6 +220,16 @@ export interface TreeEntry {
 	isDir: boolean;
 	ignored: boolean;
 }
+/** What to do when something copied or moved in already has a namesake there. `ask` changes nothing and answers the clashes. */
+export type OnConflict = 'ask' | 'replace' | 'keep-both' | 'skip';
+export interface Placed {
+	/** Repository-relative paths written. */
+	done: string[];
+	/** Where each of `done` came from. */
+	sources: string[];
+	/** Names already taken at the destination (with `ask`, when nothing was written). */
+	conflicts: string[];
+}
 export interface FileContent {
 	text: string;
 	binary: boolean;
@@ -335,7 +345,7 @@ export interface ClaudeHook {
 	subagentType: string | null;
 }
 
-export type OpenTarget = 'finder' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
+export type OpenTarget = 'finder' | 'reveal' | 'terminal' | 'remote' | 'issues' | 'pulls' | 'new-pull' | 'commit' | 'branch';
 export type ResetMode = 'soft' | 'mixed' | 'hard';
 export interface AppError {
 	kind: 'conflict' | 'auth' | 'git' | 'error';
@@ -399,7 +409,8 @@ export class BackendService {
 	deleteRemoteBranch(id: string, name: string) { return this.call<void>('branch_delete_remote', { id, name }); }
 	discard(id: string, files: FileChange[]) { return this.call<void>('discard_changes', { id, files: files.map((f) => ({ path: f.path, oldPath: f.oldPath })) }); }
 	undoCommit(id: string) { return this.call<UndoneCommit>('undo_commit', { id }); }
-	history(id: string, skip: number, limit: number) { return this.call<Commit[]>('history', { id, skip, limit }); }
+	/** With `path`, only the commits that touched that file (following renames). */
+	history(id: string, skip: number, limit: number, path: string | null = null) { return this.call<Commit[]>('history', { id, skip, limit, path }); }
 	/** `ahead` false: commits `branch` has that HEAD lacks (what merging it brings in); true: the other way round. */
 	compareHistory(id: string, branch: string, ahead: boolean, skip: number, limit: number) { return this.call<Commit[]>('compare_history', { id, branch, ahead, skip, limit }); }
 	compareCounts(id: string, branches: string[]) { return this.call<BranchCompare[]>('compare_counts', { id, branches }); }
@@ -439,7 +450,7 @@ export class BackendService {
 	lspSend(key: string, message: unknown) { return this.call<void>('lsp_send', { key, message }); }
 	lspStop(key: string) { return this.call<void>('lsp_stop', { key }); }
 	/** Start the user's shell in the active checkout. Its output arrives as `term-data` events ({ key, data: base64 }), its end as `term-exit` ({ key, code }). */
-	termOpen(id: string, cols: number, rows: number) { return this.call<string>('term_open', { id, cols, rows }); }
+	termOpen(id: string, cols: number, rows: number, at: string | null = null) { return this.call<string>('term_open', { id, cols, rows, at }); }
 	termWrite(key: string, data: string) { return this.call<void>('term_write', { key, data }); }
 	termResize(key: string, cols: number, rows: number) { return this.call<void>('term_resize', { key, cols, rows }); }
 	termClose(key: string) { return this.call<void>('term_close', { key }); }
@@ -469,6 +480,15 @@ export class BackendService {
 	readFile(id: string, path: string) { return this.call<FileContent>('read_file', { id, path }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
 	writeFile(id: string, path: string, text: string, root: string) { return this.call<void>('write_file', { id, path, text, root }); }
+	// File operations. `root` is the checkout the action was aimed at; refused if another one is active by now.
+	createEntry(id: string, root: string, dir: string, name: string, isDir: boolean) { return this.call<string>('files_create', { id, root, dir, name, isDir }); }
+	/** Move into folder `to`; `rename` gives the single path a new name. */
+	moveEntries(id: string, root: string, paths: string[], to: string, rename: string | null, onConflict: OnConflict) { return this.call<Placed>('files_move', { id, root, paths, to, rename, onConflict }); }
+	duplicateEntry(id: string, root: string, path: string) { return this.call<string>('files_duplicate', { id, root, path }); }
+	/** To the OS trash. */
+	trashEntries(id: string, root: string, paths: string[]) { return this.call<void>('files_trash', { id, root, paths }); }
+	/** Copy absolute `sources` (dropped from outside the app) into folder `to`. */
+	importEntries(id: string, root: string, sources: string[], to: string, onConflict: OnConflict) { return this.call<Placed>('files_import', { id, root, sources, to, onConflict }); }
 
 	// ---- the host, through the user's own gh / az / glab ----
 	issuesStatus(id: string) { return this.call<HostCliStatus>('issues_status', { id }); }
@@ -1022,7 +1042,7 @@ class DemoBackend {
 				return { summary: tip.summary, description: tip.body } satisfies UndoneCommit;
 			}
 			case 'history':
-				return empty ? [] : this.commits.slice(Number(args.skip ?? 0), Number(args.skip ?? 0) + Number(args.limit ?? 100));
+				return empty ? [] : this.commits.filter((_, i) => !args.path || i % 3 === 0).slice(Number(args.skip ?? 0), Number(args.skip ?? 0) + Number(args.limit ?? 100));
 			case 'compare_history': {
 				if (empty) {
 					return [];
@@ -1211,6 +1231,12 @@ class DemoBackend {
 				return demoReadFile(String(args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
+			case 'files_create':
+			case 'files_move':
+			case 'files_duplicate':
+			case 'files_trash':
+			case 'files_import':
+				return demoFileOp(cmd, args);
 			case 'issues_status':
 			case 'issues_list':
 			case 'pr_context':

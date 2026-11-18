@@ -9,6 +9,7 @@ import { computed, signal } from '@melodicdev/core/signals';
 import { BackendService } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ScreenPool } from './screens';
+import { joinPath } from '../shared/paths';
 
 /** One terminal, as the tab strip shows it. */
 export interface TermTab {
@@ -197,8 +198,11 @@ export class TerminalStore {
 
 	// ---- terminals ----------------------------------------------------------
 
-	/** A new terminal in whichever checkout is active: the repository, or the worktree being looked at. */
-	async add(): Promise<void> {
+	/**
+	 * A new terminal in whichever checkout is active: the repository, or the worktree being looked at.
+	 * `at` starts it in a repository-relative folder instead; `typed` is put on its command line, not run.
+	 */
+	async add(at: string | null = null, typed: string | null = null): Promise<void> {
 		const repo = this.repos.repo();
 		if (!repo || this.starting()) {
 			return;
@@ -207,13 +211,16 @@ export class TerminalStore {
 		this.setOpen(true);
 		let id: string | null = null;
 		try {
-			const cwd = repo.worktree || repo.path;
+			const cwd = at ? joinPath(repo.worktree || repo.path, at) : repo.worktree || repo.path;
 			const screen = await this.pool.create({ exit: (code, ranFor) => screen && this.ended(screen, code, ranFor) });
 			id = screen;
 			this.all.set([...this.all(), { id, repoId: repo.id, title: this.titleFor(cwd), cwd, ended: false }]);
 			this.starting.set(false);
 			this.select(id);
-			await this.pool.start(id, (cols, rows) => this.backend.termOpen(repo.id, cols, rows));
+			await this.pool.start(id, (cols, rows) => this.backend.termOpen(repo.id, cols, rows, at));
+			if (typed) {
+				this.pool.type(id, typed);
+			}
 		} catch (e) {
 			if (id) {
 				this.remove(id);

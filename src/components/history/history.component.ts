@@ -109,13 +109,25 @@ function comparison(self: HistoryComponent, branch: string) {
 		if (!store.historyLoaded()) {
 			return html`<div class="state"><ml-spinner size="md"></ml-spinner></div>`;
 		}
+		const only = store.historyPath();
+		const fileBar = only
+			? html`
+				<div class="compare">
+					<div class="chosen" title=${`Commits that touched ${only}`}>
+						<ml-icon icon="file" size="sm"></ml-icon><span class="name">${only}</span>
+						<button title="Show every commit" @click=${() => store.showFileHistory(null)}><ml-icon icon="x" size="sm"></ml-icon></button>
+					</div>
+				</div>
+			`
+			: '';
 		if (!commits.length) {
-			return html`<div class="state">No commits yet.</div>`;
+			return only ? html`${fileBar}<div class="state">No commits touched this file yet.</div>` : html`<div class="state">No commits yet.</div>`;
 		}
 		return html`
 			<ms-ai-review-banner></ms-ai-review-banner>
 			<ms-ask-button .scope=${'history'} .look=${'bar'}></ms-ask-button>
-			<div class="compare">
+			${fileBar}
+			<div class="compare" style=${only ? 'display: none' : ''}>
 				${branch
 					? html`
 						<div class="chosen" title="Comparing with ${branch}">

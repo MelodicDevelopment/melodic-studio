@@ -10,6 +10,7 @@ mod git;
 mod init;
 mod host_cli;
 mod lsp;
+mod menu;
 mod paths;
 mod proc;
 mod sessions;
@@ -37,6 +38,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .menu(menu::build)
+        .on_menu_event(menu::on_event)
         .setup(|app| {
             // Debug builds can keep their settings somewhere else, so a test instance never touches the real ones.
             let config_dir = match std::env::var("STUDIO_CONFIG_DIR") {
@@ -138,6 +141,11 @@ pub fn run() {
             lsp::lsp_install,
             lsp::lsp_uninstall,
             commands::list_dir,
+            commands::files_create,
+            commands::files_move,
+            commands::files_duplicate,
+            commands::files_trash,
+            commands::files_import,
             commands::read_file,
             commands::write_file,
             host_cli::issues_status,
