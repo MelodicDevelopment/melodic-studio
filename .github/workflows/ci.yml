@@ -50,6 +50,9 @@ jobs:
       # The Tauri context embeds the frontend, so dist/ has to exist before anything in src-tauri compiles.
       - name: Frontend build
         run: npm run build
+        env:
+          # The Vite build (Monaco) outgrew Node's default heap on the macOS runner.
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
