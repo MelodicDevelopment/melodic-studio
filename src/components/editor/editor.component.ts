@@ -47,7 +47,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 					<div class="filetabs">
 						${tabs.map(
 							(t) => html`
-								<div class="filetab ${t === tab ? 'on' : ''} ${t.path === preview ? 'preview' : ''} ${t.dirty ? 'dirty' : ''}" title=${t.path} @click=${() => explorer.open(t.path)} @dblclick=${() => explorer.open(t.path, true)}>
+								<div class="filetab ${t === tab ? 'on' : ''} ${t.path === preview ? 'preview' : ''} ${t.dirty ? 'dirty' : ''}" title=${explorer.absolutePath(t.path) ?? t.path}@click=${() => explorer.open(t.path)} @dblclick=${() => explorer.open(t.path, true)}>
 									<span>${fileName(t.path)}</span>
 									<button title=${t.dirty ? 'Close (unsaved changes)' : 'Close tab'} @click=${(e: Event) => (e.stopPropagation(), explorer.close(t.path))}>
 										<ml-icon class="x" icon="x" size="xs"></ml-icon><i class="dot"></i>
@@ -126,7 +126,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 			padding: 0 8px 0 12px;
 			border-right: 1px solid var(--ml-color-border);
 			color: var(--ml-color-text-muted);
-			box-shadow: inset 0 2px 0 transparent;
+			box-shadow: inset 0 -2px 0 transparent;
 		}
 		.filetab span {
 			overflow: hidden;
@@ -139,7 +139,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 		.filetab.on {
 			background: var(--ml-color-surface);
 			color: var(--ml-color-text);
-			box-shadow: inset 0 2px 0 var(--ml-color-primary);
+			box-shadow: inset 0 -2px 0 var(--ml-color-primary);
 		}
 		.filetab.preview span {
 			font-style: italic;

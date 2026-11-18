@@ -89,6 +89,12 @@ export class ExplorerStore {
 	 * Line up with the current repository, then re-read what is on screen. The
 	 * Files components call this when they appear and whenever the status changes.
 	 */
+	/** A repository-relative path spelled as an absolute one in the checkout on screen, or null with no repository. */
+	absolutePath(path: string): string | null {
+		const repo = this.repo.repo();
+		return repo ? joinPath(repo.worktree || repo.path, path) : null;
+	}
+
 	sync(): void {
 		const repo = this.repo.repo();
 		// A linked worktree is a different set of files under the same repository id.

@@ -198,7 +198,7 @@ export class ExplorerComponent {
 
 	openMenu(ev: MouseEvent, entry: TreeEntry): void {
 		ev.preventDefault();
-		this.menu = { entry, x: Math.min(ev.clientX, window.innerWidth - 220), y: Math.min(ev.clientY, window.innerHeight - 120) };
+		this.menu = { entry, x: Math.min(ev.clientX, window.innerWidth - 220), y: Math.min(ev.clientY, window.innerHeight - 170) };
 	}
 
 	async copyPath(path: string): Promise<void> {
@@ -278,7 +278,8 @@ function explorerTemplate(self: ExplorerComponent) {
 						: html`<div class="ctx-item" @click=${() => explorer.open(m.path, true)}><ml-icon icon="browsers" size="sm"></ml-icon>Open in new tab</div>`}
 					${changed.has(m.path) ? html`<div class="ctx-item" @click=${() => self.showChanges(m.path)}><ml-icon icon="git-diff" size="sm"></ml-icon>View changes</div>` : ''}
 					<div class="ctx-sep"></div>
-					<div class="ctx-item" @click=${() => self.copyPath(m.path)}><ml-icon icon="copy" size="sm"></ml-icon>Copy path</div>
+					<div class="ctx-item" @click=${() => self.copyPath(explorer.absolutePath(m.path) ?? m.path)}><ml-icon icon="copy" size="sm"></ml-icon>Copy path</div>
+					<div class="ctx-item" @click=${() => self.copyPath(m.path)}><ml-icon icon="copy" size="sm"></ml-icon>Copy relative path</div>
 				</div>
 			`
 			: ''}
