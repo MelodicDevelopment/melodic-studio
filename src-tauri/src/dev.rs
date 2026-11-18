@@ -181,12 +181,14 @@ mod server {
         use super::*;
 
         #[test]
-        fn reachable_follows_the_listener() {
+        fn reachable_only_when_something_listens() {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let addrs = [listener.local_addr().unwrap()];
             assert!(reachable(&addrs));
             drop(listener);
-            assert!(!reachable(&addrs));
+            // Not the dropped port: Linux may hand it out again (or self-connect to it) at once.
+            // Port 1 is outside the ephemeral range and nothing listens there.
+            assert!(!reachable(&["127.0.0.1:1".parse().unwrap()]));
         }
 
         #[test]

@@ -101,8 +101,15 @@ fn claude() -> Command {
     for name in crate::terminal::CLAUDE_MARKERS {
         c.env_remove(name);
     }
+    // `claude -p` counts as the SDK, where the Artifact tool is off unless this is set (checked with 2.1.327).
+    // The user's own `enableArtifact: false` still wins, and so does their own CLAUDE_CODE_ARTIFACT.
+    if std::env::var_os(ARTIFACT_ENV).is_none() {
+        c.env(ARTIFACT_ENV, "1");
+    }
     c
 }
+
+const ARTIFACT_ENV: &str = "CLAUDE_CODE_ARTIFACT";
 
 /// The installed Claude Code version, or None when the CLI is not on PATH.
 #[tauri::command]
