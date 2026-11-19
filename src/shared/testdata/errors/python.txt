@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/Users/rick/src/shop/crash.py", line 10, in main
+    apply_discount({"customer": "c_2087", "total": 84})
+  File "/Users/rick/src/shop/crash.py", line 6, in apply_discount
+    return order["total"] * tier["multiplier"]
+                            ~~~~^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/rick/src/shop/crash.py", line 14, in <module>
+    main()
+  File "/Users/rick/src/shop/crash.py", line 12, in main
+    raise RuntimeError("checkout failed") from e
+RuntimeError: checkout failed

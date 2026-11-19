@@ -5,10 +5,14 @@
  * an agent's work is switching the app to its worktree: Changes, History and
  * Files then show that branch.
  *
- * Two kinds of session share this store. A `task` changes code (optionally as
+ * Three kinds of session share this store. A `task` changes code (optionally as
  * several parallel attempts, each in its own worktree, compared side by side).
  * An `ask` session is a read-only chat about the code or its history: it runs
  * in the active checkout and may only use the tools listed in `ASK_TOOLS`.
+ * An `investigate` session reproduces a failure in a worktree of its own: it may
+ * edit and build there, but running the app, sending it a request and running
+ * tests go through Studio's own tools, which ask the user here first. It ends
+ * in a report (cause, path, evidence, fix) and a recording to replay.
  *
  * Everything here can be driven without the UI: the actions are plain async
  * methods, and `idle(id)` resolves when a session's turn has ended.
@@ -16,11 +20,16 @@
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
-import { BackendService, asAppError, type AgentDone, type AgentEvent, type AgentMode, type Worktree, type WorktreeDiff } from './backend.service';
+import { DialogService } from '@melodicdev/components/dialog';
+import { BackendService, asAppError, type AgentDone, type AgentEvent, type AgentMode, type InvestigateApproval, type InvestigateProgress, type InvestigateStarted, type RunTarget, type Worktree, type WorktreeDiff } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
 import { WorkspaceStore } from './workspace.store';
 import { samePath } from './agent-paths';
+import { TerminalStore } from './terminal.store';
+import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, type InvestigationReport } from './ai-prompts';
+import { leftoverRecording } from '../shared/replay';
+import type { SpottedError } from '../shared/error-spotting';
 
 export interface AgentItem {
 	kind: 'user' | 'text' | 'tool' | 'error';
@@ -29,7 +38,7 @@ export interface AgentItem {
 	detail?: string;
 }
 
-export type AgentKind = 'task' | 'ask';
+export type AgentKind = 'task' | 'ask' | 'investigate';
 /** What an `ask` session may look at: the files, or the files and the git history. */
 export type AskScope = 'code' | 'history';
 /** How a session stands, for lists that show many at once. */
@@ -67,6 +76,52 @@ export interface AgentSession {
 	review: boolean;
 	/** The last turn was stopped by hand. */
 	stopped: boolean;
+	/** What an `investigate` session is looking into and how far it has got. Null for the other kinds. */
+	investigation: Investigation | null;
+}
+
+/** The state of one investigation. `summary` and everything in `approval` and `report` come from the program or from Claude: text only. */
+export interface Investigation {
+	/** The failure in one line. */
+	summary: string;
+	/** What the user wrote about it, if anything. */
+	description: string;
+	targetId: string | null;
+	/** The target as the toolbar names it ("Shop.Api · https"), for the cards and "Always allow". */
+	targetName: string | null;
+	/** The port its copy of the app runs on, once it has been started. */
+	port: number | null;
+	/** The checklist step Claude is on, 1 to 6; 0 before it has said. */
+	step: number;
+	/** What Claude said under each step, by step number. */
+	details: Record<string, string>;
+	thinking: string;
+	/** Claude wants to run something and is waiting for the answer. */
+	approval: InvestigateApproval | null;
+	/** How many times it has run the app or the tests. */
+	runs: number;
+	started: number;
+	ended: number | null;
+	report: InvestigationReport | null;
+	/** Files that still hold recording code after Claude said it was done. The fix is not offered while there are any. */
+	leftover: string[];
+	/** How many times Claude has been sent back to remove recording. */
+	cleanups: number;
+	/** The worktree is being checked for leftover recording. */
+	checking: boolean;
+	/** The terminal tab of the app it started, while that tab is open. */
+	tab: string | null;
+}
+
+/** What Investigate is started with: a spotted error, text from a terminal, a description, or any mix. */
+export interface InvestigateRequest {
+	description: string;
+	/** A spotted error, or `{ text }` alone for output the user selected. */
+	error: (Partial<SpottedError> & { text: string }) | null;
+	target: RunTarget | null;
+	/** The command Studio ran and how it ended, when the failure came from a run. */
+	command: string | null;
+	exitCode: number | null;
 }
 
 export interface NewTask {
@@ -82,6 +137,10 @@ export interface NewTask {
 export type AgentRef = { kind: 'file'; path: string; line: number | null; column: number | null } | { kind: 'commit'; hash: string } | { kind: 'url'; url: string };
 
 const KEY = 'studio.agents';
+/** "Always allow for <target>": the targets, by repository, whose investigations run without asking. */
+const ALLOW_KEY = 'studio.investigate.allow';
+/** How many times an investigation is sent back to remove leftover recording before its report is shown without a fix. */
+const MAX_CLEANUPS = 2;
 const MAX_ITEMS = 400;
 export const MAX_ATTEMPTS = 3;
 
@@ -101,6 +160,10 @@ export const ASK_TOOLS: Record<AskScope, string[]> = {
 export const STATE_LABELS: Record<AgentState, string> = { working: 'Working', failed: 'Failed', review: 'Needs review', stopped: 'Stopped', finished: 'Finished' };
 
 export function stateOf(s: AgentSession): AgentState {
+	// An investigation that has asked to run something is waiting on the user, though its turn is still going.
+	if (s.investigation?.approval) {
+		return 'review';
+	}
 	if (s.status === 'running') {
 		return 'working';
 	}
@@ -111,6 +174,46 @@ export function stateOf(s: AgentSession): AgentState {
 		return 'stopped';
 	}
 	return s.review ? 'review' : 'finished';
+}
+
+/** A session's state in words. Investigations have their own: they wait for an OK and end in a cause, not a diff to review. */
+export function stateLabel(s: AgentSession): string {
+	const state = stateOf(s);
+	const i = s.investigation;
+	if (s.kind !== 'investigate' || !i) {
+		return STATE_LABELS[state];
+	}
+	switch (state) {
+		case 'working':
+			return i.checking ? 'Checking the fix' : 'Investigating';
+		case 'review':
+			return 'Waiting for you';
+		case 'finished':
+			return !i.report ? 'Finished' : !i.report.found ? 'No cause found' : i.leftover.length ? 'Cause found' : 'Cause found · fix ready';
+		default:
+			return STATE_LABELS[state];
+	}
+}
+
+/** The branch an investigation works on: "NullReferenceException in ApplyDiscount" -> investigate/nullreferenceexception-in-applydiscount. */
+export function investigateBranch(summary: string): string {
+	const words = summary
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, ' ')
+		.trim()
+		.split(/\s+/)
+		.filter(Boolean)
+		.slice(0, 5);
+	return `investigate/${words.join('-').slice(0, 60).replace(/-+$/, '') || 'bug'}`;
+}
+
+function loadAllowed(): Record<string, string[]> {
+	try {
+		const v = JSON.parse(localStorage.getItem(ALLOW_KEY) ?? '{}');
+		return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string[]>) : {};
+	} catch {
+		return {};
+	}
 }
 
 /** Whether a read-only session may look at git history as well as files. */
@@ -170,6 +273,8 @@ function load(): AgentSession[] {
 				items: Array.isArray(s.items) ? s.items : [],
 				// Nothing survives a restart mid-run.
 				status: s.status === 'failed' ? 'failed' : 'idle',
+				// Neither does a question Claude was waiting on, or the app it had running.
+				investigation: s.investigation ? { ...s.investigation, approval: null, checking: false, tab: null } : null,
 			}));
 	} catch {
 		return [];
@@ -254,6 +359,11 @@ export class AgentsStore {
 	});
 	/** Bumped when a link selects a commit, so the History list can scroll to it. */
 	readonly commitShown = signal(0);
+	/** The investigation whose recorded run the main pane is replaying, if any. */
+	readonly replaying = signal<string | null>(null);
+	/** The box for describing a bug to investigate is open, with this terminal output (possibly none) to go with it. */
+	readonly investigateDraft = signal<{ output: string } | null>(null);
+	private readonly _allowed = signal<Record<string, string[]>>(loadAllowed());
 
 	/** Sessions of the repository that is open, newest first. */
 	readonly current = computed<AgentSession[]>(() => {
@@ -295,6 +405,8 @@ export class AgentsStore {
 		return (this._listening ??= (async () => {
 			await this.backend.listen<AgentEvent>('agent-event', (p) => this.onEvent(p));
 			await this.backend.listen<AgentDone>('agent-done', (p) => this.onDone(p));
+			await this.backend.listen<InvestigateApproval>('investigate-approval', (p) => this.onApproval(p));
+			await this.backend.listen<InvestigateProgress>('investigate-progress', (p) => this.onProgress(p));
 			this.backend
 				.agentAvailable()
 				.then((v) => this.cli.set(v))
@@ -431,7 +543,10 @@ export class AgentsStore {
 			review: s.review || (ok && !stopped && s.kind === 'task' && s.mode !== 'plan'),
 		}));
 		this.settle(key);
-		if (!stopped && !watching) {
+		if (session.kind === 'investigate') {
+			// Its answer is read and its worktree checked for leftover recording before anything is announced.
+			void this.conclude(key, ok && !stopped);
+		} else if (!stopped && !watching) {
 			this.announce(this.find(key) ?? session, ok);
 		}
 		if (session.repoId === this.repos.repo()?.id) {
@@ -448,7 +563,7 @@ export class AgentsStore {
 		const what = s.group ? `${s.title} (attempt ${s.attempt})` : s.title;
 		this.toast.show({
 			variant: ok ? 'success' : 'error',
-			title: ok ? (s.kind === 'ask' ? 'Answer ready' : 'Agent finished') + where : `Agent failed${where}`,
+			title: ok ? (s.kind === 'ask' ? 'Answer ready' : s.kind === 'investigate' ? (s.investigation?.report?.found ? 'Cause found' : 'Investigation finished') : 'Agent finished') + where : `${s.kind === 'investigate' ? 'Investigation' : 'Agent'} failed${where}`,
 			message: ok ? what : `${what}: ${lastSaid(s).slice(0, 160)}`,
 			duration: 9000,
 		});
@@ -464,6 +579,7 @@ export class AgentsStore {
 		}
 		this.asking.set(null);
 		this.comparing.set(null);
+		this.replaying.set(null);
 		this.selectedId.set(id);
 		if (id) {
 			this.seen(id);
@@ -526,6 +642,7 @@ export class AgentsStore {
 			unread: false,
 			review: false,
 			stopped: false,
+			investigation: null,
 			...extra,
 		};
 	}
@@ -625,18 +742,27 @@ export class AgentsStore {
 		return this.find(session.id)?.status !== 'failed';
 	}
 
-	/** Run another turn in an existing session. */
-	async send(id: string, prompt: string): Promise<void> {
+	/**
+	 * Run another turn in an existing session. `shown` is what the transcript says was sent, when that is not
+	 * the prompt itself; `raw` sends the prompt as it is (an investigation otherwise wraps a follow-up in its rules).
+	 */
+	async send(id: string, prompt: string, options: { shown?: string; raw?: boolean } = {}): Promise<void> {
 		const session = this.find(id);
 		const text = prompt.trim();
 		if (!session || !text || session.status === 'running') {
 			return;
 		}
 		await this.listen();
-		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, items: [...s.items, { kind: 'user', text }] }));
+		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, items: [...s.items, { kind: 'user', text: options.shown ?? text }] }));
 		this._live.add(id);
 		try {
-			if (session.kind === 'ask') {
+			if (session.kind === 'investigate') {
+				const i = session.investigation;
+				// Claude may run and record again, so the report it gave before does not stand until it answers.
+				this.patch(id, { ended: null, approval: null });
+				const wire = options.raw || !session.sessionId ? text : investigateFollowUp(text);
+				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'acceptEdits', session.sessionId, { tools: INVESTIGATE_RULES, builtin: INVESTIGATE_BUILTIN, investigate: { target: i?.targetId ?? null } });
+			} else if (session.kind === 'ask') {
 				const rules = session.tools ?? ASK_TOOLS.code;
 				// The rules of the session go in once; after that Claude Code's own session remembers them.
 				const wire = session.sessionId ? text : askPrompt(scopeOf(session), text);
@@ -652,6 +778,7 @@ export class AgentsStore {
 
 	async stop(id: string): Promise<void> {
 		this.update(id, (s) => ({ ...s, status: 'idle', stopped: true, items: [...s.items, { kind: 'error', text: 'Stopped.' }] }));
+		this.patch(id, { approval: null, checking: false });
 		await this.backend.agentStop(id).catch(() => undefined);
 	}
 
@@ -744,6 +871,17 @@ export class AgentsStore {
 			await this.stop(session.id);
 			await this.idle(session.id, 4000);
 		}
+		if (session.kind === 'investigate') {
+			// The app it started must be gone before its worktree can be.
+			const tab = this.find(session.id)?.investigation?.tab;
+			if (tab) {
+				Injector.get(TerminalStore).close(tab);
+			}
+			await this.backend.investigateClose(session.id).catch(() => undefined);
+			if (this.replaying() === session.id) {
+				this.replaying.set(null);
+			}
+		}
 		if (withWorktree && session.isolated) {
 			if (!(await this.removeWorktree(session.cwd, true, session.repoId))) {
 				return;
@@ -789,6 +927,272 @@ export class AgentsStore {
 			this.fail(e);
 			return false;
 		}
+	}
+
+	// ---- investigations ---------------------------------------------------------
+
+	private patch(id: string, change: Partial<Investigation>, touch = false): void {
+		this.update(id, (s) => (s.investigation ? { ...s, investigation: { ...s.investigation, ...change } } : s), touch);
+	}
+
+	/** Show the box for describing a bug to investigate, with terminal output (the selection, usually) to go with it. */
+	openInvestigate(output = ''): void {
+		this.investigateDraft.set({ output: output.trim().slice(0, 8000) });
+		Injector.get(DialogService).open('investigate-start' as Parameters<DialogService['open']>[0]);
+	}
+
+	/** A branch name nothing uses yet: `investigate/x`, `investigate/x-2`, ... */
+	private freeBranch(wanted: string, trees: Worktree[]): string {
+		const taken = new Set([...this.repos.branches().filter((b) => !b.isRemote).map((b) => b.name), ...trees.map((w) => w.branch ?? '')]);
+		for (let n = 1; n < 50; n++) {
+			const name = n === 1 ? wanted : `${wanted}-${n}`;
+			if (!taken.has(name)) {
+				return name;
+			}
+		}
+		return `${wanted}-${Date.now().toString(36)}`;
+	}
+
+	/**
+	 * Start an investigation: a worktree on `investigate/<what>` from the commit the checkout on screen is at,
+	 * and a session there whose first message carries the failure, the rules and the recording format.
+	 * The user's own checkout is not touched.
+	 */
+	async investigate(request: InvestigateRequest): Promise<boolean> {
+		const repo = this.repos.repo();
+		const error = request.error;
+		const summary = (error?.summary || plainSummary(request.description, 120) || plainSummary(error?.text ?? '', 120)).trim();
+		if (!repo || !summary || this.busy()) {
+			return false;
+		}
+		if (this.cli() === null) {
+			this.toast.error('Claude Code was not found', 'Install it and make sure `claude` runs in a terminal, then try again.');
+			return false;
+		}
+		this.busy.set(true);
+		try {
+			await this.listen();
+			const [targets, before] = await Promise.all([this.backend.targets(repo.id).catch(() => [] as RunTarget[]), this.backend.worktrees(repo.id).catch(() => [] as Worktree[])]);
+			await this.repos.loadBranches();
+			// "NullReferenceException in ApplyDiscount" when the crash names a function; compiler-made names (`<anonymous>`) say nothing.
+			const fn = error?.frames?.[0]?.fn?.split(/[.:]+/).pop() ?? '';
+			const named = error?.type && /^[\w$]+$/.test(fn) ? `${error.type} in ${fn}` : error?.type && error.message ? `${error.type} ${error.message}` : summary;
+			const branch = this.freeBranch(investigateBranch(named), before);
+			// From the commit on screen, so the code Claude reads is the code that failed.
+			const cwd = await this.backend.addWorktree(repo.id, branch, this.repos.status()?.head ?? null);
+			const base = (await this.backend.worktrees(repo.id).catch(() => [] as Worktree[])).find((w) => samePath(w.path, cwd))?.head ?? null;
+			const target = request.target;
+			const project = target?.group.split(' · ')[0] ?? '';
+			const investigation: Investigation = {
+				summary,
+				description: request.description.trim(),
+				targetId: target?.id ?? null,
+				targetName: target ? (project === target.source || project === target.name ? target.name : `${project} · ${target.name}`) : null,
+				port: null,
+				step: 0,
+				details: {},
+				thinking: '',
+				approval: null,
+				runs: 0,
+				started: Date.now(),
+				ended: null,
+				report: null,
+				leftover: [],
+				cleanups: 0,
+				checking: false,
+				tab: null,
+			};
+			const session = this.newSession(repo.id, summary, cwd, branch, { kind: 'investigate', isolated: true, mode: 'acceptEdits', base, investigation });
+			this.save([...this.sessions(), session]);
+			this.repos.setTab('agents');
+			this.select(session.id);
+			const prompt = investigatePrompt({
+				description: request.description,
+				summary: error?.summary ?? '',
+				output: error?.text ?? '',
+				frames: (error?.frames ?? []).slice(0, 12).map((f) => `${f.file}:${f.line}${f.fn ? ` ${f.fn}` : ''}`),
+				command: request.command,
+				exitCode: request.exitCode,
+				targetId: target?.id ?? null,
+				targets: targets.map((t) => ({ id: t.id, kind: t.kind, command: t.argv.join(' '), cwd: t.cwd })),
+				runtime: target?.runtime ?? (error?.runtime && error.runtime !== 'unknown' ? error.runtime : null),
+				branch,
+			});
+			await this.send(session.id, prompt, { shown: `Investigate: ${request.description.trim() || summary}`, raw: true });
+			await this.loadWorktrees();
+			await this.repos.loadBranches();
+			return this.find(session.id)?.status !== 'failed';
+		} catch (e) {
+			this.fail(e);
+			return false;
+		} finally {
+			this.busy.set(false);
+		}
+	}
+
+	private onProgress({ key, step, detail, thinking }: InvestigateProgress): void {
+		const i = this.find(key)?.investigation;
+		if (!i) {
+			return;
+		}
+		const at = Math.max(1, Math.min(6, Math.round(step) || 1));
+		this.patch(key, { step: at, details: detail ? { ...i.details, [String(at)]: detail } : i.details, thinking: thinking ?? i.thinking }, true);
+	}
+
+	/** What "Always allow" is remembered under: the investigation's target, in its repository. */
+	private allowKey(s: AgentSession): string {
+		return s.investigation?.targetName ?? '';
+	}
+
+	alwaysAllowed(s: AgentSession): boolean {
+		return (this._allowed()[s.repoId] ?? []).includes(this.allowKey(s));
+	}
+
+	private onApproval(approval: InvestigateApproval): void {
+		const s = this.find(approval.key);
+		if (!s?.investigation) {
+			// Not a session of ours any more: nothing runs for it.
+			void this.backend.investigateAnswer(approval.request, false).catch(() => undefined);
+			return;
+		}
+		this.patch(approval.key, { approval }, true);
+		if (this.alwaysAllowed(s)) {
+			void this.allow(s.id);
+			return;
+		}
+		if (!this.watching(s)) {
+			this.update(s.id, (x) => ({ ...x, unread: true }), false);
+			const repo = this.repos.app()?.repos.find((r) => r.id === s.repoId);
+			this.toast.show({ variant: 'info', title: `Claude is waiting for your OK${repo && repo.id !== this.repos.repo()?.id ? ` · ${repo.name}` : ''}`, message: s.title, duration: 9000 });
+		}
+	}
+
+	/** Allow what the investigation asked to run. With `always`, everything it asks for this target from now on, too. */
+	async allow(id: string, always = false): Promise<void> {
+		const s = this.find(id);
+		const approval = s?.investigation?.approval;
+		if (!s || !approval) {
+			return;
+		}
+		if (always && !this.alwaysAllowed(s)) {
+			const next = { ...this._allowed(), [s.repoId]: [...(this._allowed()[s.repoId] ?? []), this.allowKey(s)] };
+			this._allowed.set(next);
+			try {
+				localStorage.setItem(ALLOW_KEY, JSON.stringify(next));
+			} catch {
+				/* it will ask again next time */
+			}
+		}
+		this.patch(id, { approval: null });
+		try {
+			if (approval.tool === 'http_request') {
+				await this.backend.investigateAnswer(approval.request, true);
+				return;
+			}
+			// It runs on a pty of its own, shown as a tab of the terminal panel so its output can be watched.
+			const terminals = Injector.get(TerminalStore);
+			const old = s.investigation?.tab;
+			if (old) {
+				terminals.close(old);
+			}
+			const what = approval.project ?? approval.target ?? (approval.tool === 'run_tests' ? 'tests' : 'app');
+			let port: number | null = null;
+			const tab = await terminals.addProgram({
+				repoId: s.repoId,
+				title: `Investigation · ${what}${approval.port ? ` :${approval.port}` : ''}`,
+				cwd: s.cwd,
+				kind: 'investigation',
+				reveal: true,
+				open: async (cols, rows) => {
+					const started: InvestigateStarted = await this.backend.investigateStart(approval.request, cols, rows);
+					port = started.port;
+					return { key: started.key, command: started.command };
+				},
+			});
+			const now = this.find(id)?.investigation;
+			this.patch(id, { tab, port: port ?? now?.port ?? null, runs: (now?.runs ?? 0) + 1 });
+		} catch (e) {
+			this.fail(e);
+			// Claude is told, rather than left waiting for a run that never started.
+			void this.backend.investigateAnswer(approval.request, false).catch(() => undefined);
+		}
+	}
+
+	/** "Don't run": Claude is told no and carries on without it. */
+	async deny(id: string): Promise<void> {
+		const approval = this.find(id)?.investigation?.approval;
+		if (approval) {
+			this.patch(id, { approval: null });
+			await this.backend.investigateAnswer(approval.request, false).catch(() => undefined);
+		}
+	}
+
+	/**
+	 * An investigation's turn has ended: read its report, then check its worktree for recording that is still
+	 * there. If any is, Claude is sent back to remove it (twice at most); the fix is never offered with recording in it.
+	 */
+	private async conclude(id: string, ok: boolean): Promise<void> {
+		const session = this.find(id);
+		if (!session?.investigation) {
+			return;
+		}
+		if (!ok) {
+			this.patch(id, { approval: null, checking: false, ended: Date.now() });
+			return;
+		}
+		let answer = '';
+		for (let i = session.items.length - 1; i >= 0 && session.items[i].kind !== 'user'; i--) {
+			if (session.items[i].kind === 'text') {
+				answer = session.items[i].text;
+				break;
+			}
+		}
+		const report = (answer && parseInvestigation(answer)) || session.investigation.report;
+		this.patch(id, { approval: null, checking: true, report });
+		let leftover: string[] = [];
+		try {
+			leftover = leftoverRecording((await this.changes(session)).files);
+		} catch {
+			/* the worktree is gone or unreadable: there is nothing to offer either way */
+		}
+		const now = this.find(id);
+		if (!now?.investigation || now.status === 'running') {
+			return;
+		}
+		if (leftover.length && now.investigation.cleanups < MAX_CLEANUPS) {
+			this.patch(id, { checking: false, leftover, cleanups: now.investigation.cleanups + 1 });
+			await this.send(id, investigateCleanup(leftover), { shown: 'The recording is still in the code. Asked Claude to remove it before the fix is shown.', raw: true });
+			return;
+		}
+		this.patch(id, { checking: false, leftover, ended: Date.now() }, true);
+		const done = this.find(id);
+		if (done && !this.watching(done)) {
+			this.update(id, (s) => ({ ...s, unread: true }), false);
+			this.announce(done, true);
+		}
+		if (session.repoId === this.repos.repo()?.id) {
+			void this.loadWorktrees();
+		}
+	}
+
+	/**
+	 * Accept fix, first half: commit what the investigation changed, in its worktree, as the user and with
+	 * their message. (The second half is the ordinary merge.) Refused on the native side while recording is left.
+	 */
+	async commitFix(session: AgentSession, summary: string, description = ''): Promise<boolean> {
+		try {
+			await this.backend.investigateCommit(session.repoId, session.cwd, summary, description);
+			await this.loadWorktrees();
+			return true;
+		} catch (e) {
+			this.fail(e);
+			return false;
+		}
+	}
+
+	/** Discard: the investigation, its worktree and its branch all go. Nothing of it ever reached the user's checkout. */
+	async discard(session: AgentSession): Promise<void> {
+		await this.remove(session, true);
 	}
 
 	// ---- parallel attempts ----------------------------------------------------

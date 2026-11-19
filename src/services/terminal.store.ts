@@ -21,6 +21,25 @@ export interface TermTab {
 	cwd: string;
 	/** The shell is gone; the tab stays so its last words can be read. */
 	ended: boolean;
+	/** A shell, a run target Studio started, or the app an investigation runs. */
+	kind: 'shell' | 'run' | 'investigation';
+	/** For a program Studio started: its command line. */
+	command?: string;
+}
+
+/** A program Studio starts itself in a tab of the panel (a run target), rather than the user's shell. */
+export interface ProgramTab {
+	repoId: string;
+	title: string;
+	cwd: string;
+	kind: 'run' | 'investigation';
+	/** Starts the program at the screen's size and answers its terminal key (and may learn the real command line). */
+	open: (cols: number, rows: number) => Promise<{ key: string; command?: string }>;
+	/** What it prints, as text. */
+	output?: (text: string) => void;
+	exit?: (code: number | null) => void;
+	/** Show the panel with this tab selected (when its repository is the one on screen). */
+	reveal: boolean;
 }
 
 const OPEN_KEY = 'studio.terminal.open';
@@ -214,7 +233,7 @@ export class TerminalStore {
 			const cwd = at ? joinPath(repo.worktree || repo.path, at) : repo.worktree || repo.path;
 			const screen = await this.pool.create({ exit: (code, ranFor) => screen && this.ended(screen, code, ranFor) });
 			id = screen;
-			this.all.set([...this.all(), { id, repoId: repo.id, title: this.titleFor(cwd), cwd, ended: false }]);
+			this.all.set([...this.all(), { id, repoId: repo.id, title: this.titleFor(cwd), cwd, ended: false, kind: 'shell' }]);
 			this.starting.set(false);
 			this.select(id);
 			await this.pool.start(id, (cols, rows) => this.backend.termOpen(repo.id, cols, rows, at));
@@ -229,6 +248,56 @@ export class TerminalStore {
 		} finally {
 			this.starting.set(false);
 		}
+	}
+
+	/**
+	 * A tab for a program Studio starts (a run target, an investigation's copy of the app). Unlike a shell's,
+	 * the tab stays when the program ends, so its output can be read. Answers the tab's id; throws what `open` throws.
+	 */
+	async addProgram(program: ProgramTab): Promise<string> {
+		const id = await this.pool.create({
+			exit: (code) => {
+				this.pool.note(id, code === null ? '[Stopped]' : `[Ended with exit code ${code}]`);
+				this.all.set(this.all().map((t) => (t.id === id ? { ...t, ended: true } : t)));
+				program.exit?.(code);
+			},
+			output: program.output,
+		});
+		this.all.set([...this.all(), { id, repoId: program.repoId, title: program.title, cwd: program.cwd, ended: false, kind: program.kind }]);
+		const onScreen = program.repoId === this.repos.repo()?.id;
+		if (program.reveal && onScreen) {
+			this.setOpen(true);
+			this.select(id);
+			// One frame, so the panel has been laid out and the program starts at the size it will be shown at.
+			await new Promise((resolve) => requestAnimationFrame(resolve));
+			this.layout();
+		} else if (!this._active()[program.repoId]) {
+			this._active.set({ ...this._active(), [program.repoId]: id });
+		}
+		try {
+			await this.pool.start(id, async (cols, rows) => {
+				const started = await program.open(cols, rows);
+				if (started.command) {
+					this.all.set(this.all().map((t) => (t.id === id ? { ...t, command: started.command } : t)));
+				}
+				return started.key;
+			});
+		} catch (e) {
+			this.remove(id);
+			throw e;
+		}
+		return id;
+	}
+
+	/** End a program's process and keep its tab. */
+	stop(id: string): void {
+		this.pool.stop(id);
+	}
+
+	/** The text selected in the terminal on screen, if any. */
+	selection(): string {
+		const id = this.active();
+		return id ? this.pool.selection(id) : '';
 	}
 
 	select(id: string): void {

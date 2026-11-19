@@ -8,14 +8,17 @@ mod error;
 mod files;
 mod git;
 mod init;
+mod investigate;
 mod host_cli;
 mod host_ops;
 mod lsp;
 mod menu;
 mod paths;
 mod proc;
+mod run;
 mod scan;
 mod sessions;
+mod targets;
 mod templates;
 mod terminal;
 mod worktree;
@@ -65,6 +68,9 @@ pub fn run() {
             app.manage(templates::Scaffolds::default());
             app.manage(conversation::Hooks::default());
             conversation::clean(app.handle());
+            app.manage(run::Runs::default());
+            app.manage(investigate::Investigations::default());
+            investigate::clean(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -147,6 +153,13 @@ pub fn run() {
             terminal::term_resize,
             terminal::term_close,
             conversation::claude_open,
+            targets::targets_list,
+            run::target_run,
+            investigate::investigate_start,
+            investigate::investigate_answer,
+            investigate::investigate_close,
+            investigate::investigate_commit,
+            investigate::replay_read,
             sessions::claude_sessions,
             lsp::lsp_servers,
             lsp::lsp_install,

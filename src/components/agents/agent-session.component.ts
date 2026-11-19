@@ -26,6 +26,8 @@ const NEW_BRANCH = '\u0000new';
 
 /** Where an agent's branch goes: a branch the user picks (or a new one), or a pull request for a protected one. */
 function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: number) {
+	// Accepting an investigation's fix commits it first (as the user, with this message), then merges like any agent's branch.
+	const fix = s.kind === 'investigate';
 	const trees = self.agents.worktrees();
 	const main = trees.find((w) => w.isMain);
 	const holderOf = (name: string) => trees.find((w) => w.branch === name);
@@ -55,7 +57,7 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 	}
 	return html`
 		<ml-dialog #agent-merge style="--ml-dialog-max-width: 520px">
-			<h3 slot="dialog-header">Merge ${s.branch ?? ''}</h3>
+			<h3 slot="dialog-header">${fix ? 'Accept the fix' : `Merge ${s.branch ?? ''}`}</h3>
 			<div class="dlg">
 				<ml-select label="Into" .options=${options} .value=${self.into} @ml:change=${(e: CustomEvent) => (self.into = e.detail.value)}></ml-select>
 				${creating
@@ -66,16 +68,18 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 					: ''}
 				${where ? html`<p class="hint">${where}</p>` : ''}
 				${blocked ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The main checkout has uncommitted changes. Commit or stash them before it switches to ${self.into}.</span></p>` : ''}
-				${uncommitted
-					? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent's worktree has ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Only committed work is merged: review and commit first.</span></p>`
-					: ''}
+				${fix && uncommitted
+					? html`<ml-input label="Commit message" hint=${`The fix is committed on ${s.branch ?? 'its branch'} as you, then merged.`} .value=${self.fixMessage} @ml:input=${(e: CustomEvent) => (self.fixMessage = e.detail.value)}></ml-input>`
+					: uncommitted
+						? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent's worktree has ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Only committed work is merged: review and commit first.</span></p>`
+						: ''}
 				${pr ? html`<p class="hint">Branch protected? Push ${s.branch} and open a ${pr} instead.</p>` : ''}
 			</div>
 			<div slot="dialog-footer" class="foot">
 				${pr ? html`<ml-button variant="outline" @ml:click=${() => self.openPr(s)}><ml-icon slot="icon-start" icon="git-pull-request"></ml-icon>Open a ${pr}…</ml-button>` : ''}
 				<span class="grow"></span>
 				<ml-button variant="outline" @ml:click=${() => self.closeMerge()}>Cancel</ml-button>
-				<ml-button variant="primary" ?disabled=${!target || blocked || (creating && !self.newFrom)} ?loading=${self.repos.busy() === 'merge'} @ml:click=${() => self.merge(s)}>Merge</ml-button>
+				<ml-button variant="primary" ?disabled=${!target || blocked || (creating && !self.newFrom) || (fix && !!uncommitted && !self.fixMessage.trim())} ?loading=${self.repos.busy() === 'merge' || self.accepting} @ml:click=${() => self.merge(s, fix && !!uncommitted)}>${fix ? 'Commit and merge' : 'Merge'}</ml-button>
 			</div>
 		</ml-dialog>
 	`;
@@ -110,9 +114,25 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 				</div>
 			`;
 		}
+		const tree = agents.worktrees().find((w) => samePath(w.path, s.cwd));
+		if (s.kind === 'investigate') {
+			// Its own view: the checklist while it runs, then the report and Replay. The Merge dialog is the same one.
+			return html`
+				<ms-investigation @accept=${() => self.openMerge(s)} @discard=${() => self.askDiscard()}></ms-investigation>
+				${mergeDialog(self, s, tree?.changes ?? 0)}
+				<ml-dialog #investigate-discard style="--ml-dialog-max-width: 460px">
+					<h3 slot="dialog-header">Discard this investigation</h3>
+					<div class="dlg"><p>Its worktree and the branch <b>${s.branch ?? ''}</b> are deleted, with the fix and the recordings in them. Your own checkout was never changed, so nothing there is lost.</p></div>
+					<div slot="dialog-footer" class="foot">
+						<span class="grow"></span>
+						<ml-button variant="outline" @ml:click=${() => self.closeDialog('investigate-discard')}>Cancel</ml-button>
+						<ml-button variant="danger" @ml:click=${() => self.discard(s)}>Discard</ml-button>
+					</div>
+				</ml-dialog>
+			`;
+		}
 		const running = s.status === 'running';
 		const ask = s.kind === 'ask';
-		const tree = agents.worktrees().find((w) => samePath(w.path, s.cwd));
 		const mainBranch = agents.worktrees().find((w) => w.isMain)?.branch;
 		const links = linking(self, s);
 		const follow = self.follow;
@@ -174,7 +194,8 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 			min-height: 0;
 		}
 		ms-ask,
-		ms-attempts {
+		ms-attempts,
+		ms-investigation {
 			flex: 1;
 			min-height: 0;
 		}
@@ -385,6 +406,9 @@ export class AgentSessionComponent {
 	into = '';
 	newName = '';
 	newFrom = '';
+	/** Accept fix: the message the fix is committed with, and whether that commit is being made. */
+	fixMessage = '';
+	accepting = false;
 	private _seen = 0;
 	private _shown: string | null = null;
 
@@ -422,16 +446,42 @@ export class AgentSessionComponent {
 		this.into = main && main !== s.branch ? main : NEW_BRANCH;
 		this.newName = tail ? `feature/${tail}` : '';
 		this.newFrom = main || (this.repos.branches().find((b) => !b.isRemote && b.name !== s.branch)?.name ?? '');
+		// A commit subject from the cause: its first clause, cut at a word. The user edits it in the dialog.
+		const cause = (s.investigation?.report?.summary ?? s.title).split('\n')[0];
+		const clause = cause.split(/[:;.]\s|,\s(?:and|which|so)\s/)[0];
+		this.fixMessage = `Fix: ${clause.length > 66 ? `${clause.slice(0, 66).replace(/\s+\S*$/, '')}…` : clause}`;
 		this._dialogs.open('agent-merge' as DialogId);
+	}
+
+	closeDialog(id: string): void {
+		this._dialogs.close(id as DialogId);
+	}
+
+	askDiscard(): void {
+		this._dialogs.open('investigate-discard' as DialogId);
+	}
+
+	async discard(s: AgentSession): Promise<void> {
+		this.closeDialog('investigate-discard');
+		await this.agents.discard(s);
 	}
 
 	closeMerge(): void {
 		this._dialogs.close('agent-merge' as DialogId);
 	}
 
-	async merge(s: AgentSession): Promise<void> {
+	async merge(s: AgentSession, commitFirst = false): Promise<void> {
 		const creating = this.into === NEW_BRANCH;
 		const into = creating ? this.newName.trim() : this.into;
+		if (commitFirst) {
+			const test = s.investigation?.report?.test;
+			this.accepting = true;
+			const committed = await this.agents.commitFix(s, this.fixMessage.trim(), test ? `Adds the test ${test.name}.` : '');
+			this.accepting = false;
+			if (!committed) {
+				return;
+			}
+		}
 		if (await this.agents.merge(s, into, creating ? this.newFrom : null)) {
 			this.closeMerge();
 		}

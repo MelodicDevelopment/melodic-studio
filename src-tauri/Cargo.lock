@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "melodic-studio"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -2218,6 +2218,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "thiserror 2.0.21",
+ "toml 0.8.2",
  "trash",
 ]
 

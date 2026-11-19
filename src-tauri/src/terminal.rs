@@ -38,11 +38,14 @@ pub struct Pty {
 pub const CLAUDE_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"];
 
 /// The program a terminal runs, with its arguments.
+#[derive(Debug)]
 pub struct Shell {
     pub program: PathBuf,
     pub args: Vec<String>,
     /// Variables of ours it must not inherit.
     pub env_remove: Vec<&'static str>,
+    /// Variables set for it on top of what it inherits.
+    pub env: Vec<(String, String)>,
 }
 
 /// The user's shell. Unix: `$SHELL` as a login shell, so the profile runs (an
@@ -52,14 +55,14 @@ pub fn shell() -> Shell {
     if cfg!(windows) {
         for name in ["pwsh.exe", "powershell.exe"] {
             if let Some(program) = crate::proc::find(name) {
-                return Shell { program, args: vec!["-NoLogo".into()], env_remove: CLAUDE_MARKERS.to_vec() };
+                return Shell { program, args: vec!["-NoLogo".into()], env_remove: CLAUDE_MARKERS.to_vec(), env: vec![] };
             }
         }
         let program = std::env::var_os("COMSPEC").filter(|c| !c.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe"));
-        return Shell { program, args: vec![], env_remove: CLAUDE_MARKERS.to_vec() };
+        return Shell { program, args: vec![], env_remove: CLAUDE_MARKERS.to_vec(), env: vec![] };
     }
     let program = std::env::var_os("SHELL").map(PathBuf::from).filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("/bin/sh"));
-    Shell { program, args: vec!["-l".into()], env_remove: CLAUDE_MARKERS.to_vec() }
+    Shell { program, args: vec!["-l".into()], env_remove: CLAUDE_MARKERS.to_vec(), env: vec![] }
 }
 
 fn size(cols: u16, rows: u16) -> PtySize {
@@ -80,6 +83,9 @@ pub fn open(shell: &Shell, cwd: &Path, cols: u16, rows: u16, mut on_data: impl F
     command.cwd(cwd);
     for name in &shell.env_remove {
         command.env_remove(name);
+    }
+    for (name, value) in &shell.env {
+        command.env(name, value);
     }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
@@ -183,6 +189,22 @@ pub async fn term_open(app: tauri::AppHandle, state: State<'_, AppState>, termin
 
 /// Run `program` in `dir` on a new pty under a new key. `on_end` runs once the program has ended.
 pub fn start(app: tauri::AppHandle, terminals: &Terminals, program: &Shell, dir: &Path, cols: u16, rows: u16, on_end: impl FnOnce() + Send + 'static) -> Result<String> {
+    start_tapped(app, terminals, program, dir, cols, rows, |_| {}, move |_| on_end())
+}
+
+/// `start`, for a program the app itself wants to follow: `tap` sees the raw output as the window
+/// does, and `on_end` gets the exit code.
+#[allow(clippy::too_many_arguments)]
+pub fn start_tapped(
+    app: tauri::AppHandle,
+    terminals: &Terminals,
+    program: &Shell,
+    dir: &Path,
+    cols: u16,
+    rows: u16,
+    mut tap: impl FnMut(&[u8]) + Send + 'static,
+    on_end: impl FnOnce(Option<u32>) + Send + 'static,
+) -> Result<String> {
     let key = format!("term-{}", terminals.last.fetch_add(1, Ordering::SeqCst) + 1);
     let (data_app, data_key) = (app.clone(), key.clone());
     let (exit_app, exit_key) = (app, key.clone());
@@ -194,18 +216,27 @@ pub fn start(app: tauri::AppHandle, terminals: &Terminals, program: &Shell, dir:
         cols,
         rows,
         move |bytes| {
+            tap(bytes);
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
             let _ = data_app.emit("term-data", TermData { key: data_key.clone(), data });
         },
         move |code| {
             let gone = exit_app.state::<Terminals>().open.lock().unwrap().remove(&exit_key);
             drop(gone);
-            on_end();
+            on_end(code);
             let _ = exit_app.emit("term-exit", TermExit { key: exit_key, code });
         },
     )?;
     open_terminals.insert(key.clone(), pty);
     Ok(key)
+}
+
+/// End the program behind `key`, if it is still running.
+pub fn close(terminals: &Terminals, key: &str) {
+    let pty = terminals.open.lock().unwrap().remove(key);
+    if let Some(mut pty) = pty {
+        pty.kill();
+    }
 }
 
 /// Keystrokes (or a paste) for the shell.
@@ -226,10 +257,7 @@ pub async fn term_resize(terminals: State<'_, Terminals>, key: String, cols: u16
 
 #[tauri::command]
 pub async fn term_close(terminals: State<'_, Terminals>, key: String) -> Result<()> {
-    let pty = terminals.open.lock().unwrap().remove(&key);
-    if let Some(mut pty) = pty {
-        pty.kill();
-    }
+    close(&terminals, &key);
     Ok(())
 }
 
@@ -251,9 +279,9 @@ mod tests {
     /// A shell with no profile and no prompt theme, so what it prints is predictable.
     fn plain_shell() -> Shell {
         if cfg!(windows) {
-            Shell { program: std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe")), args: vec![], env_remove: vec![] }
+            Shell { program: std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe")), args: vec![], env_remove: vec![], env: vec![] }
         } else {
-            Shell { program: PathBuf::from("/bin/sh"), args: vec![], env_remove: vec![] }
+            Shell { program: PathBuf::from("/bin/sh"), args: vec![], env_remove: vec![], env: vec![] }
         }
     }
 

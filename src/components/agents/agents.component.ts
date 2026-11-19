@@ -2,7 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
-import { AgentsStore, MAX_ATTEMPTS, STATE_LABELS, attemptBranch, branchFor, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, MAX_ATTEMPTS, attemptBranch, branchFor, scopeOf, stateLabel, stateOf, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
 import type { AgentMode, ClaudeSession, Worktree } from '../../services/backend.service';
@@ -41,15 +41,17 @@ function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 	return html`
 		<div class="session ${on ? 'sel' : ''} ${nested ? 'nested' : ''} ${s.unread ? 'unread' : ''}" @click=${() => agents.select(s.id)}>
 			<div class="top">
-				${s.status === 'running' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state}" title=${STATE_LABELS[state]}></span>`}
+				${state === 'working' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state} ${s.kind === 'investigate' ? 'you' : ''}" title=${stateLabel(s)}></span>`}
 				<span class="title">${nested ? `Attempt ${s.attempt}` : s.title}</span>
 				${s.unread ? html`<span class="new" title="Finished since you last looked"></span>` : ''}
 				<button class="x" title="Remove agent…" @click=${(e: Event) => (e.stopPropagation(), self.askRemove(s))}><ml-icon icon="x" size="xs"></ml-icon></button>
 			</div>
 			<div class="meta">
-				${s.kind === 'ask'
-					? html`<ml-icon icon="chat-circle-dots" size="xs"></ml-icon><span class="branch">${scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code'}</span>`
-					: html`<ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'detached'}</span>`}
+				${s.kind === 'investigate'
+					? html`<ml-icon icon="sparkle" size="xs"></ml-icon><span class="branch said ${state}">${stateLabel(s)}</span>`
+					: s.kind === 'ask'
+						? html`<ml-icon icon="chat-circle-dots" size="xs"></ml-icon><span class="branch">${scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code'}</span>`
+						: html`<ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'detached'}</span>`}
 				<span>${relativeTime(s.updated)}</span>
 			</div>
 		</div>
@@ -102,7 +104,9 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 	selector: 'ms-agents',
 	template: (self: AgentsComponent) => {
 		const agents = self.agents;
-		const sessions = agents.current();
+		const all = agents.current();
+		const investigations = all.filter((s) => s.kind === 'investigate');
+		const sessions = all.filter((s) => s.kind !== 'investigate');
 		const repoId = self.repos.repo()?.id;
 		const convs = workspace()
 			.conversations()
@@ -127,7 +131,21 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 				<div class="askrow ${agents.asking() ? 'sel' : ''}" title="A read-only chat about the code: nothing is changed" @click=${() => agents.openAsk('code')}>
 					<ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span class="title">Ask about this repository…</span>
 				</div>
-				${sessions.length === 0 ? html`<div class="none">No agents yet. Give one a task and it works on its own branch while you carry on.</div>` : ''}
+				<div class="askrow ai" title="Claude reproduces a bug in a worktree of its own, finds the cause and proposes a fix. Your files are not touched." @click=${() => agents.openInvestigate()}>
+					<ml-icon icon="sparkle" size="sm"></ml-icon><span class="title">Investigate a bug…</span>
+				</div>
+				${investigations.length
+					? html`
+						<div class="group">Investigations</div>
+						${repeat(
+							investigations,
+							(s) => s.id,
+							(s) => sessionRow(self, s, false)
+						)}
+						${sessions.length ? html`<div class="group">Agents</div>` : ''}
+					`
+					: ''}
+				${all.length === 0 ? html`<div class="none">No agents yet. Give one a task and it works on its own branch while you carry on.</div>` : ''}
 				${repeat(
 					grouped(sessions),
 					(g) => g.group ?? g.sessions[0].id,
@@ -306,6 +324,20 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 			flex: none;
 			color: var(--ml-color-primary);
 		}
+		/* Purple: it hands the bug to Claude. */
+		.askrow.ai > ml-icon {
+			color: var(--ms-ai);
+		}
+		/* An investigation's state in words: magenta while it waits for an OK, green once the cause is found. */
+		.said.review {
+			color: var(--ml-color-text-link);
+		}
+		.said.finished {
+			color: var(--ms-add);
+		}
+		.said.failed {
+			color: var(--ms-del);
+		}
 		.askrow:hover,
 		.attempts:hover {
 			background: var(--ms-hover);
@@ -358,6 +390,10 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 		}
 		.dot.review {
 			background: var(--ms-mod);
+		}
+		/* An investigation waiting for an OK is waiting on the user: magenta. */
+		.dot.review.you {
+			background: var(--ms-you);
 		}
 		.dot.stopped {
 			background: var(--ml-color-text-muted);

@@ -1,0 +1,43 @@
+FAIL src/pricing.test.js
+  applyDiscount
+    ✓ takes ten percent off for gold (1 ms)
+    ✕ prices an archived tier as standard
+    ✕ rounds (1 ms)
+
+  ● applyDiscount › prices an archived tier as standard
+
+    TypeError: Cannot read properties of null (reading 'multiplier')
+
+      2 | function applyDiscount(total, tierId) {
+      3 |   const tier = TIERS[tierId];
+    > 4 |   return total * tier.multiplier;
+        |                       ^
+      5 | }
+      6 | module.exports = { applyDiscount };
+      7 |
+
+      at multiplier (src/pricing.js:4:23)
+      at Object.applyDiscount (src/pricing.test.js:8:12)
+
+  ● applyDiscount › rounds
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 8
+    Received: 9
+
+       9 |   });
+      10 |   it('rounds', () => {
+    > 11 |     expect(applyDiscount(10, 'gold')).toBe(8);
+         |                                       ^
+      12 |   });
+      13 | });
+      14 |
+
+      at Object.toBe (src/pricing.test.js:11:39)
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 1 passed, 3 total
+Snapshots:   0 total
+Time:        0.154 s
+Ran all test suites.

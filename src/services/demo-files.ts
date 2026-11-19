@@ -11,12 +11,12 @@ const IGNORED = ['node_modules', 'dist', 'debug.log'];
 const FILES = new Map<string, string>([
 	['.gitignore', 'node_modules/\ndist/\n*.log\n'],
 	['README.md', '# harmony\n\nA small music player.\n\n## Develop\n\n```sh\nnpm install\nnpm run dev\n```\n'],
-	['package.json', '{\n\t"name": "harmony",\n\t"version": "1.4.0",\n\t"type": "module",\n\t"scripts": {\n\t\t"dev": "vite",\n\t\t"build": "tsc --noEmit && vite build"\n\t}\n}\n'],
+	['package.json', '{\n\t"name": "harmony",\n\t"version": "1.4.0",\n\t"type": "module",\n\t"scripts": {\n\t\t"dev": "vite",\n\t\t"build": "tsc --noEmit && vite build",\n\t\t"test": "vitest run"\n\t}\n}\n'],
 	['debug.log', 'queue: wrapped at 12\n'],
 	['public/cover.png', BINARY],
 	['public/index.html', '<!doctype html>\n<html lang="en">\n\t<head>\n\t\t<meta charset="UTF-8" />\n\t\t<title>Harmony</title>\n\t</head>\n\t<body>\n\t\t<div id="app"></div>\n\t</body>\n</html>\n'],
 	['docs/shortcuts.md', '# Keyboard shortcuts\n\n| Key | Action |\n| --- | --- |\n| Space | Play / pause |\n| R | Cycle repeat mode |\n'],
-	['src/main.ts', "import { Queue } from './player/queue';\nimport { nextRepeatMode, type RepeatMode } from './player/repeat';\n\nconst queue = new Queue();\nlet repeat: RepeatMode = 'off';\n\ndocument.addEventListener('keydown', (e) => {\n\tif (e.key === 'r') {\n\t\trepeat = nextRepeatMode(repeat);\n\t}\n\tif (e.key === 'ArrowRight') {\n\t\tqueue.next(repeat !== 'off');\n\t}\n});\n"],
+	['src/main.ts', "import { Queue } from './player/queue';\nimport { nextRepeatMode, type RepeatMode } from './player/repeat';\n\nconst queue = new Queue();\nlet repeat: RepeatMode = 'off';\n\ndocument.addEventListener('keydown', (e) => {\n\tif (e.key === 'r') {\n\t\trepeat = nextRepeatMode(repeat);\n\t}\n\tif (e.key === 'ArrowRight') {\n\t\tdocument.title = queue.next(repeat !== 'off')!.title;\n\t}\n});\n"],
 	['src/styles/app.css', ':root {\n\t--accent: #7c9cff;\n}\n\nbody {\n\tmargin: 0;\n\tfont-family: system-ui, sans-serif;\n}\n\n.transport button.on {\n\tcolor: var(--accent);\n}\n'],
 	[
 		'src/player/queue.ts',

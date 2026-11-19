@@ -1,0 +1,38 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.11.10, pytest-9.2.0, pluggy-1.7.0
+rootdir: /Users/rick/src/shop
+configfile: pytest.ini
+collected 3 items
+
+tests/test_pricing.py .FF                                                [100%]
+
+=================================== FAILURES ===================================
+____________________ test_archived_tier_prices_as_standard _____________________
+
+    def test_archived_tier_prices_as_standard():
+>       assert apply_discount(84, "gold-2024") == 84
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_pricing.py:9: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+total = 84, tier_id = 'gold-2024'
+
+    def apply_discount(total, tier_id):
+>       return total * get_tier(tier_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'
+
+shop/pricing.py:9: TypeError
+________________________________ test_rounding _________________________________
+
+    def test_rounding():
+>       assert apply_discount(10, "gold") == 8
+E       AssertionError: assert 9.0 == 8
+E        +  where 9.0 = apply_discount(10, 'gold')
+
+tests/test_pricing.py:13: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_pricing.py::test_archived_tier_prices_as_standard - TypeErr...
+FAILED tests/test_pricing.py::test_rounding - AssertionError: assert 9.0 == 8
+========================= 2 failed, 1 passed in 0.02s ==========================

@@ -1,6 +1,11 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { TerminalStore } from '../../services/terminal.store';
+import { RunStore, frameInCheckout, type Run, type RunError } from '../../services/run.store';
+import { AgentsStore } from '../../services/agents.store';
+import { RepoStore } from '../../services/repo.store';
+import { ExplorerStore } from '../../services/explorer.store';
+import { samePath } from '../../services/agent-paths';
 import { terminalTemplate } from './terminal.template';
 import { terminalStyles } from './terminal.styles';
 
@@ -19,6 +24,13 @@ const SETTLE_MS = 60;
 })
 export class TerminalComponent {
 	@Service(TerminalStore) readonly terminals!: TerminalStore;
+	@Service(RunStore) readonly runs!: RunStore;
+	@Service(AgentsStore) private readonly _agents!: AgentsStore;
+	@Service(RepoStore) private readonly _repos!: RepoStore;
+	@Service(ExplorerStore) private readonly _explorer!: ExplorerStore;
+
+	/** Which of the run's open errors the bar shows: 0 is the newest. */
+	errorAt = 0;
 
 	elementRef!: HTMLElement;
 	dragging = false;
@@ -101,6 +113,38 @@ export class TerminalComponent {
 			this.terminals.saveHeight();
 		}
 	};
+
+	// ---- the "Error spotted" bar ----
+
+	inCheckout(run: Run, file: string): boolean {
+		return frameInCheckout(file, run.checkout, run.target.cwd) !== null;
+	}
+
+	/** Open a stack frame in the Files tab, when the run's checkout is still the one on screen. */
+	openFrame(run: Run, file: string, line: number, column: number | null): void {
+		const path = frameInCheckout(file, run.checkout, run.target.cwd);
+		const repo = this._repos.repo();
+		if (!path || !repo || !samePath(run.checkout, repo.worktree || repo.path)) {
+			return;
+		}
+		this._repos.setTab('files');
+		void this._explorer.openAt(path, line, column ?? 1);
+	}
+
+	dismiss(run: Run, error: RunError): void {
+		this.runs.dismiss(run.id, error.id);
+		this.errorAt = 0;
+	}
+
+	/** Hand the error to Claude: it reproduces it in a worktree of its own. */
+	investigate(run: Run, error: RunError): void {
+		void this._agents.investigate({ description: '', error, target: run.target, command: run.command, exitCode: run.exitCode });
+	}
+
+	/** The text selected in the terminal on screen (or nothing) goes into the box for describing a bug. */
+	investigateSelection(): void {
+		this._agents.openInvestigate(this.terminals.selection());
+	}
 
 	closeOnMiddleClick(e: MouseEvent, id: string): void {
 		if (e.button === 1) {

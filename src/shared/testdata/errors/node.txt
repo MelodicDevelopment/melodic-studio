@@ -1,0 +1,17 @@
+/Users/rick/src/shop/crash.js:3
+  return order.total * tier.multiplier;
+                            ^
+
+TypeError: Cannot read properties of null (reading 'multiplier')
+    at applyDiscount (/Users/rick/src/shop/crash.js:3:29)
+    at placeOrder (/Users/rick/src/shop/crash.js:6:10)
+    at Object.<anonymous> (/Users/rick/src/shop/crash.js:8:1)
+    at Module._compile (node:internal/modules/cjs/loader:1761:14)
+    at Object..js (node:internal/modules/cjs/loader:1893:10)
+    at Module.load (node:internal/modules/cjs/loader:1481:32)
+    at Module._load (node:internal/modules/cjs/loader:1300:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+
+Node.js v24.11.1

@@ -11,6 +11,8 @@ interface DemoShell {
 	line: string;
 	/** A pretend Claude conversation rather than a shell. */
 	claude?: { session: string; turns: number; asking?: boolean };
+	/** A pretend program Studio started (a run target): it prints its script and takes no input. */
+	program?: ReturnType<typeof setTimeout>[];
 }
 
 const shells = new Map<string, DemoShell>();
@@ -102,6 +104,31 @@ function converse(key: string, shell: DemoShell, said: string, print: (text: str
 	}, subagent ? 3600 : 1800);
 }
 
+/**
+ * A pretend run target: prints `lines` (each after its delay) and, with an exit code, ends. Answers the
+ * terminal key, on which `term_close` works as it does for a real program (the exit event follows).
+ */
+export function demoProgram(cwd: string, lines: [delay: number, text: string][], exit: number | null, emit: Emit): string {
+	const key = `demo-run-${++last}`;
+	const timers: ReturnType<typeof setTimeout>[] = [];
+	shells.set(key, { cwd, line: '', program: timers });
+	let at = 0;
+	for (const [delay, text] of lines) {
+		at += delay;
+		timers.push(setTimeout(() => shells.has(key) && emit('term-data', { key, data: encode(`${text}\r\n`) }), at));
+	}
+	if (exit !== null) {
+		timers.push(
+			setTimeout(() => {
+				if (shells.delete(key)) {
+					emit('term-exit', { key, code: exit });
+				}
+			}, at + 300)
+		);
+	}
+	return key;
+}
+
 /** Handles `term_open`, `term_write`, `term_resize` and `term_close` for the demo backend. */
 export function demoTerminal(cmd: string, args: Record<string, unknown>, cwd: string, emit: Emit): unknown {
 	const key = String(args.key);
@@ -130,11 +157,16 @@ export function demoTerminal(cmd: string, args: Record<string, unknown>, cwd: st
 		return opened;
 	}
 	if (cmd === 'term_close') {
+		// A program that was stopped still reports its end, as a killed process does.
+		if (shell?.program) {
+			shell.program.forEach((t) => clearTimeout(t));
+			setTimeout(() => emit('term-exit', { key, code: 130 }), 80);
+		}
 		shells.delete(key);
 		demoHooks.delete(key);
 		return;
 	}
-	if (cmd !== 'term_write' || !shell) {
+	if (cmd !== 'term_write' || !shell || shell.program) {
 		return;
 	}
 	// Escape sequences (arrow keys and the like) mean nothing to this shell.

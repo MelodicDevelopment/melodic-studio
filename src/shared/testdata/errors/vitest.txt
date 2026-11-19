@@ -1,0 +1,50 @@
+
+ RUN  v3.2.7 /Users/rick/src/web
+
+ ❯ src/pricing.test.js (3 tests | 2 failed) 5ms
+   ✓ applyDiscount > takes ten percent off for gold 1ms
+   × applyDiscount > prices an archived tier as standard 2ms
+     → Cannot read properties of null (reading 'multiplier')
+   × applyDiscount > rounds 2ms
+     → expected 9 to be 8 // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/pricing.test.js > applyDiscount > prices an archived tier as standard
+TypeError: Cannot read properties of null (reading 'multiplier')
+ ❯ applyDiscount src/pricing.js:4:23
+      2| export function applyDiscount(total, tierId) {
+      3|   const tier = TIERS[tierId];
+      4|   return total * tier.multiplier;
+       |                       ^
+      5| }
+      6| 
+ ❯ src/pricing.test.js:9:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/pricing.test.js > applyDiscount > rounds
+AssertionError: expected 9 to be 8 // Object.is equality
+
+- Expected
++ Received
+
+- 8
++ 9
+
+ ❯ src/pricing.test.js:12:39
+     10|   });
+     11|   it('rounds', () => {
+     12|     expect(applyDiscount(10, 'gold')).toBe(8);
+       |                                       ^
+     13|   });
+     14| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  20:12:11
+   Duration  169ms (transform 12ms, setup 0ms, collect 8ms, tests 5ms, environment 0ms, prepare 29ms)
+

@@ -32,6 +32,8 @@ export interface ScreenEvents {
 	exit(code: number | null, ranFor: number): void;
 	/** Something was typed or pasted (before it is sent). */
 	input?(data: string): void;
+	/** What the program printed, as text (escape sequences and all), in the order it arrived. */
+	output?(text: string): void;
 }
 
 interface Screen {
@@ -49,6 +51,8 @@ interface Screen {
 	outbox: string;
 	sending: boolean;
 	events: ScreenEvents;
+	/** For `events.output`: a read can end in the middle of a character, so the decoding carries over. */
+	decoder: TextDecoder | null;
 }
 
 function decode(data: string): Uint8Array {
@@ -124,7 +128,7 @@ export class ScreenPool {
 		);
 		const host = document.createElement('div');
 		host.className = 'screen';
-		const screen: Screen = { term, fit, host, key: null, opened: false, ended: false, started: Date.now(), outbox: '', sending: false, events };
+		const screen: Screen = { term, fit, host, key: null, opened: false, ended: false, started: Date.now(), outbox: '', sending: false, events, decoder: events.output ? new TextDecoder() : null };
 
 		term.onData((data) => {
 			if (!screen.ended) {
@@ -274,6 +278,19 @@ export class ScreenPool {
 		}
 	}
 
+	/** End the program but keep the screen, so what it printed can still be read. Its `exit` event follows. */
+	stop(id: string): void {
+		const screen = this._screens.get(id);
+		if (screen?.key && !screen.ended) {
+			void this.backend.termClose(screen.key).catch(() => undefined);
+		}
+	}
+
+	/** The text selected on the screen, if any. */
+	selection(id: string): string {
+		return this._screens.get(id)?.term.getSelection() ?? '';
+	}
+
 	/** Ready to `start` again (after the program ended), keeping what is on screen. */
 	reset(id: string): void {
 		const screen = this._screens.get(id);
@@ -322,7 +339,15 @@ export class ScreenPool {
 	}
 
 	private async listen(): Promise<void> {
-		await this.backend.listen<TermData>('term-data', (e) => this.receive(e.key, (screen) => screen.term.write(decode(e.data))));
+		await this.backend.listen<TermData>('term-data', (e) =>
+			this.receive(e.key, (screen) => {
+				const bytes = decode(e.data);
+				screen.term.write(bytes);
+				if (screen.decoder) {
+					screen.events.output?.(screen.decoder.decode(bytes, { stream: true }));
+				}
+			}),
+		);
 		await this.backend.listen<TermExit>('term-exit', (e) =>
 			this.receive(e.key, (screen) => {
 				screen.ended = true;

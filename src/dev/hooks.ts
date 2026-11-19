@@ -13,6 +13,7 @@ import { LspService } from '../services/lsp.service';
 import { TerminalStore } from '../services/terminal.store';
 import { AiFeaturesStore } from '../services/ai-features.store';
 import { HostStore } from '../services/host.store';
+import { RunStore } from '../services/run.store';
 
 const backend = (): BackendService => Injector.get(BackendService);
 
@@ -57,6 +58,9 @@ function q(path: string): Element | null {
 	},
 	get host() {
 		return Injector.get(HostStore);
+	},
+	get run() {
+		return Injector.get(RunStore);
 	},
 	/** Any other service, by class: `s.inject(SomeStore)` from a module the script imported. */
 	inject: <T>(token: new (...args: never[]) => T): T => Injector.get(token as never),

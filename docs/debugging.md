@@ -226,3 +226,30 @@ All of these are possible later if real use shows a need:
 - Desktop window via `STUDIO_DEV_EVAL`: a sample ASP.NET API with the canvas's bug (an archived loyalty tier makes
   `GetTier` return null). Run it, spot the error, investigate, approve the run, get the report, replay, accept the
   fix.
+
+## As built (2026-11-18)
+
+Parts 1 and 2 are built on `feature/run-and-investigate` and were run for real against a sample ASP.NET API with the
+canvas's bug. Where the build differs from the text above, and what was found on the way:
+
+- **The check before building passed.** `claude -p --strict-mcp-config --mcp-config <file>` reaches Studio's HTTP
+  server and loads none of the user's MCP servers or skills (2.1.327). Investigations also run with `--restricted`, so
+  the user's own Bash allow-rules cannot let the session run the app behind Studio's back: a `curl` was refused while
+  a command on its allow-list ran.
+- **Ports for .NET.** `ASPNETCORE_URLS` alone is not enough: `dotnet run --launch-profile` replaces it with the
+  profile's `applicationUrl`. Studio also sets `Kestrel__Endpoints__Http__Url`, which wins over the profile.
+- **Seq and depth are Studio's, not the helper's.** A step's number is its line in the `.jsonl` file and depth comes
+  from the enter and return events. One helper per project (Shop.Api, Shop.Checkout, Shop.Pricing each needed one)
+  cannot keep a shared counter. Claude reads the file to give `causeSeq` and `crashSeq`.
+- **Where a recording line points.** At the line of code above it; a "return" at the line below (it is recorded just
+  before the statement). Blank lines and comments are skipped both ways.
+- **More tools than the four.** `progress` (the checklist and "thinking so far"), `target_output`,
+  `remove_recording_file` (the session has no other way to delete its helper file) and `stop_target`.
+  `http_request` and `run_tests` each ask, like `run_target`.
+- **The "Error spotted" bar** sits between the tabs and the terminal rather than over the block inside xterm, and its
+  frames are the file:line links. The crash mark in the Files tab is as designed.
+- **Accept fix commits first.** Agents do not commit, so Accept fix commits the worktree as the user (their message,
+  no trailer) and then opens the ordinary Merge dialog.
+- **Targets also include** a .NET project with no launch profile that is runnable (web, worker or `Exe`), and a Cargo
+  workspace's `cargo test --workspace`.
+

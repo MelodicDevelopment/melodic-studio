@@ -1,0 +1,25 @@
+   Compiling shop v0.1.0 (/Users/rick/src/shop)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/main.rs (target/debug/deps/shop-78bdc309d1315607)
+
+running 2 tests
+test tests::standard_tier ... ok
+test tests::archived_tier_prices_as_standard ... FAILED
+
+failures:
+
+---- tests::archived_tier_prices_as_standard stdout ----
+
+thread 'tests::archived_tier_prices_as_standard' (843043) panicked at src/main.rs:21:9:
+assertion `left == right` failed: archived tiers price as Standard
+  left: None
+ right: Some(1.0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::archived_tier_prices_as_standard
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--bin shop`

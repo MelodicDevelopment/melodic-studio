@@ -102,7 +102,7 @@ fn hook_event(key: &str, body: &Value) -> HookEvent {
 }
 
 /// Read one HTTP request: `(path, body)`. Only what Claude Code's hook client sends is understood.
-fn read_request(stream: &TcpStream) -> Option<(String, Vec<u8>)> {
+pub(crate) fn read_request(stream: &TcpStream) -> Option<(String, Vec<u8>)> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
@@ -212,9 +212,9 @@ fn claude_program(args: Vec<String>) -> Result<Shell> {
         let comspec = std::env::var_os("COMSPEC").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("cmd.exe"));
         let mut all = vec!["/d".to_string(), "/c".to_string(), program.to_string_lossy().to_string()];
         all.extend(args);
-        return Ok(Shell { program: comspec, args: all, env_remove });
+        return Ok(Shell { program: comspec, args: all, env_remove, env: vec![] });
     }
-    Ok(Shell { program, args, env_remove })
+    Ok(Shell { program, args, env_remove, env: vec![] })
 }
 
 fn settings_dir(app: &tauri::AppHandle) -> Result<PathBuf> {

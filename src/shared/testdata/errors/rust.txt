@@ -1,0 +1,7 @@
+   Compiling shop v0.1.0 (/Users/rick/src/shop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running `target/debug/shop`
+
+thread 'main' (842930) panicked at src/main.rs:6:40:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

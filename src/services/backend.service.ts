@@ -6,7 +6,8 @@
 import type { RepoOrigin } from '../shared/repo-groups';
 import { Injectable } from '@melodicdev/core/injection';
 import { demoFileOp, demoListDir, demoReadFile, demoWriteFile } from './demo-files';
-import { demoTerminal } from './demo-terminal';
+import { demoProgram, demoTerminal } from './demo-terminal';
+import { DEMO_AFTER, DEMO_BEFORE, DEMO_DENIED, DEMO_REPORT, DEMO_TARGETS, demoApproval, demoFix, demoReplay, demoRunScript } from './demo-investigate';
 import { demoHost, demoPullRequestAnswer } from './demo-host';
 import { demoProject } from './demo-project';
 
@@ -68,6 +69,63 @@ export interface AgentRunOptions {
 	lean?: boolean;
 	/** The only built-in tools Claude can see (`Read`, `Grep`); leave out for the usual set. */
 	builtin?: string[];
+	/** The turn belongs to an investigation: it gets Studio's own tools for running the app and none of the user's settings. */
+	investigate?: { target: string | null };
+}
+/** Something a checkout can run, found in its project files (src-tauri/src/targets.rs). */
+export interface RunTarget {
+	id: string;
+	name: string;
+	/** Where it came from, as a heading: "Shop.Api · launch profiles", "web · package.json". */
+	group: string;
+	/** Repository-relative working folder; empty for the root. */
+	cwd: string;
+	argv: string[];
+	kind: 'run' | 'test';
+	runtime: 'dotnet' | 'node' | 'rust' | 'go' | 'python';
+	/** The file it was read from, by name. */
+	source: string;
+}
+/** A target that was started: the terminal that shows it, and the port a worktree's copy was given. */
+export interface RunStarted {
+	key: string;
+	port: number | null;
+	command: string;
+}
+/** Claude wants to run something for an investigation and waits for the user's answer (`investigate-approval`). */
+export interface InvestigateApproval {
+	/** The agent session. */
+	key: string;
+	request: string;
+	tool: 'run_target' | 'run_tests' | 'http_request';
+	target: string | null;
+	group: string | null;
+	/** The project the target belongs to ("Shop.Api"), when its group names one rather than a file. */
+	project: string | null;
+	command: string | null;
+	port: number | null;
+	method: string | null;
+	path: string | null;
+	body: string | null;
+	/** Claude's sentence on what this touches outside the worktree. Untrusted: text only. */
+	touches: string | null;
+}
+/** Claude moved on in the checklist, or changed its mind about the cause (`investigate-progress`). */
+export interface InvestigateProgress {
+	key: string;
+	step: number;
+	detail: string | null;
+	thinking: string | null;
+}
+export interface InvestigateStarted extends RunStarted {
+	/** The number of the recording this run writes. */
+	replay: number;
+}
+/** One recorded run: the events as the program wrote them and the files as they were when it ran. */
+export interface ReplayData {
+	run: number;
+	events: string;
+	files: { path: string; text: string }[];
 }
 /** One file a checkout changed since a commit, with its own unified diff. */
 export interface ChangedFile extends FileChange {
@@ -561,6 +619,20 @@ export class BackendService {
 	/** Claude Code sessions in the repository's checkouts that were started outside the app, newest first. */
 	claudeSessions(id: string) { return this.call<ClaudeSession[]>('claude_sessions', { id }); }
 	claudeOpen(id: string, cwd: string, session: string, resume: boolean, cols: number, rows: number) { return this.call<string>('claude_open', { id, cwd, session, resume, cols, rows }); }
+	// ---- Run & Investigate (targets.rs, run.rs, investigate.rs) ----
+	/** What the active checkout of `id` can run. */
+	async targets(id: string) { return (await this.call<RunTarget[] | undefined>('targets_list', { id })) ?? []; }
+	/** Start a target on a pty in the active checkout. The terminal events and `termClose` work on the key it answers. */
+	targetRun(id: string, target: string, cols: number, rows: number) { return this.call<RunStarted>('target_run', { id, target, cols, rows }); }
+	/** The user allowed what an investigation asked to run: start it, and answer the terminal that shows it. */
+	investigateStart(request: string, cols: number, rows: number) { return this.call<InvestigateStarted>('investigate_start', { request, cols, rows }); }
+	/** The user's answer to a request an investigation wants to send, or "no" to anything it asked. */
+	investigateAnswer(request: string, allow: boolean) { return this.call<void>('investigate_answer', { request, allow }); }
+	/** An investigation is over: stop what it runs. */
+	investigateClose(key: string) { return this.call<void>('investigate_close', { key }); }
+	replayRead(id: string, cwd: string, run: number) { return this.call<ReplayData>('replay_read', { id, cwd, run }); }
+	/** Commit everything an investigation changed in its worktree, as the user. Only the Accept fix button calls this. */
+	investigateCommit(id: string, cwd: string, summary: string, description: string) { return this.call<void>('investigate_commit', { id, cwd, summary, description }); }
 	/** The servers Settings lists, looked for in the active checkout of `id`, the app's own folder and PATH. */
 	async lspServers(id: string | null) { return (await this.call<LanguageServer[] | undefined>('lsp_servers', { id })) ?? []; }
 	/** Installs into the app's data folder, never globally. Takes as long as npm or dotnet do. */
@@ -1002,6 +1074,25 @@ class DemoBackend {
 		return () => set.delete(handler);
 	}
 
+	/** The demo investigation's question that is waiting for an answer: its request id and the session it belongs to. */
+	private demoAsk: { request: string; key: string } | null = null;
+	private demoAsks = 0;
+
+	/** The rest of the demo investigation, once the user has answered its question. */
+	private demoInvestigate(key: string, allowed: boolean): void {
+		const say = (event: Record<string, unknown>, delay: number) => this.emit('agent-event', { key, event }, delay);
+		if (allowed) {
+			DEMO_AFTER.forEach(([delay, step, detail, thinking]) => this.emit('investigate-progress', { key, step, detail, thinking }, delay));
+			say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '.studio/replay/run-1.jsonl' } }] } }, 2400);
+			say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/main.ts' } }] } }, 3700);
+		}
+		const answer = JSON.stringify(allowed ? DEMO_REPORT : DEMO_DENIED);
+		const end = allowed ? 5200 : 900;
+		say({ type: 'assistant', message: { content: [{ type: 'text', text: answer }] } }, end);
+		say({ type: 'result', subtype: 'success', is_error: false, session_id: 'demo-investigation', total_cost_usd: allowed ? 0.41 : 0.08 }, end + 100);
+		this.emit('agent-done', { key, ok: true, error: '' }, end + 200);
+	}
+
 	/** Timers of events still to come, by agent key, so stopping an agent can call them off. */
 	private readonly pending = new Map<string, ReturnType<typeof setTimeout>[]>();
 
@@ -1299,7 +1390,46 @@ class DemoBackend {
 				this.repos = this.repos.map((r) => ({ ...r, worktree: null }));
 				return;
 			case 'worktree_diff':
-				return demoWorktreeDiff(String(args.path), this.worktreeList);
+				return String(args.path).includes('investigate-') ? demoFix() : demoWorktreeDiff(String(args.path), this.worktreeList);
+			case 'targets_list':
+				return empty ? [] : DEMO_TARGETS;
+			case 'target_run': {
+				const target = DEMO_TARGETS.find((t) => t.id === args.target);
+				if (!target) {
+					throw { kind: 'error', message: 'That run target is no longer in this checkout' };
+				}
+				const active = this.worktreeList.find((w) => w.active);
+				// As in the app: the main checkout keeps the app's own port, a worktree gets one of its own.
+				const port = active && !active.isMain && target.kind === 'run' ? 5174 : null;
+				const script = demoRunScript(target, DEMO_ID, port);
+				const key = demoProgram(active?.path ?? DEMO_ID, script.lines, script.exit, (event, payload) => this.emit(event, payload, 0));
+				return { key, port, command: target.argv.join(' ') };
+			}
+			case 'investigate_start': {
+				const ask = this.demoAsk;
+				if (!ask || ask.request !== args.request) {
+					throw { kind: 'error', message: 'Claude is no longer waiting for that' };
+				}
+				this.demoAsk = null;
+				const script = demoRunScript(DEMO_TARGETS[1], DEMO_ID, 5174);
+				const lines: [number, string][] = [[100, '\x1b[2mRecording to .studio/replay/run-1.jsonl\x1b[0m'], ...script.lines.slice(0, -1)];
+				const key = demoProgram(DEMO_ID, lines, null, (event, payload) => this.emit(event, payload, 0));
+				this.demoInvestigate(ask.key, true);
+				return { key, port: 5174, command: 'npm run dev', replay: 1 };
+			}
+			case 'investigate_answer': {
+				const ask = this.demoAsk;
+				if (ask && ask.request === args.request) {
+					this.demoAsk = null;
+					this.demoInvestigate(ask.key, !!args.allow);
+				}
+				return;
+			}
+			case 'investigate_close':
+			case 'investigate_commit':
+				return;
+			case 'replay_read':
+				return demoReplay(DEMO_ID);
 			case 'plugin:opener|open_url':
 				window.open(String(args.url), '_blank', 'noopener');
 				return;
@@ -1315,6 +1445,24 @@ class DemoBackend {
 					say({ type: 'assistant', message: { content: [{ type: 'text', text }] } }, 500);
 					say({ type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: 0.001 }, 600);
 					this.emit('agent-done', { key, ok: true, error: '' }, 650);
+					return;
+				}
+				if ((args.options as AgentRunOptions | null)?.investigate) {
+					say({ type: 'system', subtype: 'init', session_id: 'demo-investigation' }, 200);
+					if (args.resume) {
+						// A follow-up (or the cleanup): it thinks for a moment and stands by its report.
+						this.emit('investigate-progress', { key, step: 5, detail: null, thinking: 'Nothing in the recording changes with that. The report stands.' }, 600);
+						this.demoInvestigate(key, true);
+						return;
+					}
+					say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/main.ts' } }] } }, 400);
+					say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/player/queue.ts' } }] } }, 900);
+					say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/player/queue.ts' } }] } }, 2400);
+					DEMO_BEFORE.forEach(([delay, step, detail, thinking]) => this.emit('investigate-progress', { key, step, detail, thinking }, delay));
+					// Then it asks to run the app, and waits: `investigate_start` or `investigate_answer` carries on from here.
+					const request = `demo-ask-${++this.demoAsks}`;
+					this.demoAsk = { request, key };
+					this.emit('investigate-approval', demoApproval(key, request), 3500);
 					return;
 				}
 				const rules = (args.options as AgentRunOptions | null)?.tools;
@@ -1335,8 +1483,13 @@ class DemoBackend {
 			}
 			case 'agent_stop': {
 				const key = String(args.key);
-				if (this.pending.has(key)) {
-					this.pending.get(key)!.forEach((t) => clearTimeout(t));
+				// An investigation that is waiting for the user's OK has no events left to come, but is still running.
+				const asking = this.demoAsk?.key === key;
+				if (asking) {
+					this.demoAsk = null;
+				}
+				if (this.pending.has(key) || asking) {
+					this.pending.get(key)?.forEach((t) => clearTimeout(t));
 					this.pending.delete(key);
 					this.emit('agent-done', { key, ok: false, error: '' }, 60);
 				}

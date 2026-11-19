@@ -7,7 +7,8 @@ import { html, css } from '@melodicdev/core/template';
 import { RepoStore } from '../../services/repo.store';
 import { ExplorerStore, type OpenFile } from '../../services/explorer.store';
 import { isMac } from '../../services/backend.service';
-import { dirName, fileName } from '../../shared/format';
+import { dirName, fileName, relativeTime } from '../../shared/format';
+import { RunStore } from '../../services/run.store';
 import { adoptMonacoStyles, loadMonaco, releaseMonacoStyles } from '../../shared/monaco';
 
 function message(icon: string, text: string) {
@@ -230,7 +231,6 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 		.host {
 			position: absolute;
 			inset: 0;
-		}
 			/* Monaco's menus, hovers and suggestions size their corners, borders and shadows with these,
 			   and only VS Code itself defines them: the standalone editor leaves them unset. */
 			--vscode-cornerRadius-small: var(--ml-radius-xs);
@@ -242,8 +242,24 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 			--vscode-shadow-md: var(--ml-shadow-md);
 			--vscode-shadow-lg: var(--ml-shadow-lg);
 			--vscode-shadow-xl: var(--ml-shadow-xl);
+		}
 		.host.off {
 			visibility: hidden;
+		}
+		/* Where a run crashed (RunStore.crashes): a red line, a bar in the margin and a note after the code. */
+		.ms-crash-line {
+			background: var(--ms-diff-del-bg);
+		}
+		.ms-crash-gutter {
+			margin-left: 4px;
+			width: 3px !important;
+			background: var(--ml-color-danger);
+		}
+		.ms-crash-note {
+			margin-left: 28px;
+			font-family: var(--ml-font-sans);
+			font-size: 12px;
+			color: var(--ml-color-danger);
 		}
 		.state {
 			position: absolute;
@@ -261,6 +277,7 @@ export class EditorComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(ExplorerStore) readonly explorer!: ExplorerStore;
 	@Service(EditorSettingsStore) private readonly _settings!: EditorSettingsStore;
+	@Service(RunStore) private readonly _runs!: RunStore;
 
 	elementRef!: HTMLElement;
 	/** Monaco is loaded and mounted. */
@@ -271,10 +288,19 @@ export class EditorComponent {
 	private _shown: string | null = null;
 	private _token = 0;
 	private _gone = false;
+	private _crashMarks: Monaco.editor.IEditorDecorationsCollection | null = null;
+	private _crashClock = 0;
 
 	onCreate(): void {
 		this.explorer.sync();
 		void this.mount();
+		// A run crashing (or its error being dismissed) marks the file on screen at once.
+		effect(() => {
+			this._runs.crashes();
+			untracked(() => this.markCrashes());
+		});
+		// "2 min ago" keeps up with the clock.
+		this._crashClock = window.setInterval(() => this.markCrashes(), 60_000);
 		// Settings changes apply to the open editor at once.
 		effect(() => {
 			this._settings.settings();
@@ -342,8 +368,37 @@ export class EditorComponent {
 		void this.show();
 	}
 
+	/** The line a run crashed on gets a red marker and a "Crashed here" note, in the file on screen. */
+	private markCrashes(): void {
+		const editor = this._editor;
+		const model = editor?.getModel();
+		if (!editor || !model) {
+			this._crashMarks?.clear();
+			return;
+		}
+		const marks = this._runs.crashes().filter((c) => c.path === this._shown && c.line >= 1 && c.line <= model.getLineCount());
+		const decorations = marks.map<Monaco.editor.IModelDeltaDecoration>((c) => ({
+			range: { startLineNumber: c.line, startColumn: 1, endLineNumber: c.line, endColumn: model.getLineMaxColumn(c.line) },
+			options: {
+				isWholeLine: true,
+				className: 'ms-crash-line',
+				linesDecorationsClassName: 'ms-crash-gutter',
+				// Program output decides the type's name: it is shown as text, cut short.
+				after: { content: `Crashed here${c.type ? ` · ${c.type.slice(0, 60)}` : ''} · ${relativeTime(c.at)}`, inlineClassName: 'ms-crash-note' },
+				hoverMessage: { value: c.summary.replace(/[\\`*_{}[\]()#+!<>|-]/g, '\\$&') },
+			},
+		}));
+		if (this._crashMarks) {
+			this._crashMarks.set(decorations);
+		} else {
+			this._crashMarks = editor.createDecorationsCollection(decorations);
+		}
+	}
+
 	onDestroy(): void {
 		this._gone = true;
+		window.clearInterval(this._crashClock);
+		this._crashMarks = null;
 		if (this._shown && this._editor) {
 			this.explorer.saveView(this._shown, this._editor.saveViewState());
 		}
@@ -419,6 +474,7 @@ export class EditorComponent {
 		if (view) {
 			editor.restoreViewState(view);
 		}
+		this.markCrashes();
 	}
 
 	showChanges(path: string): void {

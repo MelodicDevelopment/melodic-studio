@@ -50,6 +50,16 @@ pub struct RunOptions {
     /// The built-in tools Claude can see at all (`Read`, `Grep`). None leaves the usual set. This is
     /// what makes a read-only session read-only whatever the user's own settings allow.
     pub builtin: Option<Vec<String>>,
+    /// The turn belongs to an investigation: it gets Studio's own tools for running the app
+    /// (`investigate.rs`) and none of the user's settings, so nothing else can start it.
+    pub investigate: Option<Investigate>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Investigate {
+    /// The run target the error came from, when it came from one.
+    pub target: Option<String>,
 }
 
 fn plain(s: &str, extra: &str) -> bool {
@@ -57,7 +67,8 @@ fn plain(s: &str, extra: &str) -> bool {
 }
 
 /// The command line for one turn (everything after `claude`). The prompt is not on it.
-fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions) -> Result<Vec<String>> {
+/// `mcp` is the `--mcp-config` file of an investigation's turn.
+fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions, mcp: Option<&str>) -> Result<Vec<String>> {
     if !matches!(mode, "default" | "plan" | "acceptEdits" | "bypassPermissions") {
         return Err(AppError::msg("Unknown permission mode"));
     }
@@ -65,7 +76,11 @@ fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions) -> Result<V
     if let Some(session) = resume.filter(|s| plain(s, "-") && !s.starts_with('-')) {
         args.extend(["--resume".to_string(), session.to_string()]);
     }
-    if options.quick || options.lean {
+    if let Some(config) = mcp {
+        // Restricted: the user's own settings (their allow rules, their hooks) do not apply, so what the
+        // session may run is exactly the rules below. Its only MCP server is ours.
+        args.extend(["--restricted", "--strict-mcp-config", "--mcp-config", config, "--disable-slash-commands"].map(String::from));
+    } else if options.quick || options.lean {
         args.extend(["--strict-mcp-config", "--disable-slash-commands"].map(String::from));
     }
     if options.quick {
@@ -142,11 +157,22 @@ pub async fn agent_start(
     resume: Option<String>,
     options: Option<RunOptions>,
 ) -> Result<()> {
-    let args = turn_args(&mode, resume.as_deref(), &options.unwrap_or_default())?;
+    let mut options = options.unwrap_or_default();
+    if options.investigate.is_some() {
+        // Our own tools ask the user themselves, so Claude Code does not have to.
+        options.tools.get_or_insert_with(Vec::new).extend(crate::investigate::tool_rules());
+    }
     let (git, _) = main_repo(&state, &id)?;
     if !worktree::belongs(&git, Path::new(&cwd)) {
         return Err(AppError::msg("Agents can only run inside this repository or one of its worktrees"));
     }
+    let mcp = match &options.investigate {
+        // The user's own checkout is never what an investigation edits or runs.
+        Some(_) if crate::paths::same(&cwd, &git.dir) => return Err(AppError::msg("An investigation works in a worktree of its own")),
+        Some(investigation) => Some(crate::investigate::prepare(&app, &key, Path::new(&cwd), investigation.target.clone())?),
+        None => None,
+    };
+    let args = turn_args(&mode, resume.as_deref(), &options, mcp.as_ref().map(|file| file.to_string_lossy()).as_deref())?;
     if prompt.trim().is_empty() {
         return Err(AppError::msg("Give the agent something to do"));
     }
@@ -156,6 +182,11 @@ pub async fn agent_start(
 
     let mut c = claude();
     c.current_dir(&cwd).args(args);
+    let investigating = mcp.is_some();
+    if investigating {
+        // A tool of ours waits for the user's answer, which can take as long as the user does.
+        c.env("MCP_TOOL_TIMEOUT", "3600000");
+    }
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().map_err(|e| AppError::msg(format!("Could not start Claude Code: {e}. Is the `claude` CLI installed?")))?;
 
@@ -188,6 +219,10 @@ pub async fn agent_start(
         }
         let ok = child.lock().unwrap().wait().map(|s| s.success()).unwrap_or(false);
         let error = errors.join().unwrap_or_default();
+        if investigating {
+            // The app it started does not outlive the turn, and nothing keeps waiting for an answer.
+            crate::investigate::turn_ended(&app2, &key);
+        }
         app2.state::<Agents>().running.lock().unwrap().remove(&key);
         let tail: String = error.trim().chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
         let _ = app2.emit("agent-done", AgentDone { key, ok, error: tail });
@@ -209,7 +244,7 @@ mod tests {
     use super::*;
 
     fn args(mode: &str, resume: Option<&str>, options: RunOptions) -> Vec<String> {
-        turn_args(mode, resume, &options).unwrap()
+        turn_args(mode, resume, &options, None).unwrap()
     }
 
     #[test]
@@ -218,7 +253,7 @@ mod tests {
         assert_eq!(args("acceptEdits", None, RunOptions::default()), [&base[..], &["acceptEdits"]].concat());
         assert_eq!(args("plan", Some("abc-123"), RunOptions::default())[6..], ["--resume", "abc-123"]);
         assert_eq!(args("plan", Some("--evil"), RunOptions::default()).len(), 6, "a session id that could be read as an option is dropped");
-        assert!(turn_args("yolo", None, &RunOptions::default()).is_err());
+        assert!(turn_args("yolo", None, &RunOptions::default(), None).is_err());
 
         // A one-shot question: no MCP, no skills, no session, no tools.
         let quick = args("default", None, RunOptions { quick: true, tools: Some(vec![]), model: Some("haiku".into()), ..Default::default() });
@@ -230,7 +265,12 @@ mod tests {
         assert_eq!(ask[6..], ["--resume", "s1", "--strict-mcp-config", "--disable-slash-commands", "--tools", "Read,Bash", "--allowedTools", "Read", "Bash(git log:*)"]);
         assert!(!ask.contains(&"--no-session-persistence".to_string()));
 
-        assert!(turn_args("default", None, &RunOptions { tools: Some(vec!["--dangerously-skip-permissions".into()]), ..Default::default() }).is_err());
-        assert!(turn_args("default", None, &RunOptions { builtin: Some(vec!["Read,Edit".into()]), ..Default::default() }).is_err());
+        // An investigation: none of the user's settings, only our MCP server, then its own tools and rules.
+        let rules = vec!["Edit".to_string(), "Bash(dotnet build:*)".to_string(), "mcp__studio__run_target".to_string()];
+        let investigate = turn_args("acceptEdits", Some("s2"), &RunOptions { tools: Some(rules), builtin: Some(vec!["Edit".into(), "Bash".into()]), investigate: Some(Investigate::default()), ..Default::default() }, Some("/cache/x.json")).unwrap();
+        assert_eq!(investigate[6..], ["--resume", "s2", "--restricted", "--strict-mcp-config", "--mcp-config", "/cache/x.json", "--disable-slash-commands", "--tools", "Edit,Bash", "--allowedTools", "Edit", "Bash(dotnet build:*)", "mcp__studio__run_target"]);
+
+        assert!(turn_args("default", None, &RunOptions { tools: Some(vec!["--dangerously-skip-permissions".into()]), ..Default::default() }, None).is_err());
+        assert!(turn_args("default", None, &RunOptions { builtin: Some(vec!["Read,Edit".into()]), ..Default::default() }, None).is_err());
     }
 }

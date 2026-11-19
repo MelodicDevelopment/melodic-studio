@@ -193,6 +193,10 @@ export function toolbarTemplate(self: ToolbarComponent) {
 						</div>
 					</ml-popover>
 
+					<span class="rule"></span>
+					<ms-run-control></ms-run-control>
+					<span class="rule"></span>
+
 					${sync
 						? html`
 							<button class="seg sync" ?disabled=${!!busy} @click=${() => store.runSync()}>

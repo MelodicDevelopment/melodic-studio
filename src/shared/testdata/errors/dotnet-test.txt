@@ -1,0 +1,17 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Shop.Pricing -> /Users/rick/src/shop-api/src/Shop.Pricing/bin/Debug/net10.0/Shop.Pricing.dll
+  Shop.Tests -> /Users/rick/src/shop-api/src/Shop.Tests/bin/Debug/net10.0/Shop.Tests.dll
+Test run for /Users/rick/src/shop-api/src/Shop.Tests/bin/Debug/net10.0/Shop.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:00.07]     Shop.Tests.ArchivedTests.Archived_tier_prices_as_standard [FAIL]
+  Failed Shop.Tests.ArchivedTests.Archived_tier_prices_as_standard [2 ms]
+  Error Message:
+   System.NullReferenceException : Object reference not set to an instance of an object.
+  Stack Trace:
+     at Shop.Pricing.PricingService.ApplyDiscount(Order order) in /Users/rick/src/shop-api/src/Shop.Pricing/PricingService.cs:line 20
+   at Shop.Tests.ArchivedTests.Archived_tier_prices_as_standard() in /Users/rick/src/shop-api/src/Shop.Tests/TempFail.cs:line 11
+   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)
+   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)
+
+Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 8 ms - Shop.Tests.dll (net10.0)

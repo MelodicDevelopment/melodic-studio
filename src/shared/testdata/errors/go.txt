@@ -1,0 +1,13 @@
+2026/11/18 20:14:02 listening on :8080
+2026/11/18 20:14:09 POST /api/orders
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x2 addr=0x8 pc=0x1029a3f14]
+
+goroutine 1 [running]:
+main.applyDiscount(...)
+	/Users/rick/src/shop/pricing.go:14
+main.placeOrder({0x1029f1c2e, 0x6}, 0x54)
+	/Users/rick/src/shop/checkout.go:9 +0x34
+main.main()
+	/Users/rick/src/shop/main.go:22 +0x1d
+exit status 2

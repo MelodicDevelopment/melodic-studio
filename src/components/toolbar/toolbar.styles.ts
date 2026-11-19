@@ -155,6 +155,14 @@ export const toolbarStyles = () => css`
 	.spacer {
 		flex: 1;
 	}
+	/* Sets the Run control apart from the git controls on either side of it. */
+	.rule {
+		flex: none;
+		width: 1px;
+		height: 22px;
+		margin: 0 2px;
+		background: var(--ms-toolbar-border);
+	}
 	.tool {
 		all: unset;
 		display: grid;

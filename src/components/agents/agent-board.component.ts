@@ -2,7 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
-import { AgentsStore, lastSaid, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, lastSaid, plainSummary, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { baseName } from '../../services/agent-paths';
 import { plural, relativeTime } from '../../shared/format';
@@ -113,7 +113,9 @@ function tally(sessions: AgentSession[]): string {
 
 function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 	const ask = s.kind === 'ask';
-	const said = lastSaid(s);
+	const investigation = s.kind === 'investigate';
+	// An investigation's last message is its report as JSON: what it found says more.
+	const said = investigation ? plainSummary(s.investigation?.report?.summary || s.investigation?.thinking || '') : lastSaid(s);
 	return html`
 		<div class="card ${s.unread ? 'unread' : ''} ${known ? '' : 'orphan'}" title=${known ? 'Go to this agent' : ''} @click=${() => self.go(s, known)}>
 			<div class="line">
@@ -124,7 +126,7 @@ function card(self: AgentBoardComponent, s: AgentSession, known: boolean) {
 				${known ? '' : html`<button class="x" title="Forget this agent" @click=${(e: Event) => (e.stopPropagation(), self.agents.remove(s, false))}><ml-icon icon="x" size="xs"></ml-icon></button>`}
 			</div>
 			<div class="line meta">
-				<span class="where"><ml-icon icon=${ask ? 'chat-circle-dots' : 'git-branch'} size="xs"></ml-icon><span>${ask ? (scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code') : (s.branch ?? 'detached')}</span></span>
+				<span class="where"><ml-icon icon=${ask ? 'chat-circle-dots' : investigation ? 'sparkle' : 'git-branch'} size="xs"></ml-icon><span>${ask ? (scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code') : (s.branch ?? 'detached')}</span></span>
 				${s.group ? html`<span>Attempt ${s.attempt}</span>` : ''}
 				${s.cost ? html`<span>$${s.cost.toFixed(2)}</span>` : ''}
 			</div>

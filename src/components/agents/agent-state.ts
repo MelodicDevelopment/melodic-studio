@@ -1,12 +1,12 @@
 import { html } from '@melodicdev/core/template';
-import { STATE_LABELS, stateOf, type AgentSession, type AgentState } from '../../services/agents.store';
+import { stateLabel, stateOf, type AgentSession, type AgentState } from '../../services/agents.store';
 import type { Conversation } from '../../services/workspace.store';
 import { CONV_STATE_LABELS } from '../workspace/conversation-state';
 
-/** How a session stands, as a small labelled pill: Working, Finished, Failed, Needs review, Stopped. */
+/** How a session stands, as a small labelled pill: Working, Finished, Failed, Needs review, Stopped (an investigation has its own words). */
 export function stateChip(s: AgentSession) {
 	const state = stateOf(s);
-	return html`<span class="chip ${state}">${state === 'working' ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<i></i>`}${STATE_LABELS[state]}</span>`;
+	return html`<span class="chip ${state}">${state === 'working' ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<i></i>`}${stateLabel(s)}</span>`;
 }
 
 /** A Claude conversation's state in the agents' colours: working, needs you (review), ready (finished), saved or ended (stopped). */
