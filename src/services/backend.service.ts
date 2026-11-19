@@ -249,6 +249,8 @@ export interface Branch {
 	isRemote: boolean;
 	isCurrent: boolean;
 	upstream: string | null;
+	/** A local branch's own copy on a remote (`origin/feature`) as of the last fetch, else null. */
+	published: string | null;
 	date: string;
 }
 /** How the current branch stands against another: commits only it has (`ahead`) and only the other has (`behind`). */
@@ -576,7 +578,8 @@ export class BackendService {
 	branches(id: string) { return this.call<Branch[]>('branches', { id }); }
 	createBranch(id: string, name: string, start: string | null) { return this.call<void>('branch_create', { id, name, start }); }
 	checkout(id: string, name: string, isRemote: boolean) { return this.call<void>('branch_checkout', { id, name, isRemote }); }
-	deleteBranch(id: string, name: string, force: boolean) { return this.call<void>('branch_delete', { id, name, force }); }
+	/** `remote` also deletes the branch's copy on the remote (`Branch.published`), and does that first. */
+	deleteBranch(id: string, name: string, force: boolean, remote = false) { return this.call<void>('branch_delete', { id, name, force, remote }); }
 	renameBranch(id: string, from: string, to: string) { return this.call<void>('branch_rename', { id, from, to }); }
 	merge(id: string, from: string) { return this.call<string>('merge_branch', { id, from }); }
 	/** Everything `from` brings, as one new commit with `message`. */
@@ -1012,12 +1015,12 @@ class DemoBackend {
 	private repoIdentity = new Map<string, Identity>();
 	private branch = 'feature/repeat-mode';
 	private branchList: Branch[] = [
-		{ name: 'feature/repeat-mode', isRemote: false, isCurrent: true, upstream: 'origin/feature/repeat-mode', date: new Date(Date.now() - 3_600_000).toISOString() },
-		{ name: 'main', isRemote: false, isCurrent: false, upstream: 'origin/main', date: new Date(Date.now() - 86_400_000).toISOString() },
-		{ name: 'fix/seek-drift', isRemote: false, isCurrent: false, upstream: null, date: new Date(Date.now() - 4 * 86_400_000).toISOString() },
-		{ name: 'origin/main', isRemote: true, isCurrent: false, upstream: null, date: new Date(Date.now() - 86_400_000).toISOString() },
-		{ name: 'origin/feature/repeat-mode', isRemote: true, isCurrent: false, upstream: null, date: new Date(Date.now() - 7_200_000).toISOString() },
-		{ name: 'origin/release/1.4', isRemote: true, isCurrent: false, upstream: null, date: new Date(Date.now() - 9 * 86_400_000).toISOString() },
+		{ name: 'feature/repeat-mode', isRemote: false, isCurrent: true, upstream: 'origin/feature/repeat-mode', published: 'origin/feature/repeat-mode', date: new Date(Date.now() - 3_600_000).toISOString() },
+		{ name: 'main', isRemote: false, isCurrent: false, upstream: 'origin/main', published: 'origin/main', date: new Date(Date.now() - 86_400_000).toISOString() },
+		{ name: 'fix/seek-drift', isRemote: false, isCurrent: false, upstream: null, published: null, date: new Date(Date.now() - 4 * 86_400_000).toISOString() },
+		{ name: 'origin/main', isRemote: true, isCurrent: false, upstream: null, published: null, date: new Date(Date.now() - 86_400_000).toISOString() },
+		{ name: 'origin/feature/repeat-mode', isRemote: true, isCurrent: false, upstream: null, published: null, date: new Date(Date.now() - 7_200_000).toISOString() },
+		{ name: 'origin/release/1.4', isRemote: true, isCurrent: false, upstream: null, published: null, date: new Date(Date.now() - 9 * 86_400_000).toISOString() },
 	];
 	private files: FileChange[] = [
 		{ path: 'docs/old-notes.md', oldPath: null, status: 'deleted' },
@@ -1312,23 +1315,25 @@ class DemoBackend {
 					{ path: 'src/player/repeat.ts', oldPath: null, status: 'added' },
 				] satisfies FileChange[];
 			case 'branches':
-				return empty ? [{ name: 'main', isRemote: false, isCurrent: true, upstream: null, date: new Date().toISOString() }] : this.branchList;
+				return empty ? [{ name: 'main', isRemote: false, isCurrent: true, upstream: null, published: null, date: new Date().toISOString() }] : this.branchList;
 			case 'branch_create':
-				this.branchList = [{ name: String(args.name), isRemote: false, isCurrent: true, upstream: null, date: new Date().toISOString() }, ...this.branchList.map((b) => ({ ...b, isCurrent: false }))];
+				this.branchList = [{ name: String(args.name), isRemote: false, isCurrent: true, upstream: null, published: null, date: new Date().toISOString() }, ...this.branchList.map((b) => ({ ...b, isCurrent: false }))];
 				this.branch = String(args.name);
 				return;
 			case 'branch_checkout': {
 				const name = args.isRemote ? String(args.name).replace(/^[^/]+\//, '') : String(args.name);
 				if (!this.branchList.some((b) => !b.isRemote && b.name === name)) {
-					this.branchList = [{ name, isRemote: false, isCurrent: false, upstream: String(args.name), date: new Date().toISOString() }, ...this.branchList];
+					this.branchList = [{ name, isRemote: false, isCurrent: false, upstream: String(args.name), published: String(args.name), date: new Date().toISOString() }, ...this.branchList];
 				}
 				this.branchList = this.branchList.map((b) => ({ ...b, isCurrent: !b.isRemote && b.name === name }));
 				this.branch = name;
 				return;
 			}
-			case 'branch_delete':
-				this.branchList = this.branchList.filter((b) => b.isRemote || b.name !== args.name);
+			case 'branch_delete': {
+				const published = args.remote ? this.branchList.find((b) => !b.isRemote && b.name === args.name)?.published : null;
+				this.branchList = this.branchList.filter((b) => (b.isRemote ? b.name !== published : b.name !== args.name));
 				return;
+			}
 			case 'branch_rename':
 				this.branchList = this.branchList.map((b) => (!b.isRemote && b.name === args.from ? { ...b, name: String(args.to) } : b));
 				if (this.branch === args.from) {
@@ -1350,7 +1355,7 @@ class DemoBackend {
 			case 'push':
 				this.ahead = 0;
 				this.commits = this.commits.map((c) => ({ ...c, unpushed: false }));
-				this.branchList = this.branchList.map((b) => (b.isCurrent && !b.upstream ? { ...b, upstream: `origin/${b.name}` } : b));
+				this.branchList = this.branchList.map((b) => (b.isCurrent && !b.upstream ? { ...b, upstream: `origin/${b.name}`, published: `origin/${b.name}` } : b));
 				return;
 			case 'identity_get':
 				return { global: this.globalIdentity, repo: args.id ? (this.repoIdentity.get(String(args.id)) ?? null) : null } satisfies Identities;
@@ -1371,7 +1376,7 @@ class DemoBackend {
 				const path = `${DEMO_ID}.worktrees/${String(args.branch).replace(/[^\w.]+/g, '-')}`;
 				this.worktreeList = [...this.worktreeList, { path, branch: String(args.branch), head: 'b'.repeat(40), isMain: false, active: false, changes: 0 }];
 				if (!this.branchList.some((b) => !b.isRemote && b.name === args.branch)) {
-					this.branchList = [...this.branchList, { name: String(args.branch), isRemote: false, isCurrent: false, upstream: null, date: new Date().toISOString() }];
+					this.branchList = [...this.branchList, { name: String(args.branch), isRemote: false, isCurrent: false, upstream: null, published: null, date: new Date().toISOString() }];
 				}
 				return path;
 			}

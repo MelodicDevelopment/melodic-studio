@@ -1062,8 +1062,11 @@ export class RepoStore {
 		return ['main', 'master', 'develop'].find((n) => locals.includes(n)) ?? locals[0] ?? null;
 	}
 
-	/** `unmerged` means git refused a safe delete; the dialog then offers to force it. The checked-out branch is left first. */
-	async deleteBranch(name: string, force: boolean): Promise<'ok' | 'unmerged' | 'failed'> {
+	/**
+	 * `unmerged` means git refused a safe delete; the dialog then offers to force it. The checked-out branch is left first.
+	 * `remote` deletes the branch's copy on the remote (`Branch.published`) as well.
+	 */
+	async deleteBranch(name: string, force: boolean, remote = false): Promise<'ok' | 'unmerged' | 'failed'> {
 		const id = this.id;
 		if (!id || this.busy()) {
 			return 'failed';
@@ -1080,7 +1083,7 @@ export class RepoStore {
 			if (fallback) {
 				await this.backend.checkout(id, fallback, false);
 			}
-			await this.backend.deleteBranch(id, name, force);
+			await this.backend.deleteBranch(id, name, force, remote);
 			return 'ok';
 		} catch (e) {
 			if (!force && /not fully merged/i.test(asAppError(e).message)) {

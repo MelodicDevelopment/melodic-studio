@@ -149,7 +149,11 @@ export function dialogsTemplate(self: DialogsComponent) {
 			<div class="dlg">
 				${prompt.remote
 					? html`<p>Delete <b>${self.branch}</b> on the remote? Everyone who uses that remote loses the branch. Local branches are left alone.</p>`
-					: html`<p>Delete the local branch <b>${self.branch}</b>? The remote copy, if there is one, is left alone.</p>
+					: html`${self.published
+							? html`<p>Delete the branch <b>${self.branch}</b>?</p>
+								<ml-checkbox label=${`Also delete ${self.published} on the remote`} .checked=${self.alsoRemote} @ml:change=${(e: CustomEvent) => (self.alsoRemote = e.detail.checked)}></ml-checkbox>
+								${self.alsoRemote ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>Everyone who uses that remote loses the branch.</span></p>` : ''}`
+							: html`<p>Delete the local branch <b>${self.branch}</b>? It has no copy on a remote.</p>`}
 						${store.status()?.branch === self.branch && !store.status()?.detached ? html`<p>It is checked out, so Melodic Studio switches to <b>${store.fallbackBranch(self.branch) ?? 'another branch'}</b> first.</p>` : ''}
 						${self.branchHolder?.isMain
 							? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>It is checked out in the main checkout. Switch that to another branch first.</span></p>`
@@ -159,11 +163,11 @@ export function dialogsTemplate(self: DialogsComponent) {
 										? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>That worktree has ${self.branchHolder.changes === 1 ? '1 uncommitted change' : `${self.branchHolder.changes} uncommitted changes`}. They are lost.</span></p>`
 										: ''}`
 								: ''}`}
-				${self.unmerged ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>This branch has commits that are not merged anywhere. Deleting it loses them.</span></p>` : ''}
+				${self.unmerged ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>This branch has commits that are not merged anywhere${!prompt.remote && self.alsoRemote && self.published ? ' else' : ''}. Deleting it loses them.</span></p>` : ''}
 			</div>
 			<div slot="dialog-footer" class="foot">
 				<ml-button variant="outline" @ml:click=${() => store.closeDialog('delete-branch')}>Cancel</ml-button>
-				<ml-button variant="danger" ?disabled=${!prompt.remote && !!self.branchHolder?.isMain} ?loading=${busy === 'branch'} @ml:click=${() => self.deleteBranch()}>${self.unmerged ? 'Delete anyway' : !prompt.remote && self.branchHolder ? 'Delete branch and worktree' : 'Delete'}</ml-button>
+				<ml-button variant="danger" ?disabled=${!prompt.remote && !!self.branchHolder?.isMain} ?loading=${busy === 'branch'} @ml:click=${() => self.deleteBranch()}>${self.unmerged ? 'Delete anyway' : !prompt.remote && self.branchHolder ? 'Delete branch and worktree' : !prompt.remote && self.alsoRemote && self.published ? 'Delete here and on the remote' : 'Delete'}</ml-button>
 			</div>
 		</ml-dialog>
 

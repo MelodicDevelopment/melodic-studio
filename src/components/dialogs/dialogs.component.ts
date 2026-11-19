@@ -41,6 +41,8 @@ export class DialogsComponent {
 	branchName = '';
 	/** Git refused a safe delete; the next click forces it. */
 	unmerged = false;
+	/** Delete branch: the box that deletes the branch on the remote as well. */
+	alsoRemote = false;
 	tagName = '';
 	tagPush = false;
 	resetMode: ResetMode = 'mixed';
@@ -152,7 +154,14 @@ export class DialogsComponent {
 	openedBranch(prefill: string): void {
 		this.branchName = prefill;
 		this.unmerged = false;
+		this.alsoRemote = false;
 		void this.agents.loadWorktrees();
+	}
+
+	/** The copy on a remote of the local branch being deleted (`origin/feature`), if it has one. */
+	get published(): string | null {
+		const name = this.branch;
+		return this.store.branches().find((b) => !b.isRemote && b.name === name)?.published ?? null;
 	}
 
 	/** Another checkout that has the branch being deleted checked out: git refuses while one does. */
@@ -194,7 +203,7 @@ export class DialogsComponent {
 		if (holder && !(await this.agents.removeWorktree(holder.path, holder.changes > 0, null, false))) {
 			return;
 		}
-		const result = await this.store.deleteBranch(this.branch, this.unmerged);
+		const result = await this.store.deleteBranch(this.branch, this.unmerged, this.alsoRemote && !!this.published);
 		if (result === 'unmerged') {
 			this.unmerged = true;
 		} else if (result === 'ok') {

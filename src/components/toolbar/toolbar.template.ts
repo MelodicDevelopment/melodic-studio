@@ -62,6 +62,7 @@ function branchRow(self: ToolbarComponent, b: Branch) {
 		<div class="item ${b.isCurrent ? 'current' : ''}" @click=${() => self.pickBranch(b)} @contextmenu=${(e: MouseEvent) => self.branchMenu(e, b)}>
 			<ml-icon icon=${b.isCurrent ? 'check' : b.isRemote ? 'cloud' : 'git-branch'} size="sm"></ml-icon>
 			<span class="name">${b.name}</span>
+			${b.published ? html`<ml-icon class="pub" icon="cloud" size="sm" title=${`On the remote as ${b.published}`}></ml-icon>` : ''}
 			${holderLabel(self, b)}
 			${b.isRemote
 				? html`

@@ -75,7 +75,7 @@ export class ToolbarComponent {
 	private filteredBranches(remote: boolean): Branch[] {
 		const q = this.branchFilter.trim().toLowerCase();
 		const all = this.store.branches();
-		const tracked = new Set(all.filter((b) => !b.isRemote && b.upstream).map((b) => b.upstream));
+		const tracked = new Set(all.filter((b) => !b.isRemote).flatMap((b) => [b.upstream, b.published]));
 		return all.filter((b) => b.isRemote === remote && (!remote || !tracked.has(b.name)) && (!q || b.name.toLowerCase().includes(q)));
 	}
 
@@ -137,7 +137,7 @@ export class ToolbarComponent {
 	branchMenu(ev: MouseEvent, branch?: Branch): void {
 		ev.preventDefault();
 		const st = this.store.status();
-		const b = branch ?? (st && !st.detached ? (this.store.branches().find((x) => x.isCurrent && !x.isRemote) ?? { name: st.branch, isRemote: false, isCurrent: true, upstream: st.upstream, date: '' }) : null);
+		const b = branch ?? (st && !st.detached ? (this.store.branches().find((x) => x.isCurrent && !x.isRemote) ?? { name: st.branch, isRemote: false, isCurrent: true, upstream: st.upstream, published: null, date: '' }) : null);
 		if (b) {
 			this.showMenu(ev, { kind: 'branch', branch: b });
 		}

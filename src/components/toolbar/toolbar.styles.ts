@@ -270,6 +270,10 @@ export const toolbarStyles = () => css`
 	.item.current > ml-icon {
 		color: var(--ml-color-primary);
 	}
+	/* "Also on the remote" mark of a local branch. */
+	.item > ml-icon.pub {
+		color: var(--ml-color-text-muted);
+	}
 	.name {
 		flex: 1;
 		min-width: 0;

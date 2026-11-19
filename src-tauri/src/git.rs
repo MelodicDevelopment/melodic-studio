@@ -136,6 +136,10 @@ pub struct Branch {
     pub is_remote: bool,
     pub is_current: bool,
     pub upstream: Option<String>,
+    /// A local branch's own copy on a remote (`origin/feature`), as of the last fetch: the
+    /// remote branch of the same name, on the upstream's remote when the branch has one, else
+    /// on the only remote that has it. Deleting "on the remote too" deletes exactly this.
+    pub published: Option<String>,
     pub date: String,
 }
 
@@ -814,26 +818,37 @@ impl Git {
         let out = self.run(&[
             "for-each-ref",
             "--sort=-committerdate",
-            "--format=%(refname)%1f%(refname:short)%1f%(upstream:short)%1f%(committerdate:iso-strict)%1f%(HEAD)",
+            "--format=%(refname)%1f%(refname:short)%1f%(upstream:short)%1f%(committerdate:iso-strict)%1f%(HEAD)%1f%(upstream:remotename)",
             "refs/heads",
             "refs/remotes",
         ])?;
-        Ok(out
-            .lines()
-            .filter_map(|line| {
-                let f: Vec<&str> = line.split('\x1f').collect();
-                if f.len() < 5 {
-                    return None;
-                }
+        let rows: Vec<Vec<&str>> = out.lines().map(|line| line.split('\x1f').collect()).filter(|f: &Vec<&str>| f.len() >= 6).collect();
+        // (remote, branch) of every remote branch, for `published`.
+        let remotes: Vec<(&str, &str)> = rows.iter().filter(|f| f[0].starts_with("refs/remotes/") && !f[0].ends_with("/HEAD")).filter_map(|f| f[1].split_once('/')).collect();
+        Ok(rows
+            .iter()
+            .filter_map(|f| {
                 let is_remote = f[0].starts_with("refs/remotes/");
                 if is_remote && (f[0].ends_with("/HEAD") || !f[1].contains('/')) {
                     return None;
                 }
+                let published = if is_remote {
+                    None
+                } else {
+                    let same: Vec<&(&str, &str)> = remotes.iter().filter(|(_, branch)| *branch == f[1]).collect();
+                    // An upstream of "." is another local branch, which says nothing about remotes.
+                    let found = match f[5] {
+                        "" | "." => Some(same.as_slice()).filter(|s| s.len() == 1).map(|s| s[0]),
+                        remote => same.iter().copied().find(|(r, _)| *r == remote),
+                    };
+                    found.map(|(remote, branch)| format!("{remote}/{branch}"))
+                };
                 Some(Branch {
                     name: f[1].to_string(),
                     is_remote,
                     is_current: f[4] == "*",
                     upstream: Some(f[2].to_string()).filter(|s| !s.is_empty()),
+                    published,
                     date: f[3].to_string(),
                 })
             })
@@ -870,9 +885,43 @@ impl Git {
         }
     }
 
-    pub fn branch_delete(&self, name: &str, force: bool) -> Result<()> {
+    /// Delete a local branch, and with `remote` its copy on the remote (`Branch::published`)
+    /// as well. The remote goes first, so a push that fails leaves everything as it was.
+    pub fn branch_delete(&self, name: &str, force: bool, remote: bool) -> Result<()> {
         check_ref(name)?;
-        self.run(&["branch", if force { "-D" } else { "-d" }, name]).map(|_| ())
+        if !remote {
+            return self.run(&["branch", if force { "-D" } else { "-d" }, name]).map(|_| ());
+        }
+        let published = self.branches()?.into_iter().find(|b| !b.is_remote && b.name == name).and_then(|b| b.published);
+        let Some(published) = published else {
+            return Err(AppError::msg(format!("{name} is not on a remote")));
+        };
+        let (on, _) = published.split_once('/').ok_or_else(|| AppError::msg("That is not a remote branch"))?;
+        check_ref(on)?;
+        let local = format!("refs/heads/{name}");
+        // `git branch -d` is content with a branch that is merged into its upstream, which is
+        // about to go as well: ask instead whether any other branch has these commits.
+        if !force {
+            let (not_local, not_remote) = (format!("--exclude={name}"), format!("--exclude={published}"));
+            let only_here = self.run(&["rev-list", "--max-count=1", &local, "--not", &not_local, "--branches", &not_remote, "--remotes"])?;
+            if !only_here.trim().is_empty() {
+                return Err(AppError::Git(format!("The branch '{name}' is not fully merged.")));
+            }
+        }
+        // Git refuses to delete a branch a checkout has. Find that out before the remote is touched.
+        if !self.run(&["for-each-ref", "--format=%(worktreepath)", &local])?.trim().is_empty() {
+            return Err(AppError::msg(format!("{name} is checked out. Switch to another branch first.")));
+        }
+        match self.run(&["push", "-q", on, "--delete", &local]) {
+            // Someone deleted it there since the last fetch: only our record of it is left.
+            Err(AppError::Git(m)) if m.contains("remote ref does not exist") => {
+                self.run(&["branch", "-q", "-d", "-r", &published])?;
+            }
+            other => {
+                other?;
+            }
+        }
+        self.run(&["branch", "-q", "-D", name]).map(|_| ())
     }
 
     pub fn branch_rename(&self, from: &str, to: &str) -> Result<()> {
@@ -1689,10 +1738,93 @@ mod tests {
 
         assert!(g.branch_create("-bad", None).is_err());
         g.branch_rename("feature", "feature-2").unwrap();
-        g.branch_delete("feature-2", false).unwrap();
+        g.branch_delete("feature-2", false, false).unwrap();
         assert_eq!(g.branches().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A second repository to push to, added as `name`.
+    fn remote_for(dir: &Path, name: &str) -> PathBuf {
+        let bare = dir.with_file_name(format!("{}-{name}.git", dir.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare"]);
+        git(dir, &["remote", "add", name, &bare.to_string_lossy()]);
+        bare
+    }
+
+    #[test]
+    fn deleting_a_branch_on_the_remote_too() {
+        let dir = scratch("delete-published");
+        let g = Git::at(&dir);
+        let bare = remote_for(&dir, "origin");
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        g.commit(&["f.txt".into()], "Base", "", false).unwrap();
+        let main = g.run(&["symbolic-ref", "--short", "HEAD"]).unwrap().trim().to_string();
+        git(&dir, &["push", "-q", "-u", "origin", &main]);
+        let published = |name: &str| g.branches().unwrap().into_iter().find(|b| !b.is_remote && b.name == name).unwrap().published;
+        let on_remote = |name: &str| Git::at(&bare).run(&["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")]).is_ok();
+
+        // Pushed with an upstream, and with commits nothing else has.
+        g.branch_create("feature/one", None).unwrap();
+        file_commit(&g, &dir, "one.txt", "one\n", "One");
+        git(&dir, &["push", "-q", "-u", "origin", "feature/one"]);
+        // Never pushed, but following the trunk: that is not its own branch on the remote.
+        git(&dir, &["checkout", "-q", "-b", "local-only", "--track", &format!("origin/{main}")]);
+        // Pushed without an upstream.
+        git(&dir, &["checkout", "-q", "-b", "plain", &main]);
+        git(&dir, &["push", "-q", "origin", "plain"]);
+        g.branch_checkout(&main, false).unwrap();
+
+        assert_eq!(published(&main), Some(format!("origin/{main}")));
+        assert_eq!(published("feature/one").as_deref(), Some("origin/feature/one"));
+        assert_eq!(published("local-only"), None);
+        assert_eq!(published("plain").as_deref(), Some("origin/plain"));
+        assert!(g.branches().unwrap().iter().filter(|b| b.is_remote).all(|b| b.published.is_none()));
+
+        // Nothing to delete on a remote, and the trunk is not touched.
+        assert!(g.branch_delete("local-only", false, true).is_err());
+        assert!(on_remote(&main) && published("local-only").is_none());
+
+        // `git branch -d` would allow this (merged into its upstream); with the remote going too it is the only copy.
+        let err = g.branch_delete("feature/one", false, true).unwrap_err();
+        assert!(err.to_string().contains("not fully merged"), "{err}");
+        assert!(on_remote("feature/one") && published("feature/one").is_some());
+
+        // The checked-out branch is refused before the remote is touched.
+        g.branch_checkout("plain", false).unwrap();
+        assert!(g.branch_delete("plain", false, true).is_err());
+        assert!(on_remote("plain"));
+        g.branch_checkout(&main, false).unwrap();
+
+        g.branch_delete("plain", false, true).unwrap();
+        assert!(!on_remote("plain"));
+        g.branch_delete("feature/one", true, true).unwrap();
+        assert!(!on_remote("feature/one"));
+        let left: Vec<String> = g.branches().unwrap().into_iter().map(|b| b.name).collect();
+        assert!(!left.iter().any(|n| n.contains("feature/one") || n.contains("plain")), "{left:?}");
+
+        // Deleted on the remote by someone else since the last fetch: our stale record goes, then the branch.
+        g.branch_create("stale", None).unwrap();
+        git(&dir, &["push", "-q", "-u", "origin", "stale"]);
+        g.branch_checkout(&main, false).unwrap();
+        git(&bare, &["update-ref", "-d", "refs/heads/stale"]);
+        g.branch_delete("stale", false, true).unwrap();
+        assert!(!g.branches().unwrap().iter().any(|b| b.name.contains("stale")));
+
+        // The same name on two remotes and no upstream: which one is meant is unknown.
+        let second = remote_for(&dir, "backup");
+        g.branch_create("both", None).unwrap();
+        git(&dir, &["push", "-q", "origin", "both"]);
+        git(&dir, &["push", "-q", "backup", "both"]);
+        assert_eq!(published("both"), None);
+        git(&dir, &["branch", "-q", "--set-upstream-to=backup/both", "both"]);
+        assert_eq!(published("both").as_deref(), Some("backup/both"));
+
+        for d in [&dir, &bare, &second] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     fn step(hash: &str, action: &str, message: Option<&str>) -> RebaseStep {

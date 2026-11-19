@@ -439,8 +439,8 @@ pub async fn branch_checkout(state: State<'_, AppState>, id: String, name: Strin
 }
 
 #[tauri::command]
-pub async fn branch_delete(state: State<'_, AppState>, id: String, name: String, force: bool) -> Result<()> {
-    repo(&state, &id)?.branch_delete(&name, force)
+pub async fn branch_delete(state: State<'_, AppState>, id: String, name: String, force: bool, remote: bool) -> Result<()> {
+    repo(&state, &id)?.branch_delete(&name, force, remote)
 }
 
 #[tauri::command]
