@@ -42,7 +42,9 @@ export interface ProgramTab {
 	reveal: boolean;
 }
 
+/** The one open/closed state every repository shared before each got its own; still what a repository starts with. */
 const OPEN_KEY = 'studio.terminal.open';
+const OPENS_KEY = 'studio.terminal.opens';
 const HEIGHT_KEY = 'studio.terminal.height';
 const MIN_H = 120;
 const DEFAULT_H = 280;
@@ -81,14 +83,30 @@ function savedHeight(): number {
 	return h >= MIN_H ? clampHeight(h) : DEFAULT_H;
 }
 
+function savedOpen(): Record<string, boolean> {
+	const out: Record<string, boolean> = {};
+	try {
+		for (const [repoId, value] of Object.entries(JSON.parse(saved(OPENS_KEY) ?? '{}') as Record<string, unknown>)) {
+			if (typeof value === 'boolean') {
+				out[repoId] = value;
+			}
+		}
+	} catch {
+		/* not ours, or damaged: start over */
+	}
+	return out;
+}
+
 export function folderName(path: string): string {
 	return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
 @Injectable()
 export class TerminalStore {
-	/** The panel is showing. */
-	readonly open = signal(saved(OPEN_KEY) === '1');
+	private readonly _open = signal<Record<string, boolean>>(savedOpen());
+	private readonly _firstOpen = saved(OPEN_KEY) === '1';
+	/** The panel is showing: each repository tab keeps its own. */
+	readonly open = computed(() => this._open()[this.repos.repo()?.id ?? ''] ?? this._firstOpen);
 	readonly height = signal(savedHeight());
 	/** Every terminal, in every repository. */
 	readonly all = signal<TermTab[]>([]);
@@ -167,9 +185,10 @@ export class TerminalStore {
 	}
 
 	private setOpen(open: boolean): void {
-		if (this.open() !== open) {
-			this.open.set(open);
-			save(OPEN_KEY, open ? '1' : '0');
+		const id = this.repos.repo()?.id;
+		if (id && this.open() !== open) {
+			this._open.set({ ...this._open(), [id]: open });
+			save(OPENS_KEY, JSON.stringify(this._open()));
 		}
 	}
 

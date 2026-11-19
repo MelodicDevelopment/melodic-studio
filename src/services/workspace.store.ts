@@ -80,7 +80,9 @@ export type WorkspaceView = 'hidden' | 'side' | 'full';
 
 const CONV_KEY = 'studio.conversations';
 const LAYOUT_KEY = 'studio.workspace.layouts';
+/** The one view every repository shared before each got its own; still what a repository starts with. */
 const VIEW_KEY = 'studio.workspace.view';
+const VIEWS_KEY = 'studio.workspace.views';
 const WIDTH_KEY = 'studio.workspace.width';
 const MAX_SUBAGENTS = 30;
 const MAX_SAVED = 60;
@@ -155,6 +157,21 @@ function restoreLayout(node: LayoutNode | undefined, known: Set<string>): Layout
 	return fixed ?? emptyPane();
 }
 
+function asView(value: unknown): WorkspaceView | null {
+	return value === 'hidden' || value === 'side' || value === 'full' ? value : null;
+}
+
+function savedViews(): Record<string, WorkspaceView> {
+	const out: Record<string, WorkspaceView> = {};
+	for (const [repoId, value] of Object.entries(read<Record<string, unknown>>(VIEWS_KEY, {}) ?? {})) {
+		const view = asView(value);
+		if (view) {
+			out[repoId] = view;
+		}
+	}
+	return out;
+}
+
 function loadConversations(): Conversation[] {
 	return read<Conversation[]>(CONV_KEY, [])
 		.filter((c) => c && c.kind === 'claude' && c.sessionId)
@@ -165,10 +182,14 @@ function loadConversations(): Conversation[] {
 export class WorkspaceStore {
 	readonly conversations = signal<Conversation[]>(loadConversations());
 	readonly layouts = signal<Record<string, LayoutNode>>({});
-	readonly view = signal<WorkspaceView>(read<WorkspaceView>(VIEW_KEY, 'side'));
+	private readonly _views = signal<Record<string, WorkspaceView>>(savedViews());
+	private readonly _overviews = signal<Record<string, boolean>>({});
+	private readonly _firstView = asView(read<unknown>(VIEW_KEY, 'side')) ?? 'side';
+	/** The open repository's view: each repository tab keeps its own. */
+	readonly view = computed<WorkspaceView>(() => this._views()[this.repos.repo()?.id ?? ''] ?? this._firstView);
 	readonly width = signal(Math.max(MIN_WORKSPACE_W, Number(read<number>(WIDTH_KEY, DEFAULT_WORKSPACE_W)) || DEFAULT_WORKSPACE_W));
-	/** The card grid of every conversation instead of the panes. */
-	readonly overview = signal(false);
+	/** The card grid of every conversation instead of the panes (per repository tab, like the view). */
+	readonly overview = computed(() => !!this._overviews()[this.repos.repo()?.id ?? '']);
 	/** The pane new tabs go to and keys act on. */
 	readonly focusedPane = signal<string | null>(null);
 	/** A tab being dragged, and where it would land. */
@@ -243,8 +264,12 @@ export class WorkspaceStore {
 	// ---- view ---------------------------------------------------------------
 
 	setView(view: WorkspaceView): void {
-		this.view.set(view);
-		write(VIEW_KEY, view);
+		const repo = this.repos.repo();
+		if (!repo) {
+			return;
+		}
+		this._views.set({ ...this._views(), [repo.id]: view });
+		write(VIEWS_KEY, this._views());
 		if (view !== 'hidden') {
 			this.markSeen();
 			requestAnimationFrame(() => this.focusActive());
@@ -271,10 +296,17 @@ export class WorkspaceStore {
 	}
 
 	showOverview(on: boolean): void {
-		this.overview.set(on);
+		this.setOverview(on);
 		if (!on) {
 			this.markSeen();
 			requestAnimationFrame(() => this.focusActive());
+		}
+	}
+
+	private setOverview(on: boolean): void {
+		const id = this.repos.repo()?.id;
+		if (id && this.overview() !== on) {
+			this._overviews.set({ ...this._overviews(), [id]: on });
 		}
 	}
 
@@ -413,7 +445,7 @@ export class WorkspaceStore {
 	private addTab(conv: Conversation, pane?: string): void {
 		this.conversations.set([...this.conversations(), conv]);
 		this.save();
-		this.overview.set(false);
+		this.setOverview(false);
 		if (this.view() === 'hidden') {
 			this.setView('side');
 		}
@@ -439,7 +471,7 @@ export class WorkspaceStore {
 		if (this.repos.repo()?.id !== conv.repoId) {
 			await this.repos.selectRepo(conv.repoId);
 		}
-		this.overview.set(false);
+		this.setOverview(false);
 		if (this.view() === 'hidden') {
 			this.setView('side');
 		}
