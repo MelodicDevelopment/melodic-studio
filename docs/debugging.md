@@ -18,7 +18,8 @@ Replay are the proof. A recorded run can also go backwards, which a debugger can
 
 ## What gets built
 
-Two parts, in this order. Rick uses the result after part 2 before anything else is decided.
+Two parts now, in this order. Rick uses the result after Part 2 before anything else is decided. Part 3 (Docker and
+Envy) comes later.
 
 ### Part 1: Run
 
@@ -163,22 +164,36 @@ Two parts, in this order. Rick uses the result after part 2 before anything else
 - Text from the program's output and values recorded from the app are untrusted and are shown as text only. Claude's
   notes go through `rich-text.ts`.
 
-### Apps in Docker, with Envy URLs
+### Part 3 (later): apps in Docker, with Envy URLs
 
-Rick runs some of his apps in Docker containers on his Mac. Envy, a tool he wrote, gives them local URLs. Both fit the
-plan:
-- **Targets:** each service in a `compose.yaml` / `docker-compose.yml` is a target. Run is
-  `docker compose -p <project> up --build <service>`, and its output (or `docker compose logs -f <service>`) goes to
-  the run tab, so error spotting works unchanged.
+Not part of the first build. Parts 1 and 2 cover apps that run directly on the Mac. Rick runs some of his apps in
+Docker containers, and Envy (his own app: `/Applications/Envy.app`, source in `../envy`) gives every container an
+`https://<name>.<domain>` URL.
+
+- **Targets:** each service in a `compose.yaml` / `docker-compose.yml` is a target. Studio drives the user's own
+  `docker compose` CLI, like it does git and gh. No Docker API and no dockerode. Run is
+  `docker compose -p <project> -f <their file> -f <our override> up --build <service>`, and its output goes to the run
+  tab, so error spotting works unchanged.
 - **One container set per worktree:** the compose project name (`-p`) comes from the worktree. The investigation's
-  copy then never collides with the app Rick is running, the same job the per-worktree port does for plain targets.
-- **Recording:** the worktree's source is built into the image (or mounted) and `.studio/replay/` is mounted, so the
-  recording file lands on the Mac where Studio reads it.
-- **Envy:** Studio's `http_request` tool calls the app's Envy URL instead of `localhost:<port>`. Ideally each worktree
-  gets its own Envy URL (for example `investigate-nre.shop.<envy domain>`), which the approval card and the report
-  show.
-- **To find out from Rick before building this:** how Envy is driven (a CLI, a config file, labels on the
-  containers), and where it lives. It was not on PATH or under `~/Source` on 2026-11-18.
+  copy then never collides with the app Rick is running.
+- **Recording:** the worktree's source is built into the image (or mounted), and the override mounts `.studio/replay/`,
+  so the recording file lands on the Mac where Studio reads it.
+- **Envy needs no changes to work.**
+  - It watches Docker, so containers Studio starts get URLs by themselves.
+  - Studio names each URL in advance: the override file (in the app cache dir, never in the repository) sets the label
+    `envy.host=<worktree>-<service>`. That gives URLs like `https://investigate-nre-api.envy.local`.
+  - Without that label, two projects with the same service name collide, and Envy quietly falls back to the
+    container's name (`hostsFor` in `envy/src/engine/discovery.ts`).
+  - The domain comes from Envy's `config.json` (`domains`).
+  - `http_request` calls that URL instead of `localhost:<port>`, and the approval card and the report show it.
+  - When Envy isn't installed, Studio uses the published port.
+- **Envy changes worth making (optional):**
+  1. Envy writes its live route table (host → container) to a file next to `config.json`, so Studio shows the real URL
+     instead of predicting it.
+  2. Envy can route a host to a port on the Mac, not only to a container. Then plain Run targets (`dotnet run`,
+     `npm run dev`) and every worktree's copy of them get Envy URLs too.
+- Nothing of Envy is copied into Studio. Its proxy, DNS and certificate authority need a privileged daemon, and Studio
+  uses Envy when it is installed.
 
 ## Rules
 
