@@ -64,7 +64,9 @@ pub const SERVERS: &[Spec] = &[
         probe: None,
         hint: None,
     },
-    Spec { name: "csharp", label: "C#", program: "csharp-ls", args: &[], languages: &["csharp"], kind: Kind::Dotnet, packages: &["csharp-ls"], probe: Some(&["--version"]), hint: None },
+    // Pinned: `dotnet tool install` refuses csharp-ls 0.29.0 ("DotnetToolSettings.xml was not found in the package",
+    // seen with SDK 10.0.300 on 2026-11-19); 0.28.0 and every release before it install.
+    Spec { name: "csharp", label: "C#", program: "csharp-ls", args: &[], languages: &["csharp"], kind: Kind::Dotnet, packages: &["csharp-ls@0.28.0"], probe: Some(&["--version"]), hint: None },
     Spec {
         name: "rust",
         label: "Rust",
@@ -414,7 +416,13 @@ fn npm(dir: &Path, verb: &str, packages: &[&str]) -> Result<()> {
 fn dotnet_tool(dir: &Path, verb: &str, package: &str) -> Result<()> {
     let dotnet = proc::find("dotnet").ok_or_else(|| AppError::msg("dotnet was not found. Install the .NET SDK, then try again."))?;
     let mut command = proc::command(dotnet);
-    command.args(["tool", verb, package, "--tool-path"]).arg(dir).env("DOTNET_NOLOGO", "1").env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").current_dir(dir);
+    // `name@version` as npm writes it; dotnet 8 only takes the version as its own argument.
+    let (name, version) = package.split_once('@').map_or((package, None), |(name, version)| (name, Some(version)));
+    command.args(["tool", verb, name]);
+    if let Some(version) = version.filter(|_| verb != "uninstall") {
+        command.arg(format!("--version={version}"));
+    }
+    command.arg("--tool-path").arg(dir).env("DOTNET_NOLOGO", "1").env("DOTNET_CLI_TELEMETRY_OPTOUT", "1").current_dir(dir);
     run(command, &format!("dotnet tool {verb}"))
 }
 

@@ -623,6 +623,24 @@ impl Git {
         Ok(Git::diff_result(text))
     }
 
+    /// A file as it was at a commit (`rev`), in the shape the Files tab reads one from disk. Too large
+    /// and binary files come back flagged and empty. An error when the commit has no such file.
+    pub fn file_at(&self, rev: &str, path: &str) -> Result<crate::files::FileContent> {
+        check_ref(rev)?;
+        // One argument, `<rev>:<path>`: not a pathspec, so a name is never read as a pattern or an option.
+        let spec = format!("{rev}:{path}");
+        let size: u64 = self.run(&["cat-file", "-s", &spec])?.trim().parse().unwrap_or(0);
+        if size > crate::files::MAX_FILE_BYTES {
+            return Ok(crate::files::FileContent { too_large: true, size, ..Default::default() });
+        }
+        let text = self.run(&["show", "--no-textconv", &spec])?;
+        // `run` reads the output as text; what was not text shows as NUL or the replacement character.
+        if text.contains('\0') || text.contains('\u{FFFD}') {
+            return Ok(crate::files::FileContent { binary: true, size, ..Default::default() });
+        }
+        Ok(crate::files::FileContent { text, size, ..Default::default() })
+    }
+
     // ---- committing ---------------------------------------------------------
 
     /// Commit exactly the given paths (GitHub Desktop style: the checked files
@@ -1397,6 +1415,29 @@ mod tests {
         // Git for Windows turns LF into CRLF on checkout by default; the tests compare file contents.
         git(&dir, &["config", "core.autocrlf", "false"]);
         dir
+    }
+
+    #[test]
+    fn a_file_as_it_was_at_a_commit() {
+        let dir = scratch("file-at");
+        let g = Git::at(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join(ODD), "one\n").unwrap();
+        std::fs::write(dir.join("data.bin"), [0u8, 159, 146, 150]).unwrap();
+        g.commit(&[format!("src/{ODD}"), "data.bin".into()], "One", "", false).unwrap();
+        let first = g.run(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        std::fs::write(dir.join("src").join(ODD), "two\n").unwrap();
+        g.commit(&[format!("src/{ODD}")], "Two", "", false).unwrap();
+        // What is on disk since does not matter.
+        std::fs::write(dir.join("src").join(ODD), "three\n").unwrap();
+
+        assert_eq!(g.file_at(&first, &format!("src/{ODD}")).unwrap().text, "one\n");
+        assert_eq!(g.file_at("HEAD", &format!("src/{ODD}")).unwrap().text, "two\n");
+        let binary = g.file_at("HEAD", "data.bin").unwrap();
+        assert!(binary.binary && binary.text.is_empty() && binary.size == 4);
+        assert!(g.file_at("HEAD", "src/missing.txt").is_err());
+        assert!(g.file_at("--output=x", "data.bin").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

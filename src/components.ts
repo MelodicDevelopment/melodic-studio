@@ -37,6 +37,8 @@ import './components/changes/changes.component';
 import './components/history/history.component';
 import './components/explorer/explorer.component';
 import './components/editor/editor.component';
+import './components/editor/lsp-status.component';
+import './components/explorer/symbol-search.component';
 import './components/agents/agents.component';
 import './components/workspace/workspace.component';
 import './components/workspace/workspace-button.component';

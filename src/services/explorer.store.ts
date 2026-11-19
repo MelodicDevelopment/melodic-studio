@@ -63,6 +63,8 @@ export class ExplorerStore {
 	readonly preview = signal<string | null>(null);
 	readonly notice = signal<Notice | null>(null);
 	readonly saving = signal<string | null>(null);
+	/** Called with a file's model once its edits are on disk (language servers are told about saves). */
+	readonly afterSave: ((model: Monaco.editor.ITextModel) => void)[] = [];
 	/** Rows picked in the tree (Cmd/Ctrl- and Shift-click); the context menu and keys act on all of them. */
 	readonly selected = signal<ReadonlySet<string>>(new Set());
 
@@ -394,6 +396,8 @@ export class ExplorerStore {
 			await this.backend.writeFile(this._callId, path, text, id);
 			buf.disk = text;
 			buf.savedVersion = version;
+			const saved = buf.model;
+			this.afterSave.forEach((listener) => listener(saved));
 			this.setDirty(path, buf.model.getAlternativeVersionId() !== version);
 			if (this.notice()?.path === path) {
 				this.notice.set(null);

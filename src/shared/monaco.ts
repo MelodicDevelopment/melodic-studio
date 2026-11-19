@@ -74,8 +74,21 @@ async function load(): Promise<MonacoApi> {
 
 // ---- built-in TypeScript features, switchable --------------------------------------
 
-/** The features a language server also provides; with both answering, every hover and definition shows twice. */
-const SWITCHED = { hovers: false, definitions: false, references: false, documentSymbols: false, diagnostics: false };
+/** The features a language server also provides; with both answering, every suggestion, hover and definition shows twice. */
+const SWITCHED = {
+	completionItems: false,
+	signatureHelp: false,
+	hovers: false,
+	documentHighlights: false,
+	definitions: false,
+	references: false,
+	documentSymbols: false,
+	rename: false,
+	documentRangeFormattingEdits: false,
+	codeActions: false,
+	inlayHints: false,
+	diagnostics: false,
+};
 
 type Scripted = 'typescript' | 'javascript';
 
@@ -118,13 +131,36 @@ function ownTypeScriptFeatures(monaco: MonacoApi): void {
 		};
 		const libFiles = new mode.LibFiles(worker);
 		_registered.set(language, [
+			monaco.languages.registerCompletionItemProvider(language, new mode.SuggestAdapter(worker)),
+			monaco.languages.registerSignatureHelpProvider(language, new mode.SignatureHelpAdapter(worker)),
 			monaco.languages.registerHoverProvider(language, new mode.QuickInfoAdapter(worker)),
+			monaco.languages.registerDocumentHighlightProvider(language, new mode.DocumentHighlightAdapter(worker)),
 			monaco.languages.registerDefinitionProvider(language, new mode.DefinitionAdapter(libFiles, worker)),
 			monaco.languages.registerReferenceProvider(language, new mode.ReferenceAdapter(libFiles, worker)),
 			monaco.languages.registerDocumentSymbolProvider(language, new mode.OutlineAdapter(worker)),
+			monaco.languages.registerRenameProvider(language, new mode.RenameAdapter(libFiles, worker)),
+			monaco.languages.registerDocumentRangeFormattingEditProvider(language, new mode.FormatAdapter(worker)),
+			monaco.languages.registerCodeActionProvider(language, new mode.CodeActionAdaptor(worker)),
+			monaco.languages.registerInlayHintsProvider(language, new mode.InlayHintsAdapter(worker)),
 			new mode.DiagnosticsAdapter(libFiles, defaults, language, worker),
 		]);
 	};
+	// A check that was under way when the built-in diagnostics were switched off still writes its result
+	// when it comes back (Monaco's adapter does not look whether it was disposed in the meantime), and
+	// nothing would ever take that down again: the same error would stay beside the server's, fixed or not.
+	monaco.editor.onDidChangeMarkers((uris) => {
+		if (_builtIn) {
+			return;
+		}
+		for (const uri of uris) {
+			const model = monaco.editor.getModel(uri);
+			for (const owner of ['typescript', 'javascript']) {
+				if (model && monaco.editor.getModelMarkers({ resource: uri, owner }).length) {
+					monaco.editor.setModelMarkers(model, owner, []);
+				}
+			}
+		}
+	});
 	for (const language of ['typescript', 'javascript'] as const) {
 		const { defaults } = sides[language];
 		defaults.setModeConfiguration({ ...defaults.modeConfiguration, ...SWITCHED });
@@ -137,9 +173,10 @@ function ownTypeScriptFeatures(monaco: MonacoApi): void {
 }
 
 /**
- * Turn Monaco's own TypeScript/JavaScript hover, definition, references, outline and diagnostics
- * on or off. Off while a TypeScript language server answers for the checkout on screen; on otherwise.
- * Completion, signature help and the rest stay Monaco's either way.
+ * Turn Monaco's own TypeScript/JavaScript features on or off (everything in `SWITCHED`: completion,
+ * signature help, hover, highlights, definition, references, outline, rename, formatting, quick
+ * fixes, inlay hints and diagnostics). Off while a TypeScript language server answers for the
+ * checkout on screen; on otherwise. Only typing-time formatting stays Monaco's either way.
  */
 export function setBuiltInTypeScript(on: boolean): void {
 	if (on === _builtIn) {

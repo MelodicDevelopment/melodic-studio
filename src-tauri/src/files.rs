@@ -9,7 +9,7 @@ use serde::Serialize;
 use std::path::{Component, Path, PathBuf};
 
 /// Files larger than this are not opened in the editor.
-const MAX_FILE_BYTES: u64 = 2_000_000;
+pub(crate) const MAX_FILE_BYTES: u64 = 2_000_000;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]

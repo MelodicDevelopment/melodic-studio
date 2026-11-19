@@ -652,6 +652,8 @@ export class BackendService {
 	}
 	listDir(id: string, path: string) { return this.call<TreeEntry[]>('list_dir', { id, path }); }
 	readFile(id: string, path: string) { return this.call<FileContent>('read_file', { id, path }); }
+	/** A file of a checkout that need not be the active one (`path`: the main checkout or a worktree of the repository). */
+	worktreeRead(id: string, path: string, file: string, rev?: string) { return this.call<FileContent>('worktree_read', { id, path, file, rev }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
 	writeFile(id: string, path: string, text: string, root: string) { return this.call<void>('write_file', { id, path, text, root }); }
 	// New Project. Output arrives as `project-output` events; answers the new folder.
@@ -1547,7 +1549,8 @@ class DemoBackend {
 			case 'list_dir':
 				return empty ? [] : demoListDir(String(args.path));
 			case 'read_file':
-				return demoReadFile(String(args.path));
+			case 'worktree_read':
+				return demoReadFile(String(args.file ?? args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
 			case 'project_templates':

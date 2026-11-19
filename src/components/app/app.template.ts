@@ -266,5 +266,6 @@ export function appTemplate(self: AppComponent) {
 		<ms-host-dialogs></ms-host-dialogs>
 		<ms-host-work></ms-host-work>
 		<ms-investigate-start></ms-investigate-start>
+		<ms-symbol-search></ms-symbol-search>
 	`;
 }

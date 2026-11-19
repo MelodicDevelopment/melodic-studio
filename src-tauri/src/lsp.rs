@@ -161,11 +161,15 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + '
     tauri::async_runtime::spawn_blocking(work).await.map_err(|e| AppError::msg(e.to_string()))?
 }
 
-/// Start (or find) the language server for `language` in the active checkout.
+/// Start (or find) the language server for `language` in the active checkout, or in `cwd` when
+/// given: another checkout of the same repository (an agent's worktree, checked when its turn ends).
 /// Ok(None) means no server for that language is installed.
 #[tauri::command]
-pub async fn lsp_start(app: tauri::AppHandle, state: State<'_, AppState>, lsp: State<'_, Lsp>, id: String, language: String) -> Result<Option<Started>> {
-    let root = repo(&state, &id)?.dir;
+pub async fn lsp_start(app: tauri::AppHandle, state: State<'_, AppState>, lsp: State<'_, Lsp>, id: String, language: String, cwd: Option<String>) -> Result<Option<Started>> {
+    let root = match cwd {
+        Some(cwd) => crate::worktree::find(&crate::commands::main_repo(&state, &id)?.0, &cwd)?.dir,
+        None => repo(&state, &id)?.dir,
+    };
     let Some(spec) = servers::for_language(&language) else {
         return Ok(None);
     };

@@ -1,8 +1,9 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
-import { AgentsStore, scopeOf, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, scopeOf, type AgentSession, type WorkCheck } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
+import { LspService } from '../../services/lsp.service';
 import { HostStore } from '../../services/host.store';
 import { DialogService } from '@melodicdev/components/dialog';
 import type { AgentMode } from '../../services/backend.service';
@@ -86,6 +87,83 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 }
 
 /** Main pane of the Agents tab: one session's transcript and the box to send it more, a new question, or a comparison of attempts. */
+/** How many of the errors, and of the places something is used, are listed before "and N more". */
+const PROBLEMS_SHOWN = 6;
+const USES_SHOWN = 8;
+
+const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+
+/** "the 3 files it changed and 2 that use them" */
+function looked(check: WorkCheck): string {
+	const changed = check.files === 1 ? 'the file it changed' : `the ${check.files} files it changed`;
+	return check.users ? `${changed} and ${check.users} that use ${check.files === 1 ? 'it' : 'them'}` : changed;
+}
+
+/** What the change touched that the rest of the code uses: folded away until asked for. */
+function impactList(self: AgentSessionComponent, s: AgentSession, check: WorkCheck) {
+	const uses = check.impact.flatMap((i) => i.uses.map((use) => ({ ...use, symbol: i.symbol })));
+	if (!uses.length) {
+		return '';
+	}
+	const names = check.impact.map((i) => i.symbol);
+	return html`
+		<details>
+			<summary>It changed <b>${names.slice(0, 3).join(', ')}</b>${names.length > 3 ? ` and ${names.length - 3} more` : ''}, used in ${count(uses.length, 'place')} it did not touch</summary>
+			<ul>
+				${uses.slice(0, USES_SHOWN).map((use) => html`<li><button title="Open in the Files tab of this agent's checkout" @click=${() => self.agents.openPlace(s, use.path, use.line)}>${use.path}:${use.line}</button><span>uses ${use.symbol}</span></li>`)}
+				${uses.length > USES_SHOWN ? html`<li class="more">and ${uses.length - USES_SHOWN} more</li>` : ''}
+			</ul>
+		</details>
+	`;
+}
+
+/**
+ * What the language servers made of the task's change, between the header and the transcript.
+ * Their messages are compiler output, and so are symbol names: text bindings only.
+ */
+function checkStrip(self: AgentSessionComponent, s: AgentSession) {
+	const check = s.check;
+	if (!check || s.kind !== 'task') {
+		return '';
+	}
+	if (check.state === 'checking') {
+		// What the server says it is busy with ("cargo check"), when it says.
+		const work = self.lsp.workAt(s.cwd)[0];
+		const doing = work ? ` (${[work.label, work.title].filter(Boolean).join(': ')})` : '';
+		return html`<div class="check"><ml-spinner size="xs"></ml-spinner><span>Checking the change with the language server${doing}…</span></div>`;
+	}
+	// Kept short: the pane is often narrow. The server's name says whose verdict it is.
+	const servers = `(${check.servers.join(', ')})`;
+	const partial = check.finished ? '' : ' The language server was still working when the time ran out, so there may be more.';
+	const known = check.known ? ` ${count(check.known, 'error was', 'errors were')} already there.` : '';
+	const found = check.problems;
+	if (!found.length) {
+		return html`
+			<div class="check ok">
+				<div class="line"><ml-icon icon="check-circle" size="sm"></ml-icon><span class="grow" title="From the language server: the files as the agent left them, compared with the commit it started from">No new errors in ${looked(check)} ${servers}.${known}${partial}</span></div>
+				${impactList(self, s, check)}
+			</div>
+		`;
+	}
+	const running = s.status === 'running';
+	return html`
+		<div class="check bad">
+			<div class="line">
+				<ml-icon icon="warning" size="sm"></ml-icon>
+				<span class="grow" title="From the language server: the files as the agent left them, compared with the commit it started from"><b>${count(found.length, 'new error')}</b> in ${looked(check)} ${servers}.${known}${partial}</span>
+				<ml-button variant="primary" size="sm" ?disabled=${running} title="Sends this list to the agent as its next turn" @ml:click=${() => self.agents.fixProblems(s.id)}>Ask Claude to fix ${found.length === 1 ? 'it' : 'them'}</ml-button>
+			</div>
+			<ul>
+				${found.slice(0, PROBLEMS_SHOWN).map(
+					(p) => html`<li><button title="Open in the Files tab of this agent's checkout" @click=${() => self.agents.openPlace(s, p.path, p.line, p.column)}>${p.path}:${p.line}</button>${p.changed ? '' : html`<i>a file it did not change</i>`}<span class="said" title=${p.message}>${p.message.split('\n')[0]}</span></li>`
+				)}
+				${found.length > PROBLEMS_SHOWN ? html`<li class="more">and ${found.length - PROBLEMS_SHOWN} more</li>` : ''}
+			</ul>
+			${impactList(self, s, check)}
+		</div>
+	`;
+}
+
 @MelodicComponent({
 	selector: 'ms-agent-session',
 	template: (self: AgentSessionComponent) => {
@@ -160,6 +238,7 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 					: ''}
 			</div>
 			${mergeDialog(self, s, tree?.changes ?? 0)}
+			${checkStrip(self, s)}
 
 			<div class="log">
 				${s.items.map((item) =>
@@ -246,6 +325,102 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 			gap: 8px;
 			padding: 12px 16px;
 			border-bottom: 1px solid var(--ml-color-border);
+		}
+		.check {
+			flex: none;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			padding: 8px 16px;
+			border-bottom: 1px solid var(--ml-color-border);
+			font-size: 12.5px;
+			color: var(--ml-color-text-secondary);
+		}
+		.check.ok ml-icon {
+			flex: none;
+			color: var(--ml-color-success);
+		}
+		.check.ok,
+		.check.bad {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 6px;
+		}
+		.check.bad {
+			background: var(--ml-color-warning-subtle);
+			color: var(--ml-color-text);
+		}
+		/* The button drops under the sentence when the pane is too narrow for both. */
+		.check .line {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 6px 8px;
+		}
+		.check .line .grow {
+			flex: 1 1 220px;
+		}
+		.check details {
+			padding-left: 24px;
+		}
+		.check summary {
+			cursor: pointer;
+			color: var(--ml-color-text-secondary);
+		}
+		.check details ul {
+			padding: 4px 0 2px 14px;
+		}
+		.check.bad .line ml-icon {
+			flex: none;
+			color: var(--ml-color-warning);
+		}
+		.check ul {
+			margin: 0;
+			padding: 0 0 2px 24px;
+			list-style: none;
+			display: flex;
+			flex-direction: column;
+			gap: 3px;
+		}
+		.check li {
+			display: flex;
+			gap: 10px;
+			min-width: 0;
+		}
+		.check li button {
+			flex: none;
+			padding: 0;
+			border: 0;
+			background: none;
+			font: inherit;
+			font-family: var(--ml-font-mono);
+			color: var(--ml-color-primary);
+			cursor: pointer;
+		}
+		.check li button:hover {
+			text-decoration: underline;
+		}
+		.check li span {
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.check li i {
+			flex: none;
+			font-style: normal;
+			color: var(--ml-color-text-muted);
+		}
+		/* An error's message gets a line of its own: it is what matters, and the pane is often narrow. */
+		.check li:has(.said) {
+			flex-wrap: wrap;
+			gap: 0 10px;
+		}
+		.check li .said {
+			flex: 1 1 100%;
+		}
+		.check li.more {
+			color: var(--ml-color-text-muted);
 		}
 		.head h2 {
 			margin: 0;
@@ -398,6 +573,7 @@ export class AgentSessionComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(HostStore) readonly host!: HostStore;
+	@Service(LspService) readonly lsp!: LspService;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
 	elementRef!: HTMLElement;
 

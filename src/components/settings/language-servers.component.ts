@@ -4,6 +4,7 @@ import { html, css } from '@melodicdev/core/template';
 import type { LanguageServer } from '../../services/backend.service';
 import { LanguageServersStore } from '../../services/language-servers.store';
 import { LspService } from '../../services/lsp.service';
+import { AgentsStore } from '../../services/agents.store';
 
 const WHERE: Record<NonNullable<LanguageServer['source']>, string> = {
 	project: "This project's own copy",
@@ -61,6 +62,13 @@ function row(self: LanguageServersComponent, server: LanguageServer) {
 			<div class="title">Language servers</div>
 			<p>Hover, go to definition and errors in the Files tab. A project's own copy is used first; otherwise Melodic Studio installs one into its own folder, never system-wide.</p>
 			${servers === null ? html`<div class="row"><ml-spinner size="xs"></ml-spinner></div>` : servers.map((server) => row(self, server))}
+			<ml-toggle
+				class="checks"
+				label="Check an agent's changes when it finishes"
+				hint="The files it changed are shown to the language server in the agent's own checkout, and its errors appear above the transcript. Nothing is sent back to the agent unless you ask."
+				.checked=${self.agents.checksOn()}
+				@ml:change=${(e: CustomEvent) => self.agents.setChecks(!!e.detail.checked)}
+			></ml-toggle>
 		`;
 	},
 	styles: () => css`
@@ -72,6 +80,10 @@ function row(self: LanguageServersComponent, server: LanguageServer) {
 		.title {
 			color: var(--ml-color-text);
 			font-weight: 600;
+		}
+		.checks {
+			display: block;
+			margin-top: 12px;
 		}
 		p {
 			margin: 4px 0 6px;
@@ -146,6 +158,7 @@ function row(self: LanguageServersComponent, server: LanguageServer) {
 export class LanguageServersComponent {
 	@Service(LanguageServersStore) readonly store!: LanguageServersStore;
 	@Service(LspService) readonly lsp!: LspService;
+	@Service(AgentsStore) readonly agents!: AgentsStore;
 
 	elementRef!: HTMLElement;
 	private _dialog: Element | null = null;

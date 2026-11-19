@@ -27,7 +27,9 @@ import { ExplorerStore } from './explorer.store';
 import { WorkspaceStore } from './workspace.store';
 import { samePath } from './agent-paths';
 import { TerminalStore } from './terminal.store';
-import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, type InvestigationReport } from './ai-prompts';
+import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, type InvestigationReport } from './ai-prompts';
+import { LspService, type Impact, type Problem } from './lsp.service';
+import { changesSince, languageOf } from './lsp/protocol';
 import { leftoverRecording } from '../shared/replay';
 import type { SpottedError } from '../shared/error-spotting';
 
@@ -78,7 +80,31 @@ export interface AgentSession {
 	stopped: boolean;
 	/** What an `investigate` session is looking into and how far it has got. Null for the other kinds. */
 	investigation: Investigation | null;
+	/** What the language servers made of the files a task changed, as of its last turn. Null: not looked at. */
+	check: WorkCheck | null;
 }
+
+/** The language servers' verdict on what a task changed; see `CheckResult`. `problems` hold compiler output: text only. */
+export interface WorkCheck {
+	state: 'checking' | 'done';
+	/** Errors that were not there at the commit the task started from. */
+	problems: Problem[];
+	/** How many errors those files had before, and still have. */
+	known: number;
+	/** What it changed that files it did not touch use. */
+	impact: Impact[];
+	/** The servers that looked, by their names for people. */
+	servers: string[];
+	/** How many changed files they were shown, and how many files that use them. */
+	files: number;
+	users: number;
+	/** False when a server was still working when the time ran out. */
+	finished: boolean;
+}
+
+/** More changed files than this and only the first ones are checked. */
+const MAX_CHECKED = 60;
+const CHECK_KEY = 'studio.agents.check';
 
 /** The state of one investigation. `summary` and everything in `approval` and `report` come from the program or from Claude: text only. */
 export interface Investigation {
@@ -270,6 +296,8 @@ function load(): AgentSession[] {
 				review: false,
 				stopped: false,
 				...s,
+				// A check does not outlive the app either. One saved before it knew what was new is not shown as if it did.
+				check: s.check?.state === 'done' && Array.isArray(s.check.impact) ? s.check : null,
 				items: Array.isArray(s.items) ? s.items : [],
 				// Nothing survives a restart mid-run.
 				status: s.status === 'failed' ? 'failed' : 'idle',
@@ -329,6 +357,14 @@ export function askPrompt(scope: AskScope, question: string): string {
 /** The tool names in a list of permission rules: `Bash(git log:*)` -> `Bash`. */
 function toolNames(rules: string[]): string[] {
 	return [...new Set(rules.map((r) => r.replace(/\(.*$/, '')))];
+}
+
+function readCheckSetting(): boolean {
+	try {
+		return localStorage.getItem(CHECK_KEY) !== 'off';
+	} catch {
+		return true;
+	}
 }
 
 @Injectable()
@@ -549,6 +585,9 @@ export class AgentsStore {
 		} else if (!stopped && !watching) {
 			this.announce(this.find(key) ?? session, ok);
 		}
+		if (ok && !stopped && session.kind === 'task' && session.mode !== 'plan') {
+			void this.checkWork(key);
+		}
 		if (session.repoId === this.repos.repo()?.id) {
 			// Whatever it changed should show up without waiting for the next poll.
 			void this.repos.refresh();
@@ -643,6 +682,7 @@ export class AgentsStore {
 			review: false,
 			stopped: false,
 			investigation: null,
+			check: null,
 			...extra,
 		};
 	}
@@ -753,7 +793,8 @@ export class AgentsStore {
 			return;
 		}
 		await this.listen();
-		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, items: [...s.items, { kind: 'user', text: options.shown ?? text }] }));
+		// What the language servers said is about the files as they were; the turn changes them.
+		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, items: [...s.items, { kind: 'user', text: options.shown ?? text }] }));
 		this._live.add(id);
 		try {
 			if (session.kind === 'investigate') {
@@ -787,7 +828,7 @@ export class AgentsStore {
 	}
 
 	/** Point the whole app at a checkout (null for the main one) and open a tab on it. */
-	async view(path: string | null, tab: 'changes' | 'agents' = 'changes'): Promise<void> {
+	async view(path: string | null, tab: 'changes' | 'agents' | 'files' = 'changes'): Promise<void> {
 		const repo = this.repos.repo();
 		if (!repo) {
 			return;
@@ -1231,6 +1272,76 @@ export class AgentsStore {
 		for (const s of this.attempts(group)) {
 			this.seen(s.id);
 		}
+	}
+
+	// ---- the language servers' look at a task's changes -------------------------------
+
+	/** Settings: look at an agent's changed files with the language servers when its turn ends. */
+	readonly checksOn = signal(readCheckSetting());
+
+	setChecks(on: boolean): void {
+		this.checksOn.set(on);
+		try {
+			localStorage.setItem(CHECK_KEY, on ? 'on' : 'off');
+		} catch {
+			/* private mode: it holds for this run */
+		}
+	}
+
+	private readonly _checkRuns = new Map<string, number>();
+
+	/**
+	 * A task's turn has ended: ask the language servers installed for the files it changed, in its own
+	 * checkout, which errors are new since the commit it started from and where what it touched is used.
+	 * Nothing is sent to the agent by this; `fixProblems` does that, on a click.
+	 */
+	async checkWork(id: string): Promise<void> {
+		const session = this.find(id);
+		if (!session || session.kind !== 'task' || !this.checksOn()) {
+			return;
+		}
+		const run = (this._checkRuns.get(id) ?? 0) + 1;
+		this._checkRuns.set(id, run);
+		// Another turn has started, or a later check has: this one's answer is about files that have moved on.
+		const stale = (): boolean => this._checkRuns.get(id) !== run || this.find(id)?.status === 'running';
+		try {
+			const diff = await this.changes(session);
+			// A server already running in that checkout may not watch the disk itself: these are the files that moved.
+			Injector.get(LspService).changed(session.cwd, changesSince(diff.files));
+			const changed = diff.files.filter((f) => languageOf(f.path) !== null).slice(0, MAX_CHECKED);
+			if (!changed.length || stale()) {
+				return;
+			}
+			this.update(id, (s) => ({ ...s, check: { state: 'checking', problems: [], known: 0, impact: [], servers: [], files: 0, users: 0, finished: true } }), false);
+			const result = await Injector.get(LspService).check(session.repoId, session.cwd, changed, diff.base);
+			if (stale()) {
+				return;
+			}
+			// No server installed for any of them: there is nothing to say.
+			this.update(id, (s) => ({ ...s, check: result.servers.length ? { state: 'done', ...result } : null }), false);
+		} catch {
+			// The worktree is gone, or a server would not start (which it has said itself).
+			if (!stale()) {
+				this.update(id, (s) => ({ ...s, check: null }), false);
+			}
+		}
+	}
+
+	/** Hand the errors the language servers found back to the agent, as its next turn. */
+	async fixProblems(id: string): Promise<void> {
+		const found = this.find(id)?.check?.problems ?? [];
+		if (found.length) {
+			await this.send(id, fixProblemsPrompt(found), { shown: `Asked Claude to fix the ${found.length === 1 ? 'error' : `${found.length} errors`} its change brought, as the language server reports ${found.length === 1 ? 'it' : 'them'}.` });
+		}
+	}
+
+	/** Open a place the check names: the session's checkout becomes the active one, on the Files tab. */
+	async openPlace(session: AgentSession, path: string, line: number, column = 1): Promise<void> {
+		if (!(await this.showRepo(session))) {
+			return;
+		}
+		await this.view(session.isolated ? session.cwd : null, 'files');
+		await Injector.get(ExplorerStore).openAt(path, line, column);
 	}
 
 	/** Everything a session's checkout holds that the commit it started from does not, uncommitted and untracked work included. */

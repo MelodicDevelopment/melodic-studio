@@ -68,6 +68,14 @@ pub fn belongs(git: &Git, dir: &Path) -> bool {
     dir.is_dir() && entries(git).map(|trees| trees.iter().any(|t| paths::same(&t.path, dir))).unwrap_or(false)
 }
 
+/// The checkout at `path`, which has to be the main one or one of its worktrees. For work aimed at a
+/// checkout that need not be the one on screen (an agent's), where `commands::repo()` is the wrong one.
+pub fn find(git: &Git, path: &str) -> Result<Git> {
+    let tree = entries(git)?.into_iter().find(|t| paths::same(&t.path, path)).ok_or_else(|| AppError::msg("That worktree is not part of this repository"))?;
+    // As git spells it: what is started in it or read from it then matches what `list` reports.
+    Ok(Git::at(&tree.path))
+}
+
 /// The folder name for a branch's worktree: one path segment that every platform accepts.
 fn slug(branch: &str) -> String {
     let s: String = branch.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c } else { '-' }).collect();
@@ -322,6 +330,19 @@ pub async fn worktree_diff(state: State<'_, AppState>, id: String, path: String,
     diff_since(&tree, &base)
 }
 
+/// One file of a checkout of this repository, which need not be the active one: an agent's
+/// worktree, whose changed files the language servers are shown when its turn ends. With `rev`,
+/// the file as it was at that commit (what the agent started from) instead of as it is on disk.
+#[tauri::command]
+pub async fn worktree_read(state: State<'_, AppState>, id: String, path: String, file: String, rev: Option<String>) -> Result<crate::files::FileContent> {
+    let (git, _) = main_repo(&state, &id)?;
+    let tree = find(&git, &path)?;
+    match rev {
+        Some(rev) => tree.file_at(&rev, &file),
+        None => crate::files::read_file(&tree, &file),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +376,12 @@ mod tests {
         let in_tree = Git::at(&path).status().unwrap();
         assert!(in_tree.last_fetched.is_some(), "the last fetch is the repository's, not the worktree's");
         assert_eq!(in_tree.branch, "agent/fix-thing");
+
+        // A checkout is found however its folder is spelled, and nothing outside the repository is.
+        assert!(paths::same(&find(&g, &path.to_string_lossy()).unwrap().dir, &path));
+        assert!(paths::same(&find(&g, &dir.to_string_lossy()).unwrap().dir, &dir));
+        assert!(find(&g, &base.to_string_lossy()).is_err());
+        assert!(crate::files::read_file(&find(&g, &path.to_string_lossy()).unwrap(), "a.txt").unwrap().text.starts_with("one"));
 
         std::fs::write(path.join("b.txt"), "two\n").unwrap();
         let trees = list(&g).unwrap();

@@ -12,6 +12,7 @@ import { isDesktop, isMac, isWindows, type FileChange, type FileStatus, type OnC
 import { plural } from '../../shared/format';
 import { statusMark } from '../../shared/format';
 import { ctxStyles, listStyles } from '../changes/changes.styles';
+import { symbolSearchOpen } from './symbol-search.component';
 
 const INDENT = 14;
 
@@ -763,6 +764,7 @@ function explorerTemplate(self: ExplorerComponent) {
 		<div class="head">
 			<span class="grow">${store.repo()?.name ?? ''}</span>
 			<ms-ask-button .scope=${'code'}></ms-ask-button>
+			<button class="icon" title=${`Go to a symbol by name (${isMac() ? '⌘T' : 'Ctrl+T'})`} @click=${() => symbolSearchOpen.set(true)}><ml-icon icon="magnifying-glass" size="sm"></ml-icon></button>
 			<button class="icon" title="New file" @click=${() => self.startNew('file', newDir(self))}><ml-icon icon="file-plus" size="sm"></ml-icon></button>
 			<button class="icon" title="New folder" @click=${() => self.startNew('folder', newDir(self))}><ml-icon icon="folder-plus" size="sm"></ml-icon></button>
 			<button class="icon" title="Collapse all folders" @click=${() => explorer.collapseAll()}><ml-icon icon="arrows-in-line-vertical" size="sm"></ml-icon></button>

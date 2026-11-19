@@ -65,6 +65,7 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 				? html`
 					<div class="filehead">
 						<span class="path"><span class="dir">${dirName(tab.path)}</span><span class="file">${fileName(tab.path)}</span></span>
+						<ms-lsp-status></ms-lsp-status>
 						${tab.dirty ? html`<span class="hint">Unsaved · ${isMac() ? '⌘S' : 'Ctrl+S'}</span>` : ''}
 						${changed ? html`<ml-button variant="ghost" size="sm" @ml:click=${() => self.showChanges(tab.path)}>View changes</ml-button>` : ''}
 						${tab.dirty ? html`<ml-button variant="outline" size="sm" ?loading=${saving === tab.path} @ml:click=${() => explorer.save(tab.path)}>Save</ml-button>` : ''}

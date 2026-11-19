@@ -2,7 +2,8 @@
 /**
  * Runs the app's own language-server client (src/services/lsp/protocol.ts, the
  * part that needs no Monaco) against a real server over stdio: initialize,
- * open files, then hover, definition, document symbols and diagnostics.
+ * open files, then completion, signature help, hover, definition, highlights,
+ * document symbols, diagnostics, and an edit sent the way the server asked for.
  *
  *   node scripts/lsp-smoke.mjs <plan.json>
  *
@@ -15,19 +16,30 @@
  * Plan: { server, binary, args, env, root, initializationOptions, checks: [{
  *   file, language,                       // path under root, Monaco language id
  *   hover?: { needle, contains },         // hover on the first `needle` in the file
+ *   completion?: { after, contains: string[], resolve?: { label, contains } },
+ *                                         // suggestions right after the first `after`; one resolved, its detail + documentation checked
+ *   signature?: { after, contains },      // signature help right after `after`: a signature's label
+ *   highlights?: { needle, count },       // places the name at `needle` is used in this file
  *   definition?: { needle, file, text },  // lands in `file`, on a line holding `text`
  *   symbols?: string[],                   // names the outline must hold
  *   diagnostics?: string | null,          // a marker message must contain it; null = no errors
+ *   rename?: { needle, to, files: string[] },  // renaming the name at `needle`: the files the edit covers, and every edit applies
+ *   symbol?: { query, contains },         // workspace symbol search: a name it must find
+ *   hints?: { contains },                 // inlay hints for the whole file: a label one of them carries
+ *   edit?: { after, insert, diagnostics, fix?: { title, text } }, // type `insert` after `after` (as a range if the server takes ranges): an error must follow
+ *   disk?: { file, text, clears },        // last: write a new file and tell the server (it has to have asked to be told);
+ *                                         // the errors containing `clears` must go, which shows it read the file
+ *   (edit.fix: a quick fix offered for that error, by part of its title; applied, the file must hold `text`)
  * }] }
  */
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const { Client, languageId, hoverContents, locations, documentSymbols, markers } = await import(pathToFileURL(join(here, '../src/services/lsp/protocol.ts')).href);
-const capabilities = JSON.parse(readFileSync(join(here, '../src/services/lsp/capabilities.json'), 'utf8'));
+const { Client, languageId, hoverContents, locations, documentSymbols, markers, completions, resolved, signatureHelp, highlights, syncKind, contentChanges, clientCapabilities, WATCHED_FILES, workspaceEdit, applyTextEdits, codeActions, inlayHints, workspaceSymbols, touches } = await import(pathToFileURL(join(here, '../src/services/lsp/protocol.ts')).href);
+const shared = JSON.parse(readFileSync(join(here, '../src/services/lsp/capabilities.json'), 'utf8'));
 
 /** The URIs Monaco would make (it escapes more than Node does), when its URI class loads outside a browser. */
 let fileUri = (path) => pathToFileURL(path).href;
@@ -41,6 +53,7 @@ try {
 }
 
 const plan = JSON.parse(readFileSync(process.argv[2] ?? 0, 'utf8'));
+const capabilities = clientCapabilities(shared, plan.server);
 const log = (...parts) => console.error(`[${plan.server}]`, ...parts);
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -66,8 +79,12 @@ const send = (message) =>
 const rootUri = fileUri(plan.root);
 const client = new Client({ key: plan.server, root: plan.root, fresh: true, server: plan.server, initializationOptions: plan.initializationOptions ?? null }, rootUri, send);
 
-/** Latest published diagnostics by URI, as the editor markers they become. */
+/** Latest published diagnostics by URI, as the editor markers they become, and as they came. */
 const published = new Map();
+const reported = new Map();
+/** Edits the server asked to have applied (`workspace/applyEdit`), which the app would apply. */
+const asked = [];
+client.handler = (method, params) => (method === 'workspace/applyEdit' ? (asked.push(params.edit), Promise.resolve({ applied: true })) : undefined);
 let buffer = Buffer.alloc(0);
 child.stdout.on('data', (chunk) => {
 	buffer = Buffer.concat([buffer, chunk]);
@@ -85,6 +102,7 @@ child.stdout.on('data', (chunk) => {
 		const note = client.receive(message);
 		if (note?.method === 'textDocument/publishDiagnostics') {
 			published.set(decodeURIComponent(note.params.uri).toLowerCase(), markers(note.params.diagnostics));
+			reported.set(decodeURIComponent(note.params.uri).toLowerCase(), note.params.diagnostics);
 		}
 	}
 });
@@ -126,6 +144,12 @@ function position(text, needle) {
 	return { line: before.length - 1, character: before[before.length - 1].length };
 }
 
+/** The place right after the first `needle`. */
+function after(text, needle) {
+	const at = position(text, needle);
+	return { line: at.line, character: at.character + needle.length };
+}
+
 log(`starting ${plan.binary} in ${plan.root} (${uriSource} URIs)`);
 if (!(await client.initialize(capabilities))) {
 	fail(`initialize failed: ${client.error ?? (exited ? 'the server exited' : 'no answer')}`);
@@ -149,6 +173,77 @@ for (const check of plan.checks) {
 			(value) => value.includes(check.hover.contains)
 		);
 		result.hover = hover;
+	}
+	if (check.completion) {
+		const at = after(text, check.completion.after);
+		const params = { textDocument: { uri }, position: at, context: { triggerKind: 1 } };
+		const here = { startLineNumber: at.line + 1, startColumn: at.character + 1, endLineNumber: at.line + 1, endColumn: at.character + 1 };
+		const label = (s) => (typeof s.label === 'string' ? s.label : s.label.label);
+		const list = await eventually(
+			`completion after ${check.completion.after} in ${check.file}`,
+			async () => completions(await client.request('textDocument/completion', params), { insert: here, replace: here }).suggestions,
+			(found) => check.completion.contains.every((wanted) => found.some((s) => label(s) === wanted))
+		);
+		result.completion = { count: list.length, has: check.completion.contains };
+		if (check.completion.resolve) {
+			const shown = list.find((s) => label(s) === check.completion.resolve.label);
+			const full = resolved(shown, await client.request('completionItem/resolve', shown.item));
+			const said = `${full.detail ?? ''}\n${typeof full.documentation === 'string' ? full.documentation : (full.documentation?.value ?? '')}`;
+			if (!said.includes(check.completion.resolve.contains)) {
+				fail(`resolving ${check.completion.resolve.label} said "${said}", expected "${check.completion.resolve.contains}"`);
+			}
+			result.completion.resolved = said.trim();
+		}
+	}
+	if (check.signature) {
+		const params = { textDocument: { uri }, position: after(text, check.signature.after), context: { triggerKind: 1, isRetrigger: false } };
+		const help = await eventually(
+			`signature help after ${check.signature.after} in ${check.file}`,
+			async () => signatureHelp(await client.request('textDocument/signatureHelp', params)),
+			(value) => !!value?.signatures.some((s) => s.label.includes(check.signature.contains))
+		);
+		result.signature = help.signatures.map((s) => s.label);
+	}
+	if (check.highlights) {
+		const params = { textDocument: { uri }, position: position(text, check.highlights.needle) };
+		result.highlights = await eventually(
+			`highlights of ${check.highlights.needle} in ${check.file}`,
+			async () => highlights(await client.request('textDocument/documentHighlight', params)).map((h) => `${h.range.startLineNumber}:${h.range.startColumn}`),
+			(list) => list.length === check.highlights.count
+		);
+	}
+	if (check.rename) {
+		const params = { textDocument: { uri }, position: position(text, check.rename.needle), newName: check.rename.to };
+		const same = (a, b) => decodeURIComponent(a).toLowerCase() === decodeURIComponent(b).toLowerCase();
+		const files = await eventually(
+			`renaming ${check.rename.needle} in ${check.file}`,
+			async () => workspaceEdit(await client.request('textDocument/rename', params)) ?? [],
+			(list) => check.rename.files.every((file) => list.some((f) => same(f.uri, fileUri(join(plan.root, file)))))
+		);
+		result.rename = {};
+		for (const file of check.rename.files) {
+			const found = files.find((f) => same(f.uri, fileUri(join(plan.root, file))));
+			const after = applyTextEdits(readFileSync(join(plan.root, file), 'utf8'), found.edits);
+			if (after === null || !after.includes(check.rename.to)) {
+				fail(`the rename's edits to ${file} do not apply: ${JSON.stringify(found.edits)}`);
+			}
+			result.rename[file] = found.edits.length;
+		}
+	}
+	if (check.symbol) {
+		result.symbol = await eventually(
+			`searching the workspace for ${check.symbol.query}`,
+			async () => workspaceSymbols(await client.request('workspace/symbol', { query: check.symbol.query })).map((s) => s.name),
+			(names) => names.some((name) => name.includes(check.symbol.contains))
+		);
+	}
+	if (check.hints) {
+		const whole = { start: { line: 0, character: 0 }, end: { line: text.split('\n').length, character: 0 } };
+		result.hints = await eventually(
+			`inlay hints in ${check.file}`,
+			async () => inlayHints(await client.request('textDocument/inlayHint', { textDocument: { uri }, range: whole })).map((h) => h.label),
+			(labels) => labels.some((label) => label.includes(check.hints.contains))
+		);
 	}
 	if (check.definition) {
 		const params = { textDocument: { uri }, position: position(text, check.definition.needle) };
@@ -190,6 +285,66 @@ for (const check of plan.checks) {
 				(list) => list.some((m) => m.includes(check.diagnostics))
 			);
 		}
+	}
+	if (check.edit) {
+		const at = after(text, check.edit.after);
+		const kind = syncKind(client.capabilities);
+		const range = { startLineNumber: at.line + 1, startColumn: at.character + 1, endLineNumber: at.line + 1, endColumn: at.character + 1 };
+		const offset = text.indexOf(check.edit.after) + check.edit.after.length;
+		const whole = text.slice(0, offset) + check.edit.insert + text.slice(offset);
+		if (check.disk) {
+			check.disk.now = whole;
+		}
+		client.notify('textDocument/didChange', { textDocument: { uri, version: 2 }, contentChanges: contentChanges(kind, [{ range, text: check.edit.insert }], () => whole) });
+		const errors = () => (published.get(decodeURIComponent(uri).toLowerCase()) ?? []).filter((m) => m.severity === 8).map((m) => m.message);
+		result.edit = { sent: kind === 2 ? 'range' : 'whole text', diagnostics: await eventually(`diagnostics after an edit to ${check.file}`, async () => errors(), (list) => list.some((m) => m.includes(check.edit.diagnostics))) };
+		if (check.edit.fix) {
+			// As the app asks: for the server's own diagnostic, at its place.
+			const diagnostic = (reported.get(decodeURIComponent(uri).toLowerCase()) ?? []).find((d) => d.message.includes(check.edit.diagnostics));
+			const offered = await eventually(
+				`a quick fix for "${check.edit.diagnostics}" in ${check.file}`,
+				async () => codeActions(await client.request('textDocument/codeAction', { textDocument: { uri }, range: diagnostic.range, context: { diagnostics: [diagnostic].filter((d) => touches(d.range, diagnostic.range)), triggerKind: 1 } })),
+				(list) => list.some((a) => a.title.includes(check.edit.fix.title))
+			);
+			let action = offered.find((a) => a.title.includes(check.edit.fix.title)).raw;
+			if (!action.edit && !action.command && client.capabilities.codeActionProvider?.resolveProvider) {
+				action = (await client.request('codeAction/resolve', action)) ?? action;
+			}
+			let fix = action.edit;
+			if (!fix && action.command?.command) {
+				// The server works the edit out itself and asks for it to be applied.
+				await client.request('workspace/executeCommand', { command: action.command.command, arguments: action.command.arguments });
+				fix = await eventually('the edit of that fix', async () => asked.pop(), (e) => !!e, 15);
+			}
+			const mine = (workspaceEdit(fix) ?? []).find((f) => decodeURIComponent(f.uri).toLowerCase() === decodeURIComponent(uri).toLowerCase());
+			const fixed = mine ? applyTextEdits(whole, mine.edits) : null;
+			if (!fixed || !fixed.includes(check.edit.fix.text)) {
+				fail(`the fix "${check.edit.fix.title}" did not leave "${check.edit.fix.text}" in ${check.file}: ${JSON.stringify(fix)}`);
+			}
+			result.edit.fix = { offered: offered.map((a) => a.title), applied: check.edit.fix.title };
+		}
+	}
+	if (check.disk) {
+		await eventually(`${plan.server} asking to be told of files changing on disk`, async () => client.registered.has(WATCHED_FILES), (asked) => asked, 30);
+		writeFileSync(join(plan.root, check.disk.file), check.disk.text);
+		client.notify(WATCHED_FILES, { changes: [{ uri: fileUri(join(plan.root, check.disk.file)), type: 1 }] });
+		const left = () => (published.get(decodeURIComponent(uri).toLowerCase()) ?? []).filter((m) => m.severity === 8 && m.message.includes(check.disk.clears)).map((m) => m.message);
+		// Some servers take the file in but only look at an open document again when it is edited:
+		// after a while, send that document once more as it is, which is what the app does too.
+		const began = Date.now();
+		let nudged = false;
+		await eventually(
+			`errors with "${check.disk.clears}" in ${check.file} going once ${check.disk.file} is on disk`,
+			async () => {
+				if (!nudged && left().length && Date.now() - began > 5000) {
+					nudged = true;
+					client.notify('textDocument/didChange', { textDocument: { uri, version: 99 }, contentChanges: [{ text: check.disk.now ?? text }] });
+				}
+				return left();
+			},
+			(list) => list.length === 0
+		);
+		result.disk = { wrote: check.disk.file, cleared: check.disk.clears, nudged };
 	}
 	client.notify('textDocument/didClose', { textDocument: { uri } });
 }
