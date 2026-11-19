@@ -27,7 +27,7 @@ import type { RunTarget } from '../../services/backend.service';
 		const none = targets !== null && targets.length === 0;
 		return html`
 			<div class="run ${running ? 'on' : ''}">
-				<ml-popover id="run-pop" placement="bottom-start" offset="0" @ml:open=${() => run.load(true)}>
+				<ml-popover id="run-pop" placement="bottom-end" offset="0" @ml:open=${() => run.load(true)}>
 					<button slot="trigger" class="name" title=${selected ? selected.argv.join(' ') : 'Run targets'}>
 						${running ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<ml-icon icon="play" size="sm"></ml-icon>`}
 						<span class="v">${selected ? targetTitle(selected) : 'Run'}</span>

@@ -155,7 +155,7 @@ export const toolbarStyles = () => css`
 	.spacer {
 		flex: 1;
 	}
-	/* Sets the Run control apart from the git controls on either side of it. */
+	/* Sets the Run control apart from the icon buttons after it. */
 	.rule {
 		flex: none;
 		width: 1px;
