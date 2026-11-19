@@ -207,7 +207,7 @@ export function toolbarTemplate(self: ToolbarComponent) {
 				: ''}
 
 			<span class="spacer drag"></span>
-			${repo && st ? html`<ms-run-control></ms-run-control><span class="rule"></span>` : ''}
+			${repo && st ? html`<ms-run-control></ms-run-control>` : ''}
 			<ms-workspace-button></ms-workspace-button>
 			<ms-agent-board></ms-agent-board>
 			${st?.host ? html`<ms-ci-status></ms-ci-status>` : ''}

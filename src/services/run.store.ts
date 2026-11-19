@@ -90,11 +90,22 @@ export function groupTargets(targets: RunTarget[]): { group: string; targets: Ru
 	return out;
 }
 
-/** "Found in launchSettings.json and package.json." */
+/** The files a group's targets were read from, for its heading's tooltip: "Found in launchSettings.json". */
 export function foundIn(targets: RunTarget[]): string {
 	const files = [...new Set(targets.map((t) => t.source))];
-	const list = files.length > 1 ? `${files.slice(0, -1).join(', ')} and ${files[files.length - 1]}` : (files[0] ?? '');
-	return list ? `Found in ${list}.` : '';
+	return files.length ? `Found in ${files.join(', ')}` : '';
+}
+
+/** The targets whose group, name or command line has every word of `text`. */
+export function filterTargets(targets: RunTarget[], text: string): RunTarget[] {
+	const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) {
+		return targets;
+	}
+	return targets.filter((t) => {
+		const hay = `${t.group} ${t.name} ${t.argv.join(' ')}`.toLowerCase();
+		return words.every((w) => hay.includes(w));
+	});
 }
 
 /** A frame's file as a repository-relative path: absolute paths inside the checkout, and paths relative to where the program ran. */
@@ -118,6 +129,10 @@ export class RunStore {
 	readonly runs = signal<Run[]>([]);
 
 	private _loadedFor = '';
+	/** The checkout `targets` belongs to. */
+	private _place = '';
+	/** What was found in each checkout looked at so far, so going back to one shows its targets at once. */
+	private readonly _seen = new Map<string, RunTarget[]>();
 	private readonly _spotters = new Map<string, { spotter: ErrorSpotter; quiet: ReturnType<typeof setTimeout> | null }>();
 	private _seq = 0;
 
@@ -185,21 +200,30 @@ export class RunStore {
 		return (id && this.runs().find((r) => r.id === id)) || null;
 	}
 
-	/** Look for the targets of the checkout on screen, when that has changed since the last look (or `force`). */
+	/**
+	 * Look for the targets of the checkout on screen, when the checkout or its branch has changed
+	 * since the last look (or `force`). In another checkout the targets are the ones seen there
+	 * before, or null, until the look is done: the toolbar shows no Run control for null or none.
+	 */
 	async load(force = false): Promise<void> {
 		const at = this.checkout();
-		const key = at ? `${at.repoId}\n${at.path}` : '';
+		const place = at ? `${at.repoId}\n${at.path}` : '';
+		const key = at ? `${place}\n${this.repos.status()?.branch ?? ''}` : '';
 		if (!force && key === this._loadedFor) {
 			return;
 		}
 		this._loadedFor = key;
+		if (place !== this._place) {
+			this._place = place;
+			this.targets.set(this._seen.get(place) ?? null);
+		}
 		if (!at) {
-			this.targets.set(null);
 			return;
 		}
 		this.loading.set(true);
 		try {
 			const targets = await this.backend.targets(at.repoId);
+			this._seen.set(place, targets);
 			if (this._loadedFor === key) {
 				this.targets.set(targets);
 			}

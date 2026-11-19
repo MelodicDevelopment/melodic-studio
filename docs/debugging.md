@@ -24,11 +24,13 @@ Envy) comes later.
 ### Part 1: Run
 
 **What Rick sees** (canvas screen 1)
-- A Run control in the toolbar, after the branch button: the selected target's name, a dropdown arrow, Restart, and
-  Stop. When the target is running the control shows azure equalizer bars and a magenta border.
+- A Run control on the right of the toolbar, before the Claude workspace button and away from the git controls: the
+  selected target's name, a dropdown arrow, Restart, and Stop. When the target is running the control shows azure
+  equalizer bars and a magenta border. A checkout with nothing to run has no Run control.
 - The dropdown lists every target Studio found, grouped by where it came from ("Shop.Api · launch profiles",
-  "Shop.Tests", "web · package.json"). Each row shows its name and its command line in mono. The footer says
-  "Found in launchSettings.json and package.json. Nothing to set up."
+  "Shop.Tests", "web · package.json"). Each row shows its name and its command line in mono; a group's heading says
+  which file it was found in when pointed at. With more than eight targets the list gets a filter box, and its groups
+  fold: the group of the selected target and any group with something running start open.
 - A target runs in its own tab in the bottom terminal panel, with live output. The tab shows an error count badge.
 - When Studio spots an error in the output, it puts an **Error spotted** bar over that block of output: a one-line
   summary (for example "POST /api/orders returned 500 · NullReferenceException in ApplyDiscount"), Dismiss, and
