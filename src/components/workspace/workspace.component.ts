@@ -113,8 +113,8 @@ function bar(self: WorkspaceComponent) {
 	const full = store.view() === 'full';
 	const parts = [waiting ? html`<b>${waiting} need${waiting === 1 ? 's' : ''} you</b>` : '', working ? `${working} working` : ''].filter(Boolean);
 	return html`
-		<div class="bar">
-			<h2><ml-icon icon="sparkle" size="sm"></ml-icon>Claude</h2>
+		<div class="bar ${self.worktreeForm ? 'forming' : ''}">
+			<h2><ml-icon icon="sparkle" size="sm"></ml-icon><span class="text">Claude</span></h2>
 			<span class="summary">${parts.map((p, i) => html`${i ? ' · ' : ''}${p}`)}</span>
 			${self.worktreeForm
 				? html`
@@ -125,14 +125,14 @@ function bar(self: WorkspaceComponent) {
 					</form>
 				`
 				: html`
-					<button class="label primary" title="New Claude conversation in ${store.checkoutName()}" @click=${() => store.newClaude()}><ml-icon icon="plus" size="sm"></ml-icon>New conversation</button>
+					<button class="label primary" title="New Claude conversation in ${store.checkoutName()}" @click=${() => store.newClaude()}><ml-icon icon="plus" size="sm"></ml-icon><span class="text">New conversation</span></button>
 					<button class="tool" title="New conversation in a new worktree (its own branch and folder)" @click=${() => self.toggleWorktreeForm()}><ml-icon icon="git-fork" size="sm"></ml-icon></button>
 					<button class="tool" title="New terminal" @click=${() => store.newShell()}><ml-icon icon="terminal-window" size="sm"></ml-icon></button>
 				`}
 			<button class="label ${store.overview() ? 'primary' : ''}" title="Every conversation, in every repository" @click=${() => store.showOverview(!store.overview())}>
-				<ml-icon icon="squares-four" size="sm"></ml-icon>Overview${waiting ? html`<span class="count">${waiting}</span>` : ''}
+				<ml-icon icon="squares-four" size="sm"></ml-icon><span class="text">Overview</span>${waiting ? html`<span class="count">${waiting}</span>` : ''}
 			</button>
-			<button class="tool" title=${full ? 'Show the files beside it' : 'Fill the window'} @click=${() => store.setView(full ? 'side' : 'full')}><ml-icon icon=${full ? 'arrows-in-simple' : 'arrows-out-simple'} size="sm"></ml-icon></button>
+			<button class="tool" title=${full ? (store.fits() ? 'Show the files beside it' : 'Back to the files (the window is too narrow for both)') : 'Fill the window'} @click=${() => store.setView(full ? 'side' : 'full')}><ml-icon icon=${full ? 'arrows-in-simple' : 'arrows-out-simple'} size="sm"></ml-icon></button>
 			<button class="tool" title=${`Hide (${isMac() ? '⌘' : 'Ctrl+'}Shift+K). Conversations keep running.`} @click=${() => store.setView('hidden')}><ml-icon icon="caret-right" size="sm"></ml-icon></button>
 		</div>
 	`;

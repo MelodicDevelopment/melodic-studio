@@ -6,6 +6,7 @@ import { AgentsStore } from '../../services/agents.store';
 import { HostStore } from '../../services/host.store';
 import { WorkspaceStore } from '../../services/workspace.store';
 import { MenuService } from '../../services/menu.service';
+import { SearchStore } from '../../services/search.store';
 import { appTemplate } from './app.template';
 import { appStyles } from './app.styles';
 
@@ -35,19 +36,59 @@ export class AppComponent {
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 	@Service(MenuService) private readonly _menu!: MenuService;
+	@Service(SearchStore) private readonly _search!: SearchStore;
+
+	elementRef!: HTMLElement;
 
 	sidebarWidth = savedWidth();
 	resizing = false;
 	private _resize: { startX: number; startW: number } | null = null;
 
+	/** The row the main pane and the Claude pane share. Its width decides whether both fit (WorkspaceStore.setRoom). */
+	private _upper: HTMLElement | null = null;
+	/** Created with the component: the first render (and so the first onRender) can come before onCreate. */
+	private readonly _room = new ResizeObserver((entries) => {
+		const width = entries[entries.length - 1]?.contentRect.width ?? 0;
+		if (width > 0) {
+			this.workspace.setRoom(Math.round(width), window.innerWidth);
+		}
+	});
+
 	onCreate(): void {
 		this._toast.setPosition('bottom-right');
 		void this.store.init();
 		this._menu.start();
+		window.addEventListener('keydown', this.onKey, true);
+	}
+
+	/** Cmd/Ctrl+Shift+F: find in files, from anywhere. Caught first, so the editor or a terminal does not get it. */
+	private readonly onKey = (e: KeyboardEvent): void => {
+		if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.code === 'KeyF' && this.store.repo() && this.store.status()) {
+			e.preventDefault();
+			e.stopPropagation();
+			this.store.setTab('files');
+			this._search.ask();
+		}
+	};
+
+	/** The row is only there while a repository is open, and is rebuilt when one is: follow it. */
+	onRender(): void {
+		const upper = this.elementRef.shadowRoot?.querySelector<HTMLElement>('.upper') ?? null;
+		if (upper !== this._upper) {
+			if (this._upper) {
+				this._room.unobserve(this._upper);
+			}
+			this._upper = upper;
+			if (upper) {
+				this._room.observe(upper);
+			}
+		}
 	}
 
 	onDestroy(): void {
 		this.stopResize();
+		this._room.disconnect();
+		window.removeEventListener('keydown', this.onKey, true);
 	}
 
 	// ---- resizable sidebar ----

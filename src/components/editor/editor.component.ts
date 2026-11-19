@@ -9,6 +9,7 @@ import { ExplorerStore, type OpenFile } from '../../services/explorer.store';
 import { isMac } from '../../services/backend.service';
 import { dirName, fileName, relativeTime } from '../../shared/format';
 import { RunStore } from '../../services/run.store';
+import { SearchStore } from '../../services/search.store';
 import { adoptMonacoStyles, loadMonaco, releaseMonacoStyles } from '../../shared/monaco';
 
 function message(icon: string, text: string) {
@@ -34,6 +35,9 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 }
 
 /** The main pane of the Files tab: open files as tabs over one Monaco editor. */
+/** The columns of code the editor keeps before it gives any width to the minimap. */
+const MINIMAP_COLUMNS = 100;
+
 @MelodicComponent({
 	selector: 'ms-editor',
 	template: (self: EditorComponent) => {
@@ -279,12 +283,15 @@ export class EditorComponent {
 	@Service(ExplorerStore) readonly explorer!: ExplorerStore;
 	@Service(EditorSettingsStore) private readonly _settings!: EditorSettingsStore;
 	@Service(RunStore) private readonly _runs!: RunStore;
+	@Service(SearchStore) private readonly _search!: SearchStore;
 
 	elementRef!: HTMLElement;
 	/** Monaco is loaded and mounted. */
 	ready = false;
 
 	private _editor: Monaco.editor.IStandaloneCodeEditor | null = null;
+	/** Whether the editor is wide enough to show MINIMAP_COLUMNS of code with the minimap beside them. */
+	private _roomy = true;
 	/** The path whose model the editor holds. */
 	private _shown: string | null = null;
 	private _token = 0;
@@ -318,7 +325,7 @@ export class EditorComponent {
 			lineHeight: this._settings.lineHeightPx(),
 			fontLigatures: s.ligatures,
 			wordWrap: s.wordWrap ? 'on' : 'off',
-			minimap: { enabled: s.minimap },
+			minimap: { enabled: s.minimap && this._roomy },
 			lineNumbers: s.lineNumbers ? 'on' : 'off',
 			stickyScroll: { enabled: s.stickyScroll },
 			bracketPairColorization: { enabled: s.bracketColors },
@@ -360,6 +367,18 @@ export class EditorComponent {
 		}
 	}
 
+	/**
+	 * Decided from the editor's width alone (never from whether the minimap is showing), so it cannot flip back and forth.
+	 * The minimap takes a little over a pixel per column of code it sits beside.
+	 */
+	private fitMinimap(info: Monaco.editor.EditorLayoutInfo, charWidth: number): void {
+		const roomy = info.width >= info.contentLeft + info.verticalScrollbarWidth + MINIMAP_COLUMNS * (charWidth + 1.2);
+		if (roomy !== this._roomy) {
+			this._roomy = roomy;
+			this._editor?.updateOptions({ minimap: { enabled: this._settings.settings().minimap && roomy } });
+		}
+	}
+
 	private applySettings(): void {
 		this._editor?.updateOptions(this.options());
 		this.indent(this._editor?.getModel() ?? null, this._shown);
@@ -398,6 +417,7 @@ export class EditorComponent {
 
 	onDestroy(): void {
 		this._gone = true;
+		this._search.selection = null;
 		window.clearInterval(this._crashClock);
 		this._crashMarks = null;
 		if (this._shown && this._editor) {
@@ -444,6 +464,17 @@ export class EditorComponent {
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Digit0, () => this._settings.nudgeFont(0));
 		editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void this.saveShown());
 		this._editor = editor;
+		// Find in files starts from what is selected here, when that is part of one line.
+		this._search.selection = () => {
+			const range = editor.getSelection();
+			const text = range && !range.isEmpty() && range.startLineNumber === range.endLineNumber ? (editor.getModel()?.getValueInRange(range) ?? '') : '';
+			return text.length <= 200 ? text : '';
+		};
+		// The minimap gives way when it would cost the code its columns.
+		// `fontInfo` is typed `any`: a wrong name here reads as NaN and the minimap never comes back.
+		const charWidth = (): number => Number((editor.getOption(monaco.editor.EditorOption.fontInfo) as Monaco.editor.FontInfo).typicalHalfwidthCharacterWidth) || 8;
+		this.fitMinimap(editor.getLayoutInfo(), charWidth());
+		editor.onDidLayoutChange((info) => this.fitMinimap(info, charWidth()));
 		this.ready = true;
 		void this.show();
 	}

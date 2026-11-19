@@ -68,6 +68,13 @@ function isWindows(): boolean {
 	return typeof navigator !== 'undefined' && /Win/i.test(navigator.platform);
 }
 
+/**
+ * Lines a terminal keeps above the screen. Every line is held at the terminal's full width whatever
+ * it says, so this is what a terminal costs: measured at 10,000 lines, three terminals with long
+ * output added 180 MB to the web view (docs/daily-driver.md, step 5).
+ */
+const SCROLLBACK = 5000;
+
 @Injectable()
 export class ScreenPool {
 	private readonly _screens = new Map<string, Screen>();
@@ -109,7 +116,7 @@ export class ScreenPool {
 			fontSize: this.settings.settings().terminalFontSize,
 			theme: xtermTheme(),
 			cursorBlink: true,
-			scrollback: 10000,
+			scrollback: SCROLLBACK,
 			// Programs pick their own colours; this keeps them readable on either theme.
 			minimumContrastRatio: 4.5,
 		});

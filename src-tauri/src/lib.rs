@@ -6,6 +6,7 @@ mod conversation;
 mod dev;
 mod error;
 mod files;
+mod history;
 mod git;
 mod init;
 mod investigate;
@@ -62,6 +63,12 @@ pub fn run() {
             let config = config::AppConfig::load(&config_path).unwrap_or_default();
             app.manage(AppState { config_path, config: Mutex::new(config), origins: Mutex::default() });
             app.manage(agent::Agents::default());
+            // Agent sessions live with the app's data; a test instance keeps them with its own settings.
+            let data_dir = match std::env::var("STUDIO_CONFIG_DIR") {
+                Ok(dir) if cfg!(debug_assertions) && !dir.is_empty() => PathBuf::from(dir),
+                _ => app.path().app_data_dir()?,
+            };
+            app.manage(history::History::at(data_dir.join("agent-sessions")));
             app.manage(lsp::Lsp::default());
             dev::start(app.handle());
             app.manage(terminal::Terminals::default());
@@ -140,6 +147,8 @@ pub fn run() {
             worktree::worktree_diff,
             worktree::worktree_read,
             agent::agent_available,
+            history::agent_sessions_load,
+            history::agent_session_save,
             agent::agent_start,
             agent::agent_stop,
             lsp::lsp_start,
@@ -189,6 +198,8 @@ pub fn run() {
             commands::files_trash,
             commands::files_import,
             commands::read_file,
+            commands::files_search,
+            commands::files_list,
             commands::write_file,
             host_cli::issues_status,
             host_cli::issues_list,

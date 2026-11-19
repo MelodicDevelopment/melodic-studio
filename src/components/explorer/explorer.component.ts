@@ -8,11 +8,12 @@ import { RepoStore } from '../../services/repo.store';
 import { WorkspaceStore } from '../../services/workspace.store';
 import { ExplorerStore } from '../../services/explorer.store';
 import { TerminalStore } from '../../services/terminal.store';
+import { SearchStore } from '../../services/search.store';
 import { isDesktop, isMac, isWindows, type FileChange, type FileStatus, type OnConflict, type Placed, type TreeEntry } from '../../services/backend.service';
 import { plural } from '../../shared/format';
 import { statusMark } from '../../shared/format';
 import { ctxStyles, listStyles } from '../changes/changes.styles';
-import { symbolSearchOpen } from './symbol-search.component';
+import { openGoTo } from './go-to.component';
 
 const INDENT = 14;
 
@@ -104,6 +105,16 @@ function fileIcon(name: string): string {
 		}
 		.list {
 			padding: 4px 0;
+		}
+		/* Find in files: its box is always there, and while it has text its results take the tree's place. */
+		ms-find-in-files {
+			flex: none;
+		}
+		ms-find-in-files.on {
+			flex: 1;
+		}
+		.list.away {
+			display: none;
 		}
 		.row {
 			gap: 5px;
@@ -221,6 +232,7 @@ export class ExplorerComponent {
 	@Service(ToastService) private readonly _toast!: ToastService;
 	@Service(WorkspaceStore) private readonly _workspace!: WorkspaceStore;
 	@Service(TerminalStore) private readonly _terminals!: TerminalStore;
+	@Service(SearchStore) readonly search!: SearchStore;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
 	elementRef!: HTMLElement;
 
@@ -700,6 +712,7 @@ function explorerTemplate(self: ExplorerComponent) {
 	const root = children.get('');
 	const edit = self.editing;
 	const dragging = new Set(self.dragging);
+	const searching = self.search.active();
 
 	// What git says about each file, and which folders hold a change somewhere below them.
 	const changed = new Map<string, FileStatus>();
@@ -764,14 +777,15 @@ function explorerTemplate(self: ExplorerComponent) {
 		<div class="head">
 			<span class="grow">${store.repo()?.name ?? ''}</span>
 			<ms-ask-button .scope=${'code'}></ms-ask-button>
-			<button class="icon" title=${`Go to a symbol by name (${isMac() ? '⌘T' : 'Ctrl+T'})`} @click=${() => symbolSearchOpen.set(true)}><ml-icon icon="magnifying-glass" size="sm"></ml-icon></button>
+			<button class="icon" title=${`Go to a file by name (${isMac() ? '⌘P' : 'Ctrl+P'}), or a symbol (${isMac() ? '⌘T' : 'Ctrl+T'})`} @click=${() => openGoTo()}><ml-icon icon="magnifying-glass" size="sm"></ml-icon></button>
 			<button class="icon" title="New file" @click=${() => self.startNew('file', newDir(self))}><ml-icon icon="file-plus" size="sm"></ml-icon></button>
 			<button class="icon" title="New folder" @click=${() => self.startNew('folder', newDir(self))}><ml-icon icon="folder-plus" size="sm"></ml-icon></button>
 			<button class="icon" title="Collapse all folders" @click=${() => explorer.collapseAll()}><ml-icon icon="arrows-in-line-vertical" size="sm"></ml-icon></button>
 			<button class="icon" title="Refresh" @click=${() => explorer.rescan()}><ml-icon icon="arrows-clockwise" size="sm"></ml-icon></button>
 		</div>
+		<ms-find-in-files class=${searching ? 'on' : ''}></ms-find-in-files>
 		<div
-			class="list ${self.dropTarget === '' ? 'drop' : ''}"
+			class="list ${self.dropTarget === '' ? 'drop' : ''} ${searching ? 'away' : ''}"
 			tabindex="0"
 			@keydown=${(ev: KeyboardEvent) => self.onKey(ev)}
 			@contextmenu=${(ev: MouseEvent) => self.openMenu(ev, null)}

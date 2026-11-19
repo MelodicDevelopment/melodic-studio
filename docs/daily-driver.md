@@ -41,6 +41,23 @@ shell's resizer in `components/app`.
 Done when: in a 1500 px window with the sidebar and the Claude pane both open, the editor shows 100 columns or more;
 in a 1100 px window nothing overlaps and the editor is still usable.
 
+**Built 2026-11-19.** The floor is 840 px, not 720: measured in the window, a 720 px main pane shows 75 columns
+(63 px of line numbers and folding, 84 px of minimap, 7.4 px a column), and 100 columns need 840 px with the minimap
+out of the way. So the editor also drops its minimap while it is too narrow to show 100 columns beside it (under
+about 940 px) and brings it back when it is wider. The Claude pane is a third of the window until dragged, never
+under 320 px, and is not shown beside the main pane when the two do not fit (with a 300 px sidebar: windows under
+1462 px); its toolbar button then swaps the main pane for the workspace alone. Its bar folds its labels to icons
+under 520 px. Double-clicking the pane's edge goes back to a third.
+
+| Window | Main pane | Claude pane | Editor columns | Minimap |
+|---|---|---|---|---|
+| 1500 | 840 | 358 | 102 | off |
+| 1500, Claude pane hidden | 1199 | | 134 | on |
+| 1462 | 840 | 320 | 102 | off |
+| 1460 | 1159 | hidden | 129 | on |
+| 1250 | 949 | hidden | 102 | on |
+| 1100 | 799 | hidden | 97 | off |
+
 ### 2. Find in files
 
 Cmd/Ctrl+Shift+F. A search box at the top of the Files tab's sidebar that swaps the tree for results while it has
@@ -56,6 +73,13 @@ an ignored folder). A search in flight is dropped when the text changes.
 Done when: searching this repository for `GIT_LITERAL_PATHSPECS` answers in well under a second and every result
 opens at the right line.
 
+**Built 2026-11-19.** `Git::grep` (git.rs) behind `files_search`; `shared/search.ts`, `SearchStore`,
+`ms-find-in-files`. In the window, on this repository: `GIT_LITERAL_PATHSPECS` answered in 31 ms and all six results
+opened with the cursor on the match; a one-letter search stopped at 2,000 lines in about half a second. The box also
+starts from the editor's selection, Enter searches again, Esc clears, and the arrow keys walk the results. Not
+built: include and exclude patterns, replace, searching inside submodules (`git grep` cannot combine that with new
+files), and results that refresh by themselves when files change.
+
 ### 3. Open a file by name
 
 Cmd/Ctrl+P. Reuse the box go-to-symbol already has (`components/explorer/symbol-search.component.ts`) and make it one
@@ -66,6 +90,14 @@ The file list is `git ls-files --cached --others --exclude-standard` for the act
 read again when the status changes. It is also what step 7 needs to know which languages a checkout has.
 
 Done when: any file of this repository is open within three or four keystrokes and Enter.
+
+**Built 2026-11-19.** `ms-go-to` (was `ms-symbol-search`): files by default, `@` or Cmd/Ctrl+T for symbols,
+`name:12` opens at a line, several words narrow each other. `Git::files` behind `files_list`, `FileIndexStore`
+(the list per checkout, read again each time the box opens; recently opened files in localStorage
+`studio.files.recent`), `shared/fuzzy.ts` (fzy's scoring, the file name weighing most). In the window, on this
+repository's 234 files: the box opens in 24 ms, a ranking takes 0.1 ms, 216 files come first for some three or four
+letters (the start of the name, or initials), and 222 are in the first five for the first four letters of their
+name. The rest are look-alikes that take a letter more or an arrow key: the icon sizes, `x.test.ts` beside `x.ts`.
 
 ### 4. Agent history out of browser storage
 
@@ -80,6 +112,18 @@ pair of commands beside `config.rs`.
 Done when: a transcript of a few thousand items streams without the window stuttering, survives a restart whole, and
 a full disk or an unwritable folder shows a message.
 
+**Built 2026-11-19.** `history.rs` (`agent_sessions_load`, `agent_session_save`; `<app data>/agent-sessions/<id>.json`,
+written beside the file and moved over it), `AgentsStore.save` / `persist` / `write` / `restore`. The transcript also
+shows only its last 300 items with "Show earlier", because rendering every item on every event was the other half of
+the stutter. In the window: two sessions seeded in localStorage (one of 3,000 items) and one really left there by an
+earlier build were moved to files and the key removed; 300 events streamed into the long one over 18 s gave a worst
+frame of 54 ms (two over 50 ms, none over 100), one write every 550 ms of at most 31 ms for 357 KB; after a restart
+all 3,600 items were back; with the folder read-only one message appeared ("Agent history is not being saved", with
+the reason), the file kept its last good copy, and the next change after the folder was writable again was saved; a
+reload in the middle of a turn kept the item that had not been written yet. Not run: a disk that is really full (the
+same path as the read-only folder), and quitting the app mid-turn rather than reloading the window (a write waits
+half a second at most, so that is what could be lost).
+
 ### 5. Memory: measure, then cut
 
 Measure first, in a release build (`tauri build` with `tauri.no-updater.conf.json`): the web view after startup,
@@ -93,6 +137,41 @@ after ten idle minutes.
 
 Done when: the numbers are in this file, before and after, and the web view after an ordinary hour is at most half
 of what it was.
+
+**Built 2026-11-19.** Measured on macOS as the footprint of the window's WebContent process, in a debug-profile
+build that carries the production page (`tauri build --debug --no-bundle`): a release build cannot be driven by
+script, and the page is what the web view's memory depends on. One scripted session, each reading taken after the
+step before it, everything left open. A TypeScript language server was installed and answering.
+
+| | Before | After |
+|---|---|---|
+| Startup, a repository on the Changes tab | 167 MB | 167 MB |
+| Files tab, 6 files open | 348 MB | 215 MB |
+| Three repositories, 6 files open in each | 395 MB | 221 MB |
+| A 3,600-item agent transcript on screen | 371 MB | 196 MB |
+| Three terminals with their scrollback full | 549 MB | 317 MB |
+| The same, three minutes later | 549 MB | 265 MB |
+
+What held it, found by opening one kind of file at a time (the welcome screen alone is 107 MB; the Files tab with
+nothing open 140 MB; one Markdown file 184 MB; one TypeScript file 342 MB):
+
+- Monaco's built-in TypeScript worker: about 160 MB from the first TypeScript or JavaScript file, never given back
+  (350 MB flat over four idle minutes), and kept even after a language server had taken over. It is now stopped
+  when a server takes over, and when no such file has been on screen for two minutes; it starts again when one is
+  (the built-in checks answered 2 s after coming back).
+- Terminal scrollback: 10,000 lines cost about 60 MB a terminal with long output. Now 5,000 (`SCROLLBACK` in
+  `services/screens.ts`).
+- The transcript rendering every item: cut in step 4 (the last 300, "Show earlier"), so both columns have it.
+- Not holders, as it turned out: Monaco models kept for repositories off screen (they are dropped now, files with
+  unsaved edits excepted, with no measurable difference) and sessions held whole in memory (a 3,600-item
+  transcript is 0.4 MB).
+
+Also built: a repository's language servers are stopped when it is no longer open in any tab.
+
+Not done, and where the rest is: the 107 MB floor is the web view with the whole app loaded at startup, which only
+loading components on demand would lower. Without a language server installed, Monaco's worker still holds its
+160 MB while a TypeScript file is on screen. Nothing was measured over a real hour, in a release build, or with a
+window that was in front the whole time.
 
 ### 6. Fewer surfaces
 

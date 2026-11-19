@@ -89,6 +89,8 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 /** Main pane of the Agents tab: one session's transcript and the box to send it more, a new question, or a comparison of attempts. */
 /** How many of the errors, and of the places something is used, are listed before "and N more". */
 const PROBLEMS_SHOWN = 6;
+/** The transcript shows its last items; a long one is not rendered whole on every streamed event. */
+const SHOWN_ITEMS = 300;
 const USES_SHOWN = 8;
 
 const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
@@ -211,6 +213,8 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 		}
 		const running = s.status === 'running';
 		const ask = s.kind === 'ask';
+		// Items before this one wait behind "Show earlier".
+		const hidden = Math.max(0, s.items.length - SHOWN_ITEMS - self.earlier);
 		const mainBranch = agents.worktrees().find((w) => w.isMain)?.branch;
 		const links = linking(self, s);
 		const follow = self.follow;
@@ -241,7 +245,8 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 			${checkStrip(self, s)}
 
 			<div class="log">
-				${s.items.map((item) =>
+				${hidden ? html`<button class="earlier" @click=${() => self.showEarlier()}>Show earlier (${hidden.toLocaleString('en-US')} more)</button>` : ''}
+				${s.items.slice(hidden).map((item) =>
 					item.kind === 'tool'
 						? html`<div class="tool"><ml-icon icon=${TOOL_ICONS[item.text] ?? 'wrench'} size="sm"></ml-icon><b>${item.text}</b><span>${item.detail ?? ''}</span></div>`
 						: item.kind === 'text'
@@ -454,6 +459,26 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 			user-select: text;
 			-webkit-user-select: text;
 		}
+		.earlier {
+			all: unset;
+			align-self: center;
+			flex: none;
+			padding: 4px 12px;
+			border: 1px solid var(--ml-color-border);
+			border-radius: 999px;
+			font-size: 12px;
+			color: var(--ml-color-text-secondary);
+			user-select: none;
+			-webkit-user-select: none;
+		}
+		.earlier:hover {
+			background: var(--ms-hover);
+			color: var(--ml-color-text);
+		}
+		.earlier:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: 1px;
+		}
 		.msg {
 			max-width: 760px;
 			white-space: pre-wrap;
@@ -585,18 +610,38 @@ export class AgentSessionComponent {
 	/** Accept fix: the message the fix is committed with, and whether that commit is being made. */
 	fixMessage = '';
 	accepting = false;
+	/** How many more items than the last `SHOWN_ITEMS` the transcript shows ("Show earlier"). */
+	earlier = 0;
 	private _seen = 0;
 	private _shown: string | null = null;
+	/** Set by "Show earlier": how far the view was from the end, to put it back there once the older items are in. */
+	private _fromEnd: number | null = null;
+
+	/** Older items come in above what is on screen, which stays where it is. */
+	showEarlier(): void {
+		const log = this.elementRef.shadowRoot?.querySelector('.log');
+		this._fromEnd = log ? log.scrollHeight - log.scrollTop : null;
+		this.earlier += SHOWN_ITEMS;
+	}
 
 	/** Keep the newest message in view as the transcript grows, and count what is on screen as read. */
 	onRender(): void {
 		const agents = this.agents;
 		const s = agents.asking() || agents.comparing() ? null : agents.selected();
 		const count = s?.items.length ?? 0;
-		if (count !== this._seen || (s?.id ?? null) !== this._shown) {
+		const log = this.elementRef.shadowRoot?.querySelector('.log');
+		if ((s?.id ?? null) !== this._shown && this.earlier) {
+			this.earlier = 0; // another session starts from its last items again
+		}
+		if (this._fromEnd !== null) {
+			if (log) {
+				log.scrollTop = log.scrollHeight - this._fromEnd;
+			}
+			this._fromEnd = null;
+			this._seen = count;
+		} else if (count !== this._seen || (s?.id ?? null) !== this._shown) {
 			this._seen = count;
 			this._shown = s?.id ?? null;
-			const log = this.elementRef.shadowRoot?.querySelector('.log');
 			if (log) {
 				log.scrollTop = log.scrollHeight;
 			}

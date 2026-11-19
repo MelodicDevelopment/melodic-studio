@@ -84,8 +84,8 @@ export const appStyles = () => css`
 	}
 	.upper ms-workspace {
 		flex: none;
-		/* Whatever width was saved, the main pane keeps some room. */
-		max-width: calc(100% - 280px);
+		/* Its width comes from WorkspaceStore.width, which leaves the main pane its floor. */
+		min-width: 0;
 	}
 	.upper.full ms-workspace {
 		flex: 1;

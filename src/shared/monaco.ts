@@ -98,6 +98,22 @@ const _inUse = new Set<Scripted>();
 /** Per language: undo the registrations made by `registerBuiltIn`. */
 const _registered = new Map<string, Monaco.IDisposable[]>();
 let _registerBuiltIn: ((language: Scripted) => Promise<void>) | null = null;
+/** Stops Monaco's TypeScript and JavaScript workers; they start again by themselves when something asks them. */
+let _stopWorkers: (() => void) | null = null;
+/**
+ * The built-in features are parked: no TypeScript or JavaScript file has been on screen for
+ * `REST_AFTER_MS`, so the providers are taken down and the workers stopped until one is again.
+ * Monaco never stops this worker by itself, and it holds about 160 MB (measured, docs/daily-driver.md step 5).
+ */
+let _resting = false;
+const REST_AFTER_MS = 2 * 60_000;
+
+function takeDownBuiltIn(): void {
+	_registered.forEach((handles) => handles.forEach((handle) => handle.dispose()));
+	_registered.clear();
+	// After the providers: one of them asking the worker something would start it again.
+	_stopWorkers?.();
+}
 
 /**
  * Monaco registers its TypeScript and JavaScript providers once, when the first such file is opened,
@@ -113,7 +129,7 @@ function ownTypeScriptFeatures(monaco: MonacoApi): void {
 	_registerBuiltIn = async (language) => {
 		const { defaults, worker: getWorker } = sides[language];
 		const mode = await import('monaco-editor/languages/features/typescript/tsMode.js');
-		if (!_builtIn || _registered.has(language)) {
+		if (!_builtIn || _resting || _registered.has(language)) {
 			return;
 		}
 		// The worker exists a moment after the language is first used; ask again until it does.
@@ -161,6 +177,32 @@ function ownTypeScriptFeatures(monaco: MonacoApi): void {
 			}
 		}
 	});
+	// Monaco's worker manager stops its worker whenever the language's settings change, which is the
+	// only way in from outside: setting the compiler options to what they are does that and nothing else.
+	_stopWorkers = () => Object.values(sides).forEach(({ defaults }) => defaults.setCompilerOptions(defaults.getCompilerOptions()));
+	const scripted = (): boolean =>
+		monaco.editor.getEditors().some((editor) => {
+			const language = editor.getModel()?.getLanguageId();
+			return language === 'typescript' || language === 'javascript';
+		});
+	let lastSeen = Date.now();
+	const look = (): void => {
+		if (scripted()) {
+			lastSeen = Date.now();
+			if (_resting) {
+				_resting = false;
+				if (_builtIn) {
+					_inUse.forEach((language) => void _registerBuiltIn?.(language));
+				}
+			}
+		} else if (!_resting && Date.now() - lastSeen > REST_AFTER_MS) {
+			_resting = true;
+			takeDownBuiltIn();
+		}
+	};
+	// Back at once when such a file is shown; the timer only notices that none has been for a while.
+	monaco.editor.onDidCreateEditor((editor) => editor.onDidChangeModel(() => queueMicrotask(look)));
+	window.setInterval(look, 20_000);
 	for (const language of ['typescript', 'javascript'] as const) {
 		const { defaults } = sides[language];
 		defaults.setModeConfiguration({ ...defaults.modeConfiguration, ...SWITCHED });
@@ -184,8 +226,8 @@ export function setBuiltInTypeScript(on: boolean): void {
 	}
 	_builtIn = on;
 	if (!on) {
-		_registered.forEach((handles) => handles.forEach((handle) => handle.dispose()));
-		_registered.clear();
+		// A language server answers from here on. The worker that answered until it came up is not needed again.
+		takeDownBuiltIn();
 		return;
 	}
 	// A language not in use yet is registered when its first file opens.

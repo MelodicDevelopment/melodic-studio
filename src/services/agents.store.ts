@@ -21,7 +21,7 @@ import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
 import { DialogService } from '@melodicdev/components/dialog';
-import { BackendService, asAppError, type AgentDone, type AgentEvent, type AgentMode, type InvestigateApproval, type InvestigateProgress, type InvestigateStarted, type RunTarget, type Worktree, type WorktreeDiff } from './backend.service';
+import { BackendService, asAppError, isDesktop, type AgentDone, type AgentEvent, type AgentMode, type InvestigateApproval, type InvestigateProgress, type InvestigateStarted, type RunTarget, type Worktree, type WorktreeDiff } from './backend.service';
 import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
 import { WorkspaceStore } from './workspace.store';
@@ -167,7 +167,8 @@ const KEY = 'studio.agents';
 const ALLOW_KEY = 'studio.investigate.allow';
 /** How many times an investigation is sent back to remove leftover recording before its report is shown without a fix. */
 const MAX_CLEANUPS = 2;
-const MAX_ITEMS = 400;
+/** While a turn streams, its session is written at most this often; when the turn ends, at once. */
+const SAVE_EVERY_MS = 500;
 export const MAX_ATTEMPTS = 3;
 
 /** Tool inputs worth showing beside the tool name, in order of preference. */
@@ -273,9 +274,20 @@ export function lastSaid(s: AgentSession): string {
 	return '';
 }
 
-function load(): AgentSession[] {
+/** What versions before 0.6 kept in browser storage: moved to files once (`AgentsStore.restore`), then removed. */
+function legacy(): unknown[] {
 	try {
-		const sessions = JSON.parse(localStorage.getItem(KEY) ?? '[]') as Partial<AgentSession>[];
+		const sessions = JSON.parse(localStorage.getItem(KEY) ?? '[]') as unknown;
+		return Array.isArray(sessions) ? sessions : [];
+	} catch {
+		return [];
+	}
+}
+
+/** Saved sessions as the app uses them: fields newer than a session filled in, and nothing left "running". */
+function revive(saved: unknown[]): AgentSession[] {
+	try {
+		const sessions = saved as Partial<AgentSession>[];
 		return sessions
 			.filter((s): s is Partial<AgentSession> & Pick<AgentSession, 'id' | 'repoId' | 'cwd'> => !!s && typeof s.id === 'string' && typeof s.repoId === 'string' && typeof s.cwd === 'string')
 			.map((s) => ({
@@ -369,7 +381,8 @@ function readCheckSetting(): boolean {
 
 @Injectable()
 export class AgentsStore {
-	readonly sessions = signal<AgentSession[]>(load());
+	/** Empty until `restored` resolves: the sessions are read from files in the app's data folder. */
+	readonly sessions = signal<AgentSession[]>([]);
 	readonly selectedId = signal<string | null>(null);
 	readonly worktrees = signal<Worktree[]>([]);
 	/** Claude Code's version; null when the CLI is missing, undefined until checked. */
@@ -416,6 +429,14 @@ export class AgentsStore {
 	readonly unread = computed<number>(() => this.sessions().filter((s) => s.unread).length);
 
 	private _listening: Promise<void> | null = null;
+	/** Sessions changed since they were last written, each with the timer that will write it. */
+	private readonly _unsaved = new Map<string, number>();
+	/** Sessions being written right now: one write per session at a time, since async commands can overtake each other. */
+	private readonly _writing = new Map<string, Promise<void>>();
+	/** Changed again while being written. */
+	private readonly _again = new Set<string>();
+	/** The last write failed and the user has been told; said again only after one succeeds in between. */
+	private _saveFailed = false;
 	/** Sessions with a Claude Code process that has not reported back yet. */
 	private readonly _live = new Set<string>();
 	private readonly _waiting = new Map<string, (() => void)[]>();
@@ -452,6 +473,7 @@ export class AgentsStore {
 
 	/** Called when anything showing agents appears (the Agents tab, the toolbar's board button). Safe to call again. */
 	async init(): Promise<void> {
+		await this.restored;
 		await this.listen();
 		await this.loadWorktrees();
 	}
@@ -472,14 +494,116 @@ export class AgentsStore {
 		}
 	}
 
+	/**
+	 * The new list of sessions. Whatever differs from the old one is written to its file: at once
+	 * when the session is not mid-turn (a turn ended, a session was made, removed or marked),
+	 * otherwise within `SAVE_EVERY_MS`, so a stream of events is a write every half second at most.
+	 */
 	private save(sessions: AgentSession[]): void {
+		const before = new Map(this.sessions().map((s) => [s.id, s]));
 		this.sessions.set(sessions);
-		try {
-			localStorage.setItem(KEY, JSON.stringify(sessions.map((s) => ({ ...s, items: s.items.slice(-MAX_ITEMS) }))));
-		} catch {
-			/* storage full or blocked: sessions still work until the window closes */
+		for (const s of sessions) {
+			if (before.get(s.id) !== s) {
+				this.persist(s.id, s.status === 'running' ? SAVE_EVERY_MS : 0);
+			}
+			before.delete(s.id);
+		}
+		for (const id of before.keys()) {
+			this.persist(id, 0); // removed: its file goes
 		}
 	}
+
+	/** Write a session within `delay` ms. A write already waiting is brought forward, never pushed back. */
+	private persist(id: string, delay: number): void {
+		if (delay === 0) {
+			void this.write(id);
+		} else if (!this._unsaved.has(id)) {
+			this._unsaved.set(id, window.setTimeout(() => void this.write(id), delay));
+		}
+	}
+
+	/** One session to its file, as it is now (or its file removed when the session is gone). */
+	private write(id: string): Promise<void> {
+		window.clearTimeout(this._unsaved.get(id));
+		this._unsaved.delete(id);
+		const running = this._writing.get(id);
+		if (running) {
+			this._again.add(id);
+			return running;
+		}
+		const run = (async () => {
+			do {
+				this._again.delete(id);
+				const session = this.find(id);
+				try {
+					await this.backend.agentSessionSave(id, session ? JSON.stringify(session) : null);
+					this._saveFailed = false;
+				} catch (e) {
+					// Nothing fails silently: the session is still in the window, and the next change tries again.
+					if (!this._saveFailed) {
+						this._saveFailed = true;
+						this.toast.show({ variant: 'error', title: 'Agent history is not being saved', message: `${asAppError(e).message.slice(0, 300)} The sessions stay here until the app closes; they are written again as soon as that works.`, duration: 0 });
+					}
+				}
+			} while (this._again.has(id));
+		})().finally(() => this._writing.delete(id));
+		this._writing.set(id, run);
+		return run;
+	}
+
+	/** Everything not yet written, now: before the window goes, and for scripts that want to look at the files. */
+	async flush(): Promise<void> {
+		await Promise.all([...this._unsaved.keys()].map((id) => this.write(id)));
+		await Promise.all([...this._writing.values()]);
+	}
+
+	/**
+	 * Read the saved sessions, once. What an earlier version kept in browser storage is moved to
+	 * files the first time, and only removed from there when every one of them was written.
+	 */
+	private async restore(): Promise<void> {
+		// The window going away (closed, reloaded) takes what was not written yet: at most half a second of a turn.
+		window.addEventListener('pagehide', () => void this.flush());
+		window.addEventListener('beforeunload', () => void this.flush());
+		const saved: unknown[] = [];
+		const unreadable: string[] = [];
+		try {
+			const stored = await this.backend.agentSessionsLoad();
+			unreadable.push(...stored.unreadable);
+			for (const text of stored.sessions) {
+				try {
+					saved.push(JSON.parse(text));
+				} catch {
+					unreadable.push('a session file that is not JSON');
+				}
+			}
+		} catch (e) {
+			this.toast.show({ variant: 'error', title: 'Agent history could not be read', message: asAppError(e).message.slice(0, 300), duration: 0 });
+		}
+		const have = new Set(saved.map((s) => (s as { id?: unknown } | null)?.id));
+		const old = isDesktop() ? legacy() : [];
+		const moving = revive(old.filter((s) => !have.has((s as { id?: unknown } | null)?.id)));
+		// A session started while this was reading is newer than anything read.
+		const started = this.sessions();
+		const read = [...revive(saved), ...moving].filter((s) => !started.some((x) => x.id === s.id));
+		this.sessions.set([...read, ...started]);
+		if (unreadable.length) {
+			this.toast.show({ variant: 'warning', title: `${unreadable.length} saved agent session${unreadable.length === 1 ? '' : 's'} could not be read`, message: `${unreadable.slice(0, 3).join(', ')}. The file${unreadable.length === 1 ? ' is' : 's are'} left where ${unreadable.length === 1 ? 'it is' : 'they are'}.`, duration: 0 });
+		}
+		if (old.length) {
+			await Promise.all(moving.map((s) => this.write(s.id)));
+			if (!this._saveFailed) {
+				try {
+					localStorage.removeItem(KEY);
+				} catch {
+					/* blocked storage */
+				}
+			}
+		}
+	}
+
+	/** Resolves when the saved sessions are in `sessions`. */
+	readonly restored: Promise<void> = this.restore();
 
 	/** `touch` false leaves "how long ago" alone: marking something as seen is not activity. */
 	private update(id: string, change: (s: AgentSession) => AgentSession, touch = true): void {

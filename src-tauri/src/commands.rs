@@ -568,6 +568,25 @@ pub async fn list_dir(state: State<'_, AppState>, id: String, path: String) -> R
     crate::files::list_dir(&repo(&state, &id)?, &path)
 }
 
+/// Opening a file by name lists the checkout's files; a checkout with more than this is cut there, and says so.
+const FILES_LIMIT: usize = 200_000;
+
+#[tauri::command]
+pub async fn files_list(state: State<'_, AppState>, id: String) -> Result<crate::git::FileList> {
+    let git = repo(&state, &id)?;
+    tauri::async_runtime::spawn_blocking(move || git.files(FILES_LIMIT)).await.map_err(|e| AppError::msg(format!("Listing the files stopped unexpectedly: {e}")))?
+}
+
+/// Find in files, in the active checkout. More matching lines than this are not sent; the answer says so.
+const SEARCH_LIMIT: usize = 2000;
+
+#[tauri::command]
+pub async fn files_search(state: State<'_, AppState>, id: String, pattern: String, options: crate::git::SearchOptions) -> Result<crate::git::SearchResult> {
+    let git = repo(&state, &id)?;
+    // git reads the whole checkout: off the thread that answers the window.
+    tauri::async_runtime::spawn_blocking(move || git.grep(&pattern, &options, SEARCH_LIMIT)).await.map_err(|e| AppError::msg(format!("The search stopped unexpectedly: {e}")))?
+}
+
 #[tauri::command]
 pub async fn read_file(state: State<'_, AppState>, id: String, path: String) -> Result<crate::files::FileContent> {
     crate::files::read_file(&repo(&state, &id)?, &path)

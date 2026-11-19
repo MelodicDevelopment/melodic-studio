@@ -250,6 +250,8 @@ export class LspService {
 	private _hintsTimer = 0;
 	/** Checks under way, counted by checkout: the last one out stops the servers it started. */
 	private readonly _checks = new Map<string, number>();
+	/** The checkouts each open repository tab has shown: its main checkout and the worktrees it looked at. */
+	private _tabRoots = new Map<string, string[]>();
 
 	constructor() {
 		effect(() => {
@@ -262,6 +264,10 @@ export class LspService {
 			this.repos.repo();
 			this.syncBuiltIns();
 			untracked(() => this.shown());
+		});
+		effect(() => {
+			const open = this.repos.repoTabList();
+			untracked(() => this.tabsSeen(open));
 		});
 		effect(() => {
 			const status = this.repos.status();
@@ -398,6 +404,29 @@ export class LspService {
 			this._monaco?.editor.getModels().forEach((model) => void this.opened(model));
 		}
 		this._onScreen = root;
+	}
+
+	/**
+	 * A repository that is no longer open in any tab (its tab was closed, another repository took its
+	 * place, or it was removed) has its servers stopped now, not after ten idle minutes. A check in
+	 * flight keeps its own.
+	 */
+	private tabsSeen(open: { id: string; path: string; worktree?: string | null }[]): void {
+		const now = new Map(open.map((r) => [r.id, [r.path, ...(r.worktree ? [r.worktree] : [])]]));
+		const here = this.root()?.root;
+		for (const [id, roots] of this._tabRoots) {
+			if (now.has(id)) {
+				// A worktree the tab looked at earlier is still the tab's.
+				now.set(id, [...new Set([...roots, ...(now.get(id) ?? [])])]);
+				continue;
+			}
+			for (const client of this._clients.values()) {
+				if (client.live && client.root !== here && roots.includes(client.root) && !this._checks.has(client.root)) {
+					void this.backend.lspStop(client.key).catch(() => undefined);
+				}
+			}
+		}
+		this._tabRoots = now;
 	}
 
 	/** Stop the servers of checkouts nobody has looked at for a while. A check in flight keeps its own. */

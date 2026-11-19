@@ -5,7 +5,8 @@
  */
 import type { RepoOrigin } from '../shared/repo-groups';
 import { Injectable } from '@melodicdev/core/injection';
-import { demoFileOp, demoListDir, demoReadFile, demoWriteFile } from './demo-files';
+import { demoFileOp, demoFiles, demoListDir, demoReadFile, demoSearch, demoWriteFile } from './demo-files';
+import { SEARCH_LIMIT, type SearchOptions, type SearchResult } from '../shared/search';
 import { demoProgram, demoTerminal } from './demo-terminal';
 import { DEMO_AFTER, DEMO_BEFORE, DEMO_DENIED, DEMO_REPORT, DEMO_TARGETS, demoApproval, demoFix, demoReplay, demoRunScript } from './demo-investigate';
 import { demoHost, demoPullRequestAnswer } from './demo-host';
@@ -515,6 +516,17 @@ export function asAppError(e: unknown): AppError {
 	return { kind: 'error', message: e instanceof Error ? e.message : String(e) };
 }
 
+const DEMO_SESSIONS_KEY = 'studio.agents';
+
+function demoSessions(): { id: string }[] {
+	try {
+		const all = JSON.parse(localStorage.getItem(DEMO_SESSIONS_KEY) ?? '[]') as unknown;
+		return Array.isArray(all) ? all.filter((s): s is { id: string } => !!s && typeof (s as { id?: unknown }).id === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
 @Injectable()
 export class BackendService {
 	private _invoke: (<T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) | null = null;
@@ -603,6 +615,10 @@ export class BackendService {
 	/** Open a web address in the user's browser. */
 	openUrl(url: string) { return this.call<void>('plugin:opener|open_url', { url }); }
 	agentAvailable() { return this.call<string | null>('agent_available'); }
+	/** Agent sessions as they were saved (each one's JSON text), from files in the app's data folder; `unreadable` names files that are there but could not be read. */
+	agentSessionsLoad() { return this.call<{ sessions: string[]; unreadable: string[] }>('agent_sessions_load'); }
+	/** Keep one session's JSON text, or with null forget the session. Rejects when it cannot be written (a full disk, a folder that cannot be written). */
+	agentSessionSave(id: string, session: string | null) { return this.call<void>('agent_session_save', { id, session }); }
 	agentStart(id: string, cwd: string, key: string, prompt: string, mode: AgentMode, resume: string | null, options: AgentRunOptions | null = null) { return this.call<void>('agent_start', { id, cwd, key, prompt, mode, resume, options }); }
 	agentStop(key: string) { return this.call<void>('agent_stop', { key }); }
 	/** Null when no server for that language is installed (and always in the browser preview). */
@@ -652,6 +668,10 @@ export class BackendService {
 	}
 	listDir(id: string, path: string) { return this.call<TreeEntry[]>('list_dir', { id, path }); }
 	readFile(id: string, path: string) { return this.call<FileContent>('read_file', { id, path }); }
+	/** Every file of the active checkout that git tracks or would add, for opening one by name. */
+	listFiles(id: string) { return this.call<{ paths: string[]; truncated: boolean }>('files_list', { id }); }
+	/** Find in files, in the active checkout: `git grep` over tracked and new files. The native side stops at `SEARCH_LIMIT` lines. */
+	searchFiles(id: string, pattern: string, options: SearchOptions) { return this.call<SearchResult>('files_search', { id, pattern, options }); }
 	/** A file of a checkout that need not be the active one (`path`: the main checkout or a worktree of the repository). */
 	worktreeRead(id: string, path: string, file: string, rev?: string) { return this.call<FileContent>('worktree_read', { id, path, file, rev }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
@@ -1442,6 +1462,14 @@ class DemoBackend {
 				return;
 			case 'agent_available':
 				return '2.1.0 (demo)';
+			// The preview has no data folder: its sessions stay in the browser's storage, as they did everywhere before.
+			case 'agent_sessions_load':
+				return { sessions: demoSessions().map((s) => JSON.stringify(s)), unreadable: [] };
+			case 'agent_session_save': {
+				const rest = demoSessions().filter((s) => s.id !== args.id);
+				localStorage.setItem(DEMO_SESSIONS_KEY, JSON.stringify(args.session ? [...rest, JSON.parse(String(args.session))] : rest));
+				return;
+			}
 			case 'agent_start': {
 				const key = String(args.key);
 				this.pending.delete(key);
@@ -1553,6 +1581,10 @@ class DemoBackend {
 				return demoReadFile(String(args.file ?? args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
+			case 'files_list':
+				return { paths: empty ? [] : demoFiles(), truncated: false };
+			case 'files_search':
+				return empty ? { matches: [], truncated: false } : demoSearch(String(args.pattern), args.options as SearchOptions, SEARCH_LIMIT);
 			case 'project_templates':
 			case 'project_create':
 			case 'project_stop':

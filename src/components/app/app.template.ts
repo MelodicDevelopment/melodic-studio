@@ -209,7 +209,7 @@ export function appTemplate(self: AppComponent) {
 	const tab = store.tab();
 	const error = store.statusError();
 	const count = st?.files.length ?? 0;
-	const view = self.workspace.view();
+	const view = self.workspace.shown();
 
 	return html`
 		<ms-repo-tabs></ms-repo-tabs>
@@ -250,7 +250,7 @@ export function appTemplate(self: AppComponent) {
 										${view === 'hidden'
 											? ''
 											: html`
-												<div class="wsresizer" @pointerdown=${self.startWsResize} @pointermove=${self.moveWsResize} @pointerup=${self.endWsResize} @pointercancel=${self.endWsResize}></div>
+												<div class="wsresizer" @pointerdown=${self.startWsResize} @pointermove=${self.moveWsResize} @pointerup=${self.endWsResize} @pointercancel=${self.endWsResize} @dblclick=${() => self.workspace.resetWidth()}></div>
 												<ms-workspace style=${view === 'side' ? `width: ${self.workspace.width()}px` : ''}></ms-workspace>
 											`}
 									</div>
@@ -266,6 +266,6 @@ export function appTemplate(self: AppComponent) {
 		<ms-host-dialogs></ms-host-dialogs>
 		<ms-host-work></ms-host-work>
 		<ms-investigate-start></ms-investigate-start>
-		<ms-symbol-search></ms-symbol-search>
+		<ms-go-to></ms-go-to>
 	`;
 }

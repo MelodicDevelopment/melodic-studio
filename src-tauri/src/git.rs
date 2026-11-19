@@ -1397,6 +1397,173 @@ pub fn repo_name(url: &str) -> String {
     u.rsplit(['/', ':', '\\']).next().unwrap_or("repository").to_string()
 }
 
+/// The files of a checkout, for opening one by name.
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FileList {
+    /// Repository-relative, sorted.
+    pub paths: Vec<String>,
+    /// The checkout has more files than were asked for.
+    pub truncated: bool,
+}
+
+impl Git {
+    /// Every file git knows or would add: tracked ones and new ones, nothing `.gitignore` leaves
+    /// out. A tracked file that was deleted is still listed (the window knows those from the
+    /// status); a submodule is a folder, not a file, and is left out.
+    pub fn files(&self, limit: usize) -> Result<FileList> {
+        // No `--deduplicate` (git 2.31): a conflicted file is listed once per stage, so that is done here.
+        let out = self.run(&["ls-files", "--cached", "--others", "--exclude-standard", "-z"])?;
+        let mut paths: Vec<String> = out.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        if self.dir.join(".gitmodules").is_file() {
+            // `160000 <hash> <stage>\t<path>` is a submodule's entry.
+            let staged = self.run(&["ls-files", "--stage", "-z"])?;
+            let links: std::collections::HashSet<&str> = staged.split('\0').filter(|e| e.starts_with("160000 ")).filter_map(|e| e.split_once('\t').map(|(_, path)| path)).collect();
+            paths.retain(|p| !links.contains(p.as_str()));
+        }
+        let truncated = paths.len() > limit;
+        paths.truncate(limit);
+        Ok(FileList { paths, truncated })
+    }
+}
+
+/// How a search in files reads its text.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchOptions {
+    pub match_case: bool,
+    pub whole_word: bool,
+    /// The text is an extended regular expression rather than itself.
+    pub regex: bool,
+}
+
+/// One matching line. Columns count UTF-16 units from 1, as the editor does.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMatch {
+    pub path: String,
+    pub line: u32,
+    /// Where the line's first match starts.
+    pub column: u32,
+    /// The line to show: leading white space gone, and cut around the match when it is long.
+    pub text: String,
+    /// Where the first match starts in `text` (UTF-16 units from 0).
+    pub start: u32,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub matches: Vec<SearchMatch>,
+    /// There were more matching lines than were asked for.
+    pub truncated: bool,
+}
+
+/// A matching line is shown in one row: this much of it at most, and this much before the match.
+const SEARCH_TEXT: usize = 300;
+const SEARCH_LEAD: usize = 60;
+
+/// One record of `git grep -n --column -z`: `path NUL line NUL column NUL text`.
+fn search_match(record: &[u8]) -> Option<SearchMatch> {
+    let mut parts = record.splitn(4, |b| *b == 0);
+    let path = String::from_utf8_lossy(parts.next()?).to_string();
+    let line: u32 = std::str::from_utf8(parts.next()?).ok()?.parse().ok()?;
+    let column: usize = std::str::from_utf8(parts.next()?).ok()?.parse().ok()?;
+    let text = parts.next()?;
+    // git counts bytes. Split there before decoding, so text that is not UTF-8 cannot move the match.
+    let at = column.saturating_sub(1).min(text.len());
+    let before = String::from_utf8_lossy(&text[..at]);
+    let after = String::from_utf8_lossy(&text[at..]);
+    let lead = before.trim_start();
+    let lead: String = if lead.chars().count() > SEARCH_LEAD + 20 {
+        let skip = lead.chars().count() - SEARCH_LEAD;
+        std::iter::once('…').chain(lead.chars().skip(skip)).collect()
+    } else {
+        lead.to_string()
+    };
+    let rest: String = after.chars().take(SEARCH_TEXT.saturating_sub(lead.chars().count())).collect();
+    Some(SearchMatch {
+        path,
+        line,
+        column: before.encode_utf16().count() as u32 + 1,
+        start: lead.encode_utf16().count() as u32,
+        text: format!("{lead}{}", rest.trim_end()),
+    })
+}
+
+impl Git {
+    /// Find in files: `git grep` over the checkout's tracked files and its new ones, so `.gitignore`
+    /// is respected and binary files are skipped. The text is one argument after `-e`, never part
+    /// of a command line. Stops (and stops git) once `limit` matching lines are read.
+    pub fn grep(&self, pattern: &str, options: &SearchOptions, limit: usize) -> Result<SearchResult> {
+        if pattern.is_empty() {
+            return Ok(SearchResult::default());
+        }
+        if pattern.contains(['\n', '\r', '\0']) {
+            return Err(AppError::msg("A search is one line of text"));
+        }
+        let mut c = base_command();
+        c.current_dir(&self.dir).args(["grep", "--untracked", "--no-color", "-n", "--column", "-I", "-z"]);
+        if !options.match_case {
+            c.arg("-i");
+        }
+        if options.whole_word {
+            c.arg("-w");
+        }
+        c.arg(if options.regex { "-E" } else { "-F" }).arg("-e").arg(pattern);
+        let mut child = c.spawn().map_err(|e| AppError::Git(format!("could not run git: {e}")))?;
+        let stdout = child.stdout.take().ok_or_else(|| AppError::msg("git gave no output"))?;
+        let stderr = child.stderr.take();
+        let mut result = SearchResult::default();
+        // What git says goes wrong is read beside the matches: a pipe nobody reads fills up and stalls git.
+        let complaint = std::thread::scope(|scope| {
+            let errors = scope.spawn(move || {
+                let mut text = String::new();
+                if let Some(mut pipe) = stderr {
+                    let _ = std::io::Read::read_to_string(&mut pipe, &mut text);
+                }
+                text
+            });
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut record = Vec::new();
+            loop {
+                record.clear();
+                match std::io::BufRead::read_until(&mut reader, b'\n', &mut record) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                while matches!(record.last(), Some(b'\n' | b'\r')) {
+                    record.pop();
+                }
+                let Some(found) = search_match(&record) else { continue };
+                if result.matches.len() == limit {
+                    result.truncated = true;
+                    crate::proc::kill_tree(&mut child);
+                    break;
+                }
+                result.matches.push(found);
+            }
+            drop(reader);
+            errors.join().unwrap_or_default()
+        });
+        let status = child.wait()?;
+        // 1 is git's "nothing matched". After we stopped it ourselves the code means nothing.
+        if result.truncated || status.success() || status.code() == Some(1) {
+            return Ok(result);
+        }
+        let complaint = complaint.trim();
+        let complaint = complaint.strip_prefix("fatal: ").unwrap_or(complaint);
+        // "-e option, '(': parentheses not balanced": the part after the pattern is the reason.
+        Err(AppError::Git(match complaint.rsplit_once("': ") {
+            Some((_, reason)) if options.regex => format!("Not a regular expression: {reason}"),
+            _ if complaint.is_empty() => "The search failed".into(),
+            _ => complaint.to_string(),
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2014,6 +2181,96 @@ mod tests {
         assert_eq!(g.status().unwrap().operation, None);
         assert_eq!(summaries(&g), ["One", "Two, now first", "Base"]);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_in_files() {
+        let dir = scratch("grep");
+        let g = Git::at(&dir);
+        let any = SearchOptions::default();
+        let exact = SearchOptions { match_case: true, ..Default::default() };
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "out/\n").unwrap();
+        std::fs::write(dir.join("src").join("a b.txt"), "first line\n\t  let needle = 1; // Needle again\nlast needles\n").unwrap();
+        std::fs::write(dir.join("src").join("flags.txt"), "run with -x --all\r\ncaf\u{e9} \u{1F600} needle\r\n").unwrap();
+        std::fs::write(dir.join("data.bin"), b"needle\0\x9f\x92needle").unwrap();
+        std::fs::write(dir.join("out").join("built.txt"), "needle\n").unwrap();
+        g.commit(&[".gitignore".into(), "src/a b.txt".into(), "data.bin".into()], "One", "", false).unwrap();
+        // `src/flags.txt` is new and not committed: found all the same. `out/` is ignored, `data.bin` binary.
+
+        let found = g.grep("needle", &any, 100).unwrap();
+        assert!(!found.truncated);
+        let lines: Vec<(&str, u32, u32)> = found.matches.iter().map(|m| (m.path.as_str(), m.line, m.column)).collect();
+        assert_eq!(lines, [("src/a b.txt", 2, 8), ("src/a b.txt", 3, 6), ("src/flags.txt", 2, 9)]);
+        // Leading white space is not shown, and `start` points at the match in what is.
+        assert_eq!(found.matches[0].text, "let needle = 1; // Needle again");
+        assert_eq!(found.matches[0].start, 4);
+        // Columns count UTF-16 units (the emoji is two), and a CRLF line ends before its CR.
+        assert_eq!(found.matches[2].text, "caf\u{e9} \u{1F600} needle");
+        assert_eq!(found.matches[2].start, 8);
+
+        assert_eq!(g.grep("Needle", &exact, 100).unwrap().matches.len(), 1);
+        assert_eq!(g.grep("needle", &SearchOptions { whole_word: true, ..Default::default() }, 100).unwrap().matches.len(), 2);
+        // A pattern that looks like an option is still only a pattern.
+        let dash = g.grep("-x", &any, 100).unwrap();
+        assert_eq!(dash.matches.iter().map(|m| (m.path.as_str(), m.line)).collect::<Vec<_>>(), [("src/flags.txt", 1)]);
+        assert_eq!(dash.matches[0].text, "run with -x --all");
+        // Plain text is not a pattern; a regular expression is one when asked for.
+        assert!(g.grep("ne+dles?", &any, 100).unwrap().matches.is_empty());
+        let regex = SearchOptions { regex: true, ..Default::default() };
+        assert_eq!(g.grep("ne+dles$", &regex, 100).unwrap().matches.len(), 1);
+        let bad = g.grep("(", &regex, 100).unwrap_err();
+        assert!(matches!(&bad, AppError::Git(m) if m.starts_with("Not a regular expression: ") && m.len() > 30), "{bad:?}");
+
+        let capped = g.grep("needle", &any, 2).unwrap();
+        assert!(capped.truncated && capped.matches.len() == 2);
+        assert!(g.grep("", &any, 100).unwrap().matches.is_empty());
+        assert!(g.grep("nothing like this", &any, 100).unwrap().matches.is_empty());
+        assert!(g.grep("a\nb", &any, 100).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_long_line_is_cut_around_its_match() {
+        let record = format!("min.js\x001\x00{}\x00{}needle{}", 501, "x".repeat(500), "y".repeat(1000));
+        let m = search_match(record.as_bytes()).unwrap();
+        assert_eq!(m.column, 501);
+        assert!(m.text.starts_with('…') && m.text.chars().count() <= SEARCH_TEXT);
+        assert_eq!(&m.text[m.text.char_indices().nth(m.start as usize).unwrap().0..][..6], "needle");
+    }
+
+    #[test]
+    fn the_files_of_a_checkout() {
+        let dir = scratch("files");
+        let g = Git::at(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "out/\n*.log\n").unwrap();
+        std::fs::write(dir.join("src").join(ODD), "one\n").unwrap();
+        std::fs::write(dir.join("src").join("a b.txt"), "one\n").unwrap();
+        std::fs::write(dir.join("gone.txt"), "one\n").unwrap();
+        std::fs::write(dir.join("out").join("built.js"), "x\n").unwrap();
+        std::fs::write(dir.join("debug.log"), "x\n").unwrap();
+        g.commit(&[".gitignore".into(), format!("src/{ODD}"), "gone.txt".into()], "One", "", false).unwrap();
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        // `src/a b.txt` is new; `out/` and `debug.log` are ignored; `gone.txt` is tracked, so still listed.
+        let mut expected = vec![".gitignore".to_string(), "gone.txt".into(), "src/a b.txt".into(), format!("src/{ODD}")];
+        expected.sort_unstable();
+        let all = g.files(100).unwrap();
+        assert_eq!(all.paths, expected);
+        assert!(!all.truncated);
+
+        let some = g.files(2).unwrap();
+        assert!(some.truncated && some.paths == expected[..2]);
+
+        // A submodule is not a file to open.
+        let head = g.run(&["rev-parse", "HEAD"]).unwrap().trim().to_string();
+        std::fs::write(dir.join(".gitmodules"), "[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = ../lib\n").unwrap();
+        git(&dir, &["update-index", "--add", "--cacheinfo", &format!("160000,{head},vendor/lib")]);
+        let listed = g.files(100).unwrap().paths;
+        assert!(listed.contains(&".gitmodules".to_string()) && !listed.iter().any(|p| p.starts_with("vendor")), "{listed:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

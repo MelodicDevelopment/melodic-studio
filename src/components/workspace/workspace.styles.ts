@@ -287,6 +287,26 @@ export const workspaceStyles = () => css`
 		background: var(--ms-sidebar-bg);
 		border-bottom: 1px solid var(--ml-color-border);
 		font-size: 12px;
+		/* Beside the main pane the workspace can be as narrow as 320 px: the bar's labels fold to their icons. */
+		container-type: inline-size;
+	}
+	@container (max-width: 520px) {
+		.bar .label .text {
+			display: none;
+		}
+		/* The new-worktree form needs the room the title and the summary have. */
+		.bar.forming h2 .text,
+		.bar.forming .summary {
+			display: none;
+		}
+		.bar .newwt {
+			flex: 1;
+		}
+		.bar .newwt input {
+			flex: 1;
+			width: 0;
+			min-width: 48px;
+		}
 	}
 	.bar .tool {
 		height: 28px;

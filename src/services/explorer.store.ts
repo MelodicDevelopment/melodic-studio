@@ -11,6 +11,7 @@ import { RepoStore } from './repo.store';
 import { loadMonaco } from '../shared/monaco';
 import { joinPath } from '../shared/paths';
 import { EditorSettingsStore } from './editor-settings.store';
+import { FileIndexStore } from './file-index.store';
 import { editorConfigFor, parseEditorConfig, type EditorConfig, type ParsedEditorConfig } from '../shared/editorconfig';
 
 export interface OpenFile {
@@ -118,6 +119,7 @@ export class ExplorerStore {
 		if (id !== this._repoId) {
 			if (this._repoId) {
 				this._snapshots.set(this._repoId, { children: this.children(), expanded: this.expanded(), tabs: this.tabs(), active: this.active(), preview: this.preview() });
+				this.rest(this._repoId);
 			}
 			this._repoId = id;
 			const saved = id ? this._snapshots.get(id) : undefined;
@@ -130,6 +132,22 @@ export class ExplorerStore {
 			this.notice.set(null);
 		}
 		void this.rescan();
+	}
+
+	/**
+	 * A checkout went off screen: its editor models go, and with them the copies Monaco's workers
+	 * and the language servers' client keep. The tabs stay, with each file's text as last read and
+	 * its scroll position, so coming back makes the models again. A file with unsaved edits keeps
+	 * its model: the edits and their undo history are only there.
+	 */
+	private rest(checkout: string): void {
+		const prefix = `${checkout}\n`;
+		for (const [key, buf] of this._buffers) {
+			if (key.startsWith(prefix) && buf.model && buf.model.getAlternativeVersionId() === buf.savedVersion) {
+				buf.model.dispose();
+				buf.model = null;
+			}
+		}
 	}
 
 	/** Re-read every folder that is open and every file that has no unsaved edits. */
@@ -220,6 +238,7 @@ export class ExplorerStore {
 			void this.read(path, false);
 		}
 		this.active.set(path);
+		Injector.get(FileIndexStore).opened(path);
 	}
 
 	/**

@@ -23,6 +23,7 @@ import { RepoStore } from './repo.store';
 import { ScreenPool } from './screens';
 import { FAILED_START_MS, folderName } from './terminal.store';
 import { plainSummary } from './agents.store';
+import { MIN_SIDE_W, sideFits, sideWidth } from '../shared/pane-room';
 
 export type ConvKind = 'claude' | 'shell';
 /**
@@ -86,8 +87,6 @@ const VIEWS_KEY = 'studio.workspace.views';
 const WIDTH_KEY = 'studio.workspace.width';
 const MAX_SUBAGENTS = 30;
 const MAX_SAVED = 60;
-export const MIN_WORKSPACE_W = 320;
-const DEFAULT_WORKSPACE_W = 640;
 
 function read<T>(key: string, fallback: T): T {
 	try {
@@ -161,6 +160,12 @@ function asView(value: unknown): WorkspaceView | null {
 	return value === 'hidden' || value === 'side' || value === 'full' ? value : null;
 }
 
+/** A width the user dragged the workspace to, if they ever did. */
+function savedWidth(): number | null {
+	const w = Number(read<unknown>(WIDTH_KEY, null));
+	return Number.isFinite(w) && w > 0 ? Math.max(MIN_SIDE_W, Math.round(w)) : null;
+}
+
 function savedViews(): Record<string, WorkspaceView> {
 	const out: Record<string, WorkspaceView> = {};
 	for (const [repoId, value] of Object.entries(read<Record<string, unknown>>(VIEWS_KEY, {}) ?? {})) {
@@ -187,7 +192,22 @@ export class WorkspaceStore {
 	private readonly _firstView = asView(read<unknown>(VIEW_KEY, 'side')) ?? 'side';
 	/** The open repository's view: each repository tab keeps its own. */
 	readonly view = computed<WorkspaceView>(() => this._views()[this.repos.repo()?.id ?? ''] ?? this._firstView);
-	readonly width = signal(Math.max(MIN_WORKSPACE_W, Number(read<number>(WIDTH_KEY, DEFAULT_WORKSPACE_W)) || DEFAULT_WORKSPACE_W));
+	/** The width the user dragged the pane to; null until they do (a third of the window). */
+	private readonly _dragged = signal<number | null>(savedWidth());
+	/** The width the main pane and this one share, and the window's, as the app shell last measured them. */
+	private readonly _room = signal<{ room: number; window: number } | null>(null);
+	/** Whether the window is wide enough for the workspace beside the main pane (see shared/pane-room.ts). */
+	readonly fits = computed(() => {
+		const r = this._room();
+		return !r || sideFits(r.room);
+	});
+	/** What is on screen: `side` gives way to the main pane while the window is too narrow for both. */
+	readonly shown = computed<WorkspaceView>(() => (this.view() === 'side' && !this.fits() ? 'hidden' : this.view()));
+	/** The workspace's width beside the main pane, which always keeps its floor. */
+	readonly width = computed(() => {
+		const r = this._room();
+		return r ? sideWidth(this._dragged(), r.room, r.window) : (this._dragged() ?? MIN_SIDE_W);
+	});
 	/** The card grid of every conversation instead of the panes (per repository tab, like the view). */
 	readonly overview = computed(() => !!this._overviews()[this.repos.repo()?.id ?? '']);
 	/** The pane new tabs go to and keys act on. */
@@ -270,14 +290,38 @@ export class WorkspaceStore {
 		}
 		this._views.set({ ...this._views(), [repo.id]: view });
 		write(VIEWS_KEY, this._views());
-		if (view !== 'hidden') {
+		if (this.shown() !== 'hidden') {
 			this.markSeen();
 			requestAnimationFrame(() => this.focusActive());
 		}
 	}
 
 	toggle(): void {
-		this.setView(this.view() === 'hidden' ? 'side' : 'hidden');
+		if (this.shown() === 'hidden') {
+			this.reveal();
+		} else {
+			this.setView('hidden');
+		}
+	}
+
+	/** Put the workspace on screen: beside the main pane, or alone when the window has no room for both. */
+	private reveal(): void {
+		if (this.shown() === 'hidden') {
+			this.setView(this.fits() ? 'side' : 'full');
+		}
+	}
+
+	/** The app shell reports the width the two panes share, whenever it changes. */
+	setRoom(room: number, windowWidth: number): void {
+		const was = this.shown();
+		const r = this._room();
+		if (!r || r.room !== room || r.window !== windowWidth) {
+			this._room.set({ room, window: windowWidth });
+		}
+		// The window grew and the workspace is back beside the main pane.
+		if (was === 'hidden' && this.shown() !== 'hidden') {
+			this.markSeen();
+		}
 	}
 
 	/** Something was opened in the main pane (a file clicked): bring it back on screen if the workspace fills the window. */
@@ -287,12 +331,24 @@ export class WorkspaceStore {
 		}
 	}
 
+	/** Dragging the edge. What is kept is what the pane really got, so a drag past the main pane's floor is not remembered. */
 	setWidth(width: number): void {
-		this.width.set(Math.max(MIN_WORKSPACE_W, Math.round(width)));
+		const r = this._room();
+		this._dragged.set(r ? sideWidth(Math.round(width), r.room, r.window) : Math.max(MIN_SIDE_W, Math.round(width)));
 	}
 
 	saveWidth(): void {
-		write(WIDTH_KEY, this.width());
+		write(WIDTH_KEY, this._dragged());
+	}
+
+	/** Back to a third of the window. */
+	resetWidth(): void {
+		this._dragged.set(null);
+		try {
+			localStorage.removeItem(WIDTH_KEY);
+		} catch {
+			/* blocked storage */
+		}
 	}
 
 	showOverview(on: boolean): void {
@@ -446,9 +502,7 @@ export class WorkspaceStore {
 		this.conversations.set([...this.conversations(), conv]);
 		this.save();
 		this.setOverview(false);
-		if (this.view() === 'hidden') {
-			this.setView('side');
-		}
+		this.reveal();
 		this.place(conv.id, pane ?? this.targetPane(), 'center');
 	}
 
@@ -472,9 +526,7 @@ export class WorkspaceStore {
 			await this.repos.selectRepo(conv.repoId);
 		}
 		this.setOverview(false);
-		if (this.view() === 'hidden') {
-			this.setView('side');
-		}
+		this.reveal();
 		const layout = this.ensureLayout();
 		const pane = layout && panesOf(layout).find((p) => p.tabs.includes(id));
 		if (pane) {
@@ -938,7 +990,7 @@ export class WorkspaceStore {
 
 	/** Whether a conversation is on screen right now (and the window has the user's attention). */
 	isVisible(id: string): boolean {
-		if (this.view() === 'hidden' || this.overview() || (typeof document !== 'undefined' && (document.hidden || !document.hasFocus()))) {
+		if (this.shown() === 'hidden' || this.overview() || (typeof document !== 'undefined' && (document.hidden || !document.hasFocus()))) {
 			return false;
 		}
 		const layout = this.layout();

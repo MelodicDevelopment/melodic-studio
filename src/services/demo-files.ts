@@ -3,6 +3,7 @@
  * Kept apart from the demo backend so that file only gains three `case` lines.
  */
 import type { FileContent, OnConflict, Placed, TreeEntry } from './backend.service';
+import { searchIn, type SearchOptions, type SearchResult } from '../shared/search';
 
 const BINARY = '\u0000binary';
 
@@ -60,6 +61,17 @@ export function demoReadFile(path: string): FileContent {
 		throw { kind: 'error', message: `${path} no longer exists` };
 	}
 	return text === BINARY ? { text: '', binary: true, tooLarge: false, size: 48_211 } : { text, binary: false, tooLarge: false, size: text.length };
+}
+
+/** What `git ls-files` would list: everything that is not ignored. */
+export function demoFiles(): string[] {
+	return [...FILES.keys()].filter((path) => !IGNORED.some((i) => path === i || path.startsWith(`${i}/`))).sort();
+}
+
+/** Find in files, as git would: nothing ignored, nothing binary. */
+export function demoSearch(query: string, options: SearchOptions, limit: number): SearchResult {
+	const searched = [...FILES].filter(([path, text]) => text !== BINARY && !IGNORED.some((i) => path === i || path.startsWith(`${i}/`)));
+	return searchIn(searched, query, options, limit);
 }
 
 export function demoWriteFile(path: string, text: string): void {

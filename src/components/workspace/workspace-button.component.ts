@@ -13,7 +13,7 @@ import { isMac } from '../../services/backend.service';
 	template: (self: WorkspaceButtonComponent) => {
 		const store = self.store;
 		const waiting = store.waiting().length;
-		const shown = store.view() !== 'hidden';
+		const shown = store.shown() !== 'hidden';
 		const key = `${isMac() ? '⌘' : 'Ctrl+'}Shift+K`;
 		const title = waiting ? `${waiting} conversation${waiting === 1 ? '' : 's'} waiting for you (${key})` : `${shown ? 'Hide' : 'Show'} the Claude workspace (${key})`;
 		return html`
