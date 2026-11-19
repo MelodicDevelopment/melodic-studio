@@ -90,7 +90,9 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 				`
 				: ''}
 			<div class="body">
-				<div class="host ${tab?.kind === 'text' && self.ready ? '' : 'off'}"></div>
+				<!-- monaco-component: with fixedOverflowWidgets the context menu is attached here, outside .monaco-editor,
+				     and Monaco defines its theme colours (--vscode-*) only on those two classes. -->
+				<div class="host monaco-component ${tab?.kind === 'text' && self.ready ? '' : 'off'}"></div>
 				${stateOf(self, tab)}
 			</div>
 		`;
@@ -229,6 +231,17 @@ function stateOf(self: EditorComponent, tab: OpenFile | null) {
 			position: absolute;
 			inset: 0;
 		}
+			/* Monaco's menus, hovers and suggestions size their corners, borders and shadows with these,
+			   and only VS Code itself defines them: the standalone editor leaves them unset. */
+			--vscode-cornerRadius-small: var(--ml-radius-xs);
+			--vscode-cornerRadius-medium: var(--ml-radius-sm);
+			--vscode-cornerRadius-large: var(--ml-radius-md);
+			--vscode-cornerRadius-xLarge: var(--ml-radius-lg);
+			--vscode-cornerRadius-circle: var(--ml-radius-full);
+			--vscode-strokeThickness: 1px;
+			--vscode-shadow-md: var(--ml-shadow-md);
+			--vscode-shadow-lg: var(--ml-shadow-lg);
+			--vscode-shadow-xl: var(--ml-shadow-xl);
 		.host.off {
 			visibility: hidden;
 		}
