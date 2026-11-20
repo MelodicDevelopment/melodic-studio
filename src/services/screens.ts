@@ -111,6 +111,15 @@ export class ScreenPool {
 		const xterm = await loadXterm();
 		await (this._listening ??= this.listen());
 		const id = `s${++this._seq}`;
+		// Addresses in the output open in the browser on Cmd+click (Ctrl+click off the Mac), like VS Code:
+		// a plain click stays free for selecting text. Output is untrusted, so only http(s) is opened.
+		const follow = (event: MouseEvent, uri: string): void => {
+			if (!(isMac() ? event.metaKey : event.ctrlKey) || !/^https?:\/\//i.test(uri)) {
+				return;
+			}
+			event.preventDefault();
+			void this.backend.openUrl(uri).catch(() => undefined);
+		};
 		const term = new xterm.Terminal({
 			fontFamily: this.settings.font(),
 			fontSize: this.settings.settings().terminalFontSize,
@@ -119,20 +128,14 @@ export class ScreenPool {
 			scrollback: SCROLLBACK,
 			// Programs pick their own colours; this keeps them readable on either theme.
 			minimumContrastRatio: 4.5,
+			// Links a program marks itself (OSC 8, which Claude Code writes) follow the same rule as plain addresses.
+			// Without this xterm asks with confirm() and opens the page itself, and the dialog plugin's confirm()
+			// answers with a promise, which counts as yes: the page opened while the question was still up.
+			linkHandler: { activate: follow },
 		});
 		const fit = new xterm.FitAddon();
 		term.loadAddon(fit);
-		// Addresses in the output open in the browser on Cmd+click (Ctrl+click off the Mac), like VS Code:
-		// a plain click stays free for selecting text. Output is untrusted, so only http(s) is opened.
-		term.loadAddon(
-			new xterm.WebLinksAddon((event, uri) => {
-				if (!(isMac() ? event.metaKey : event.ctrlKey) || !/^https?:\/\//i.test(uri)) {
-					return;
-				}
-				event.preventDefault();
-				void this.backend.openUrl(uri).catch(() => undefined);
-			}),
-		);
+		term.loadAddon(new xterm.WebLinksAddon(follow));
 		const host = document.createElement('div');
 		host.className = 'screen';
 		const screen: Screen = { term, fit, host, key: null, opened: false, ended: false, started: Date.now(), outbox: '', sending: false, events, decoder: events.output ? new TextDecoder() : null };
