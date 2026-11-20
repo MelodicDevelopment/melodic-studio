@@ -25,6 +25,9 @@ pub struct Worktree {
     pub active: bool,
     /// Uncommitted files in it.
     pub changes: usize,
+    /// Its commit is already in the main checkout's branch, or in the remote's default branch as of the
+    /// last fetch: nothing in it is left to merge. Also true of one that has made no commit yet. Never the main one.
+    pub landed: bool,
 }
 
 /// The checkouts git knows, main one first, without counting their changes.
@@ -49,7 +52,7 @@ pub(crate) fn entries(git: &Git) -> Result<Vec<Worktree>> {
             }
         }
         if let (Some(path), true) = (path, usable) {
-            trees.push(Worktree { path, branch, head, is_main: trees.is_empty(), active: false, changes: 0 });
+            trees.push(Worktree { path, branch, head, is_main: trees.is_empty(), active: false, changes: 0, landed: false });
         }
     }
     Ok(trees)
@@ -57,8 +60,18 @@ pub(crate) fn entries(git: &Git) -> Result<Vec<Worktree>> {
 
 pub fn list(git: &Git) -> Result<Vec<Worktree>> {
     let mut trees = entries(git)?;
+    // Where finished work ends up: the branch the main checkout is on (a merge made here), and the
+    // remote's default branch (a pull request merged there, once fetched).
+    let mut trunks: Vec<String> = trees.first().map(|main| main.head.clone()).into_iter().filter(|h| !h.is_empty()).collect();
+    if let Some(remote) = git.default_remote() {
+        if let Some(branch) = git.remote_default_branch(&remote) {
+            trunks.push(format!("refs/remotes/{remote}/{branch}"));
+        }
+    }
     for tree in trees.iter_mut() {
         tree.changes = Git::at(&tree.path).run(&["status", "--porcelain"]).map(|s| s.lines().count()).unwrap_or(0);
+        // A squashed or rebased merge leaves other commits behind, which this cannot see.
+        tree.landed = !tree.is_main && !tree.head.is_empty() && trunks.iter().any(|trunk| git.run(&["merge-base", "--is-ancestor", &tree.head, trunk]).is_ok());
     }
     Ok(trees)
 }
@@ -388,6 +401,25 @@ mod tests {
         assert_eq!(trees.len(), 2);
         assert!(trees[0].is_main && !trees[1].is_main);
         assert_eq!(trees[1].branch.as_deref(), Some("agent/fix-thing"));
+        assert_eq!(trees[1].changes, 1);
+        assert!(trees[1].landed && !trees[0].landed, "no commit of its own yet: nothing to merge; never the main one");
+
+        // A commit in the worktree is not in the main checkout's branch until it is merged there.
+        let tree = Git::at(&path);
+        tree.commit(&["b.txt".into()], "Two", "", false).unwrap();
+        assert!(!list(&g).unwrap()[1].landed);
+        g.run(&["merge", "--no-ff", "-m", "Merge", "agent/fix-thing"]).unwrap();
+        assert!(list(&g).unwrap()[1].landed);
+        // ...or until the remote's default branch has it (a pull request merged there, then fetched).
+        g.run(&["reset", "--hard", "HEAD~1"]).unwrap();
+        assert!(!list(&g).unwrap()[1].landed);
+        g.run(&["remote", "add", "origin", "https://example.com/x.git"]).unwrap();
+        g.run(&["update-ref", "refs/remotes/origin/main", &list(&g).unwrap()[1].head]).unwrap();
+        assert!(list(&g).unwrap()[1].landed);
+        g.run(&["update-ref", "-d", "refs/remotes/origin/main"]).unwrap();
+        g.run(&["remote", "remove", "origin"]).unwrap();
+        std::fs::write(path.join("c.txt"), "three\n").unwrap();
+        let trees = list(&g).unwrap();
         assert_eq!(trees[1].changes, 1);
         // What `add` returned is, to the character, what `list` shows: the window matches them as strings.
         assert_eq!(trees[1].path, path.to_string_lossy());

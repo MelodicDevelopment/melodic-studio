@@ -56,6 +56,8 @@ export interface Worktree {
 	isMain: boolean;
 	active: boolean;
 	changes: number;
+	/** Its commit is already in the main checkout's branch or the remote's default branch (as of the last fetch). Also true before it has a commit of its own. */
+	landed: boolean;
 }
 /** Claude Code permission modes an agent can run in. */
 export type AgentMode = 'default' | 'plan' | 'acceptEdits' | 'bypassPermissions';
@@ -1099,7 +1101,7 @@ class DemoBackend {
 		{ name: 'csharp', label: 'C#', program: 'csharp-ls', source: null, path: null, version: null, problem: null, managed: false, installable: true, prerequisite: 'dotnet', prerequisiteFound: false, hint: null },
 		{ name: 'rust', label: 'Rust', program: 'rust-analyzer', source: 'path', path: '/Users/demo/.cargo/bin/rust-analyzer', version: null, problem: "error: Unknown binary 'rust-analyzer' in official toolchain 'stable'.", managed: false, installable: false, prerequisite: null, prerequisiteFound: true, hint: 'rustup component add rust-analyzer' },
 	];
-	private worktreeList: Worktree[] = [{ path: DEMO_ID, branch: 'feature/repeat-mode', head: 'a'.repeat(40), isMain: true, active: true, changes: 4 }];
+	private worktreeList: Worktree[] = [{ path: DEMO_ID, branch: 'feature/repeat-mode', head: 'a'.repeat(40), isMain: true, active: true, changes: 4, landed: false }];
 	private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
 
 	listen(event: string, handler: (payload: unknown) => void): () => void {
@@ -1406,7 +1408,7 @@ class DemoBackend {
 				return this.worktreeList;
 			case 'worktree_add': {
 				const path = `${DEMO_ID}.worktrees/${String(args.branch).replace(/[^\w.]+/g, '-')}`;
-				this.worktreeList = [...this.worktreeList, { path, branch: String(args.branch), head: 'b'.repeat(40), isMain: false, active: false, changes: 0 }];
+				this.worktreeList = [...this.worktreeList, { path, branch: String(args.branch), head: 'b'.repeat(40), isMain: false, active: false, changes: 0, landed: false }];
 				if (!this.branchList.some((b) => !b.isRemote && b.name === args.branch)) {
 					this.branchList = [...this.branchList, { name: String(args.branch), isRemote: false, isCurrent: false, upstream: null, published: null, date: new Date().toISOString() }];
 				}

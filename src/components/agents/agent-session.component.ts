@@ -249,6 +249,9 @@ function checkDetail(self: AgentSessionComponent, s: AgentSession) {
 				${!ask && s.isolated && s.branch && s.branch !== mainBranch
 					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into a branch you choose, or open a pull request. Commit the agent's work first.`} @ml:click=${() => self.openMerge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>`
 					: ''}
+				${s.review && !running
+					? html`<ml-button variant="ghost" size="sm" title="It needs nothing more from you: say so when its work was merged somewhere this app cannot see (a squashed pull request), or is not wanted. Its worktree and branch stay." @ml:click=${() => agents.markDone(s.id)}><ml-icon slot="icon-start" icon="check"></ml-icon>Mark done</ml-button>`
+					: ''}
 			</div>
 			<div class="status">
 				${stateChip(s)}

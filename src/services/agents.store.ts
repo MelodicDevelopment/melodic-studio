@@ -492,10 +492,38 @@ export class AgentsStore {
 			const trees = await this.backend.worktrees(id);
 			if (id === this.repos.repo()?.id) {
 				this.worktrees.set(trees);
+				this.settleReviews(id, trees);
 			}
 		} catch {
 			this.worktrees.set([]);
 		}
+	}
+
+	/**
+	 * A task with a worktree of its own needs the user until its work is dealt with, not until they
+	 * have looked at it. That is: merged from here (`merge`), marked done (`markDone`), or, seen in the
+	 * list of worktrees, the worktree is gone, or it is clean and either made no commit or its commit
+	 * is already in the main checkout's branch or the remote's default branch (`Worktree.landed`).
+	 */
+	private settleReviews(repoId: string, trees: Worktree[]): void {
+		if (!trees.length) {
+			return;
+		}
+		const settled = this.sessions().filter((s) => {
+			if (s.repoId !== repoId || !s.review || !s.isolated || s.status === 'running') {
+				return false;
+			}
+			const tree = trees.find((w) => samePath(w.path, s.cwd));
+			return !tree || (tree.changes === 0 && (tree.head === s.base || tree.landed));
+		});
+		for (const s of settled) {
+			this.update(s.id, (x) => ({ ...x, review: false }), false);
+		}
+	}
+
+	/** The user says a session needs nothing more from them. Its worktree and branch stay as they are. */
+	markDone(id: string): void {
+		this.update(id, (s) => ({ ...s, review: false, unread: false }), false);
 	}
 
 	/**
@@ -975,7 +1003,9 @@ export class AgentsStore {
 		if (!(await this.showRepo(session))) {
 			return;
 		}
-		this.update(session.id, (s) => ({ ...s, review: false, unread: false }), false);
+		// Looking is not finishing: work in a worktree of its own waits until it is merged or marked done
+		// (`settleReviews`). In the user's own checkout there is no such step, so having looked is all there is.
+		this.update(session.id, (s) => ({ ...s, review: s.review && s.isolated, unread: false }), false);
 		await this.view(session.isolated ? session.cwd : null);
 	}
 
