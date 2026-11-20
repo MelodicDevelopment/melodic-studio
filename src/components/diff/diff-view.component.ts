@@ -14,6 +14,7 @@ function noteRow(n: DiffNote, focus: number | null) {
 		<div class="fnote ${n.tone} ${n.line !== null && n.line === focus ? 'focus' : ''}" data-line=${n.line ?? ''}>
 			<div><span class="sev">${n.label}</span><b>${n.title}</b>${n.line !== null ? html`<span class="at">line ${n.line}</span>` : ''}</div>
 			${n.detail ? html`<p>${n.detail}</p>` : ''}
+			${n.action ? html`<div class="act"><ml-button variant="outline" size="xs" title=${n.action.title} ?disabled=${n.action.disabled} @ml:click=${n.action.run}><ml-icon slot="icon-start" icon="sparkle" size="sm"></ml-icon>${n.action.label}</ml-button></div>` : ''}
 		</div>
 	`;
 }
@@ -192,6 +193,10 @@ function noteRow(n: DiffNote, focus: number | null) {
 		.fnote p {
 			margin: 3px 0 0;
 			color: var(--ml-color-text-secondary);
+		}
+		.fnote .act {
+			display: flex;
+			margin-top: 8px;
 		}
 	`,
 })

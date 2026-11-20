@@ -120,7 +120,7 @@ pub fn run() {
             commands::commit_diff,
             ai_git::ai_selected_diff,
             ai_git::ai_commit_patch,
-            ai_git::ai_push_diff,
+            ai_git::ai_review_diff,
             ai_git::ai_range_file_diff,
             ai_git::ai_conflict_file,
             ai_git::ai_resolution_preview,

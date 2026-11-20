@@ -118,6 +118,7 @@ export const aiPanelStyles = () => css`
 	.foot {
 		flex: none;
 		display: flex;
+		flex-wrap: wrap;
 		gap: 6px;
 		padding: 8px 10px;
 		border-top: 1px solid var(--ml-color-border);
@@ -266,9 +267,18 @@ export const aiPanelStyles = () => css`
 		margin-bottom: 0;
 	}
 	.fl {
-		margin-top: 4px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 6px;
+		margin-top: 6px;
 		font-size: 11px;
 		color: var(--ml-color-text-muted);
+	}
+	.fix {
+		display: inline-flex;
+		cursor: default;
 	}
 	.clean {
 		display: flex;

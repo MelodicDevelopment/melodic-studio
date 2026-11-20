@@ -1,7 +1,7 @@
 /**
  * The AI features around changes and diffs: a commit message from the checked files,
- * an explanation of a diff or a commit, a review of what a push would send, and a
- * proposed resolution for a conflicted file. Each is one question to Claude Code
+ * an explanation of a diff or a commit, a review (of what a push would send, of a whole
+ * branch, or of the work in a checkout) and a proposed resolution for a conflicted file. Each is one question to Claude Code
  * (`AiService.ask`); the prompts and the parsing of their answers live in ai-prompts.ts.
  *
  * Every action has the same shape: collect a bounded diff from the backend, ask,
@@ -11,11 +11,14 @@
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import { signal, computed, effect, untracked } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
+import { AgentsStore, type AgentSession } from './agents.store';
+import { samePath } from './agent-paths';
 import { AiService, type Ask } from './ai.service';
-import { BackendService, asAppError, type FileChange, type PushDiff } from './backend.service';
+import { BackendService, asAppError, type FileChange, type ReviewDiff } from './backend.service';
 import { RepoStore } from './repo.store';
 import { parseDiff, type DiffNote, type ParsedDiff } from '../shared/diff';
 import { fileName } from '../shared/format';
+import { nothingToReview, reviewOffers, sameRequest, type ReviewOffer, type ReviewRequest } from '../shared/review-offers';
 import {
 	MODELS,
 	RESOLVE_MAX_CHARS,
@@ -24,6 +27,7 @@ import {
 	commitMessagePrompt,
 	conflictListing,
 	explainPrompt,
+	fixFindingsPrompt,
 	parseCommitMessage,
 	parseConflicts,
 	parseReview,
@@ -50,8 +54,10 @@ export interface ExplainState {
 
 export interface ReviewState {
 	state: RunState;
+	/** What was asked for: "Review again" asks for the same. */
+	request: ReviewRequest;
 	/** What was reviewed; null until the diff has been read. */
-	range: Omit<PushDiff, 'text'> | null;
+	range: Omit<ReviewDiff, 'text'> | null;
 	summary: string;
 	findings: Finding[];
 	error: string;
@@ -118,28 +124,66 @@ export class AiFeaturesStore {
 		return (tab === 'changes' || tab === 'history') && !!(this.explanation() || this.reviewed());
 	});
 
-	/** Set when a push would send something; `count` is 0 when the number of commits is not known yet. */
-	readonly unpushed = computed<{ count: number } | null>(() => {
-		const st = this.repos.status();
-		if (!st || !st.hasCommits || st.detached) {
+	/** Findings that were handed to an agent to fix: their buttons say so instead of sending them twice. */
+	readonly fixSent = signal<ReadonlySet<Finding>>(new Set());
+
+	/**
+	 * The agent a fix goes to: the task working in the worktree on screen, which made the change and
+	 * has it in mind. Null in the main checkout or a worktree no task owns, where a new task is started.
+	 */
+	readonly fixSession = computed<AgentSession | null>(() => {
+		const repo = this.repos.repo();
+		if (!repo?.worktree) {
 			return null;
 		}
-		if (st.upstream) {
-			return st.ahead > 0 ? { count: st.ahead } : null;
-		}
-		// Never pushed: History knows which commits are on no remote, once it has been opened.
-		const loaded = this.repos.commits().filter((c) => c.unpushed).length;
-		return loaded || st.undo ? { count: loaded } : null;
+		return (
+			this.agents
+				.sessions()
+				.filter((s) => s.repoId === repo.id && s.kind === 'task' && s.isolated && samePath(s.cwd, repo.worktree))
+				.sort((a, b) => b.updated - a.updated)[0] ?? null
+		);
 	});
+
+	/**
+	 * What Claude can be asked to review in the checkout on screen (`shared/review-offers.ts`): the
+	 * work that is not committed, the commits a push would send, the whole branch. In an agent's
+	 * worktree, everything since the agent started.
+	 */
+	readonly offers = computed<ReviewOffer[]>(() => {
+		const st = this.repos.status();
+		return reviewOffers({
+			status: st && { branch: st.branch, detached: st.detached, hasCommits: st.hasCommits, head: st.head, upstream: st.upstream, ahead: st.ahead, defaultBranch: st.defaultBranch, changed: st.files.length, tipUnpushed: !!st.undo },
+			// Never pushed: History knows which commits are on no remote, once it has been opened.
+			unpushedLoaded: this.repos.commits().filter((c) => c.unpushed).length,
+			agentBase: this.fixSession()?.base ?? null,
+		});
+	});
+
+	/** What the fix button of these findings says and whether it can be pressed. */
+	fixButton(findings: Finding[]): { label: string; title: string; disabled: boolean } {
+		const sent = this.fixSent();
+		const one = findings.length === 1;
+		if (findings.every((f) => sent.has(f))) {
+			return { label: 'Sent to Claude', title: `The agent has ${one ? 'this finding' : 'these findings'}. Its fix will be in Changes when its turn ends.`, disabled: true };
+		}
+		const session = this.fixSession();
+		const label = one ? 'Ask Claude to fix' : `Ask Claude to fix all ${findings.length}`;
+		if (session?.status === 'running') {
+			return { label, title: 'The agent in this worktree is working. Ask when its turn has ended.', disabled: true };
+		}
+		return { label, title: session ? `Sends ${one ? 'this' : 'these'} to the agent working in this worktree, as its next turn` : `Starts an agent on ${one ? 'this' : 'these'} in the checkout on screen`, disabled: !!this.unavailable() };
+	}
 
 	/** Findings of the file in the main pane, as notes for the diff view. */
 	readonly reviewNotes = computed<DiffNote[]>(() => {
 		const view = this.reviewView();
 		const findings = this.reviewed()?.findings ?? [];
-		return view ? findings.filter((f) => f.file === view.path).map((f) => ({ line: f.line, tone: f.severity, label: f.severity, title: f.title, detail: f.detail })) : [];
+		return view ? findings.filter((f) => f.file === view.path).map((f) => ({ line: f.line, tone: f.severity, label: f.severity, title: f.title, detail: f.detail, action: { ...this.fixButton([f]), run: () => void this.fixFindings([f]) } })) : [];
 	});
 
 	private _started = false;
+	/** The checkout the results on screen belong to (`scope()`). */
+	private _scope = '';
 	private _commitRun = 0;
 	private _commitAsk: Ask | null = null;
 	private _explainRun = 0;
@@ -161,6 +205,9 @@ export class AiFeaturesStore {
 	}
 	private get toast(): ToastService {
 		return Injector.get(ToastService);
+	}
+	private get agents(): AgentsStore {
+		return Injector.get(AgentsStore);
 	}
 
 	/** The checkout everything here is about: results never cross into another one. */
@@ -192,13 +239,10 @@ export class AiFeaturesStore {
 		});
 
 		// Another repository or worktree: nothing here applies to it.
-		let scope = this.scope();
+		this._scope = this.scope();
 		effect(() => {
-			const next = this.scope();
-			if (next !== scope) {
-				scope = next;
-				untracked(() => this.reset());
-			}
+			this.scope();
+			untracked(() => this.settle());
 		});
 		// Picking something else to look at takes the main pane back from a review finding.
 		let seen = '';
@@ -237,6 +281,19 @@ export class AiFeaturesStore {
 			return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Drop what belonged to another checkout. The effect in `watch` does this when the checkout
+	 * changes; something started right after a switch (a review of the agent's worktree the app
+	 * just went to) does it first, so that the effect, running later, does not take it for old.
+	 */
+	private settle(): void {
+		const now = this.scope();
+		if (this._started && now !== this._scope) {
+			this._scope = now;
+			this.reset();
+		}
 	}
 
 	private reset(): void {
@@ -399,43 +456,58 @@ export class AiFeaturesStore {
 		}
 	}
 
-	// ---- 3. review before push ----------------------------------------------
+	// ---- 3. review -------------------------------------------------------------
 
-	/** Review everything a push would send. Findings land in the side panel. */
-	async review(): Promise<void> {
+	/**
+	 * Review what `request` names in the checkout on screen: what a push would send, the whole
+	 * branch, or the work in the checkout. Without one, the first thing on offer. Findings land in
+	 * the side panel. Nothing is changed and nothing is sent anywhere but to Claude.
+	 */
+	async review(request?: ReviewRequest): Promise<void> {
+		this.init();
+		this.settle();
 		const id = this.repos.repo()?.id;
+		const req = request ?? this.offers()[0]?.request;
 		if (!id) {
+			return;
+		}
+		if (!req) {
+			this.toast.info('Nothing to review', 'There is nothing uncommitted here and nothing a push would send.');
 			return;
 		}
 		if (running(this.reviewed()?.state)) {
 			this.panelTab.set('review');
+			if (!sameRequest(this.reviewed()?.request, req)) {
+				this.toast.info('A review is already running', 'Stop it first, or wait for it to finish.');
+			}
 			return;
 		}
 		if (!(await this.ensureCli())) {
 			return;
 		}
 		const run = ++this._reviewRun;
-		const base: ReviewState = { state: 'collecting', range: null, summary: '', findings: [], error: '', raw: '', progress: '' };
+		const base: ReviewState = { state: 'collecting', request: req, range: null, summary: '', findings: [], error: '', raw: '', progress: '' };
 		this._rangeDiffs.clear();
 		this.reviewView.set(null);
+		this.fixSent.set(new Set());
 		this.reviewed.set(base);
 		this.panelTab.set('review');
 		let state = base;
 		try {
-			const { text, ...range } = await this.backend.aiPushDiff(id);
+			const { text, ...range } = await this.backend.aiReviewDiff(id, req.scope, req.base ?? null);
 			if (run !== this._reviewRun) {
 				return;
 			}
-			if (!range.commits.length || !text.trim()) {
+			if (!range.files.length || !text.trim()) {
 				this.reviewed.set(null);
 				this.closePanelTab('review');
-				this.toast.info('Nothing to review', range.commits.length ? 'The commits waiting to be pushed change no files.' : `This branch has no commits that ${range.against} does not already have.`);
+				this.toast.info('Nothing to review', nothingToReview(req, { against: range.against, commits: range.commits.length }));
 				return;
 			}
 			state = { ...base, state: 'running', range };
 			this.reviewed.set(state);
 			const ask = this.ai.ask({
-				prompt: reviewPrompt({ branch: this.repos.status()?.branch ?? '', against: range.against, commits: range.commits, files: range.files, diff: text, truncated: range.truncated }),
+				prompt: reviewPrompt({ scope: req.scope, agent: req.agent, branch: this.repos.status()?.branch ?? '', against: range.against, commits: range.commits, files: range.files, diff: text, truncated: range.truncated }),
 				tools: REVIEW_TOOLS,
 				model: MODELS.review,
 				onText: (soFar) => {
@@ -472,6 +544,25 @@ export class AiFeaturesStore {
 		}
 	}
 
+	/**
+	 * Go to a session's checkout and review what it changed there: everything since it started, for
+	 * a task in a worktree of its own; in the user's own checkout, what is not committed.
+	 */
+	async reviewSession(session: AgentSession): Promise<void> {
+		await this.agents.review(session);
+		const repo = this.repos.repo();
+		if (!repo || repo.id !== session.repoId || (session.isolated ? !samePath(session.cwd, repo.worktree) : !!repo.worktree)) {
+			return; // it could not go there, and has said why
+		}
+		await this.review(session.isolated && session.base ? { scope: 'work', base: session.base, agent: true } : { scope: 'work' });
+	}
+
+	/** Whether the review of `request` is the one running now. */
+	reviewing(request: ReviewRequest): boolean {
+		const rv = this.reviewed();
+		return !!rv && running(rv.state) && sameRequest(rv.request, request);
+	}
+
 	stopReview(): void {
 		const s = this.reviewed();
 		this._reviewRun++;
@@ -486,8 +577,43 @@ export class AiFeaturesStore {
 		this.stopReview();
 		this.reviewed.set(null);
 		this.reviewView.set(null);
+		this.fixSent.set(new Set());
 		this._rangeDiffs.clear();
 		this.closePanelTab('review');
+	}
+
+	/**
+	 * Hand findings to an agent to fix, on a click: the task working in the worktree on screen gets
+	 * them as its next turn, otherwise a new task starts in the checkout on screen. Either way the
+	 * Agents tab shows it working, and what it changes waits in Changes like any agent's work.
+	 */
+	async fixFindings(findings: Finding[]): Promise<void> {
+		const rv = this.reviewed();
+		const sent = this.fixSent();
+		const list = findings.filter((f) => !sent.has(f));
+		if (!rv || !list.length || !(await this.ensureCli())) {
+			return;
+		}
+		const prompt = fixFindingsPrompt(list, rv.range?.against ?? '', rv.request.scope);
+		const session = this.fixSession();
+		if (session) {
+			if (session.status === 'running') {
+				this.toast.info('The agent is still working', 'Ask it to fix this when its turn has ended.');
+				return;
+			}
+			const shown = `Asked Claude to fix what ${rv.request.scope === 'push' ? 'the review before pushing' : 'the review'} found:\n${list.map((f) => `${f.file}${f.line !== null ? `:${f.line}` : ''} ${f.title}`).join('\n')}`;
+			await this.agents.send(session.id, prompt, { shown });
+			await this.agents.open(session.id);
+		} else {
+			if (!(await this.agents.start({ task: prompt, branch: '', mode: 'acceptEdits' }))) {
+				return;
+			}
+			this.repos.setTab('agents');
+		}
+		// The scope may have been reset meanwhile (another repository): then there is nothing to mark.
+		if (this.reviewed() === rv) {
+			this.fixSent.set(new Set([...this.fixSent(), ...list]));
+		}
 	}
 
 	private closePanelTab(tab: 'explain' | 'review'): void {
@@ -496,7 +622,7 @@ export class AiFeaturesStore {
 		}
 	}
 
-	/** Show a finding where it is: the file's diff over the reviewed range, in the main pane. */
+	/** Show a finding where it is: the file's diff over what was reviewed (up to the files as they are, for work in a checkout), in the main pane. */
 	async openFinding(finding: Finding): Promise<void> {
 		const id = this.repos.repo()?.id;
 		const range = this.reviewed()?.range;

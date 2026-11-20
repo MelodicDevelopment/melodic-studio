@@ -29,6 +29,8 @@ export interface DiffNote {
 	label: string;
 	title: string;
 	detail: string;
+	/** A button on the note (a finding's "Ask Claude to fix"). */
+	action?: { label: string; title: string; disabled: boolean; run: () => void };
 }
 
 const MAX_LINES = 6000;

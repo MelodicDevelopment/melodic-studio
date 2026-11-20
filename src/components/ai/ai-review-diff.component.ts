@@ -6,8 +6,8 @@ import { AiFeaturesStore } from '../../services/ai-features.store';
 import { dirName, fileName, plural } from '../../shared/format';
 
 /**
- * The main pane while a review finding is open: that file's diff over the reviewed
- * commits, with every finding for the file shown at its line.
+ * The main pane while a review finding is open: that file's diff over what was
+ * reviewed, with every finding for the file shown at its line.
  */
 @MelodicComponent({
 	selector: 'ms-ai-review-diff',
@@ -18,15 +18,18 @@ import { dirName, fileName, plural } from '../../shared/format';
 			return nothing();
 		}
 		const notes = ai.reviewNotes();
-		const range = ai.reviewed()?.range;
+		const rv = ai.reviewed();
+		const range = rv?.range;
+		// What the diff runs over: the commits of a push or a branch, or the work in the checkout up to the files as they are.
+		const over = !range ? '' : rv?.request.scope === 'work' ? ' in the reviewed changes' : ` in ${plural(range.commits.length, rv?.request.scope === 'push' ? 'unpushed commit' : 'commit')}`;
 		return html`
 			<div class="head">
 				<button class="icon" title="Back to what you were looking at" @click=${() => ai.closeReviewView()}><ml-icon icon="arrow-left" size="sm"></ml-icon></button>
 				<span class="path" title=${view.path}><span class="dir">${dirName(view.path)}</span><span class="file">${fileName(view.path)}</span></span>
-				<span class="what">${plural(notes.length, 'finding')}${range ? ` in ${plural(range.commits.length, 'unpushed commit')}` : ''}</span>
+				<span class="what">${plural(notes.length, 'finding')}${over}</span>
 				<ml-button variant="ghost" size="sm" @ml:click=${() => ai.closeReviewView()}>Close</ml-button>
 			</div>
-			<ms-diff .diff=${view.diff} .notes=${notes} .focusLine=${view.line} .emptyText=${'This file has no changes in the reviewed commits.'}></ms-diff>
+			<ms-diff .diff=${view.diff} .notes=${notes} .focusLine=${view.line} .emptyText=${'This file has no changes in what was reviewed.'}></ms-diff>
 		`;
 	},
 	styles: () => css`

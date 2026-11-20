@@ -3,30 +3,32 @@ import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
 import { nothing } from './ai-entry';
 import { AiFeaturesStore } from '../../services/ai-features.store';
-import { plural } from '../../shared/format';
 
 /**
- * "2 commits to push · Review": a strip for the Changes and History sidebars, shown
- * while there are commits a push would send. Takes no room otherwise.
+ * "Review  [3 uncommitted] [2 to push] [vs main]": a strip for the Changes and History sidebars
+ * with one button for each thing Claude can review in this checkout (`AiFeaturesStore.offers`).
+ * Takes no room when there is none.
  */
 @MelodicComponent({
 	selector: 'ms-ai-review-banner',
 	template: (self: AiReviewBannerComponent) => {
 		const ai = self.ai;
-		const waiting = ai.unpushed();
-		if (!waiting) {
+		const offers = ai.offers();
+		if (!offers.length) {
 			return nothing();
 		}
 		const off = ai.unavailable();
-		const state = ai.reviewed()?.state;
-		const busy = state === 'collecting' || state === 'running';
 		return html`
 			<div class="strip">
-				<ml-icon icon="arrow-up" size="sm"></ml-icon>
-				<span class="grow">${waiting.count ? `${plural(waiting.count, 'commit')} to push` : 'Commits to push'}</span>
-				<ml-button variant="ghost" size="sm" title=${off || 'Let Claude review everything a push would send'} ?disabled=${!!off} @ml:click=${() => ai.review()}>
-					${busy ? html`<ml-spinner slot="icon-start" size="sm"></ml-spinner>` : html`<ml-icon slot="icon-start" icon="sparkle" size="sm"></ml-icon>`}${busy ? 'Reviewing…' : 'Review'}
-				</ml-button>
+				<span class="what"><ml-icon icon="sparkle" size="sm"></ml-icon>Review</span>
+				${offers.map((o) => {
+					const busy = ai.reviewing(o.request);
+					return html`
+						<ml-button variant="outline" size="xs" title=${off || o.detail} ?disabled=${!!off} @ml:click=${() => ai.review(o.request)}>
+							${busy ? html`<ml-spinner slot="icon-start" size="sm"></ml-spinner>` : ''}${busy ? 'Reviewing…' : o.chip}
+						</ml-button>
+					`;
+				})}
 			</div>
 		`;
 	},
@@ -37,25 +39,27 @@ import { plural } from '../../shared/format';
 		}
 		.strip {
 			display: flex;
+			flex-wrap: wrap;
 			align-items: center;
-			gap: 8px;
-			padding: 3px 4px 3px 10px;
+			gap: 4px;
+			padding: 5px 5px 5px 7px;
 			border-top: 1px solid var(--ml-color-border);
 			border-bottom: 1px solid var(--ml-color-border);
 			margin-bottom: -1px;
 			font-size: 12px;
 			color: var(--ml-color-text-secondary);
 		}
-		.strip > ml-icon {
-			flex: none;
+		.what {
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			white-space: nowrap;
+		}
+		.what ml-icon {
 			color: var(--ms-ai);
 		}
-		.grow {
-			flex: 1;
-			min-width: 0;
+		ml-button {
 			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
 		}
 	`,
 })

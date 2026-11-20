@@ -9,7 +9,6 @@ import { AiFeaturesStore } from '../../services/ai-features.store';
 import { RepoStore } from '../../services/repo.store';
 import type { ExplainTarget } from '../../services/ai-prompts';
 import type { FileChange } from '../../services/backend.service';
-import { plural } from '../../shared/format';
 
 /**
  * What a component renders when it has nothing to show. Not an empty template: Melodic does
@@ -76,19 +75,21 @@ export function aiSidePanel() {
 	return ai().panelOpen() ? html`<ms-ai-panel></ms-ai-panel>` : '';
 }
 
-/** A card for the "No local changes" screen, next to the push card. */
+/** Cards for the "No local changes" screen, next to the push card: one for each thing Claude can review here. */
 export function reviewCard() {
 	const store = ai();
-	const waiting = store.unpushed();
-	if (!waiting) {
+	const offers = store.offers();
+	if (!offers.length) {
 		return '';
 	}
 	const off = store.unavailable();
 	const busy = Injector.get(RepoStore).busy() === 'push';
-	return html`
-		<button class="card" ?disabled=${!!off || busy} title=${off} @click=${() => store.review()}>
-			<ml-icon icon="sparkle" size="md"></ml-icon>
-			<span><b>Review before pushing</b><small>Claude looks for bugs and risks in ${waiting.count ? plural(waiting.count, 'unpushed commit') : 'the unpushed commits'}</small></span>
-		</button>
-	`;
+	return offers.map(
+		(o) => html`
+			<button class="card" ?disabled=${!!off || busy} title=${off} @click=${() => store.review(o.request)}>
+				<ml-icon icon="sparkle" size="md"></ml-icon>
+				<span><b>${o.title}</b><small>${o.detail}</small></span>
+			</button>
+		`
+	);
 }

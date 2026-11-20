@@ -4,6 +4,7 @@
  * so the UI stays previewable.
  */
 import type { RepoOrigin } from '../shared/repo-groups';
+import type { ReviewScope } from '../shared/review-offers';
 import { Injectable } from '@melodicdev/core/injection';
 import { demoFileOp, demoFiles, demoListDir, demoReadFile, demoSearch, demoWriteFile } from './demo-files';
 import { SEARCH_LIMIT, type SearchOptions, type SearchResult } from '../shared/search';
@@ -279,8 +280,13 @@ export interface AiDiff {
 	/** Subjects of the latest commits, newest first. */
 	recent: string[];
 }
-/** Everything a push would send: `base`..`head`, measured against `against` (the upstream, or the default branch). */
-export interface PushDiff {
+/**
+ * What a review covers: `base`..`head`, measured against `against`. For a push that is the upstream (or the
+ * default branch), for a branch the branch it is compared with, for the work in a checkout the commit it
+ * started at, and then `head` is '' (the files as they are) and `commits` may be empty.
+ */
+export interface ReviewDiff {
+	scope: ReviewScope;
 	/** The diff with new-file line numbers written in, capped. */
 	text: string;
 	truncated: boolean;
@@ -748,7 +754,8 @@ export class BackendService {
 	aiSelectedDiff(id: string, files: FileChange[]) { return this.call<AiDiff>('ai_selected_diff', { id, files: files.map((f) => ({ path: f.path, oldPath: f.oldPath, status: f.status })) }); }
 	/** One whole commit (message, stat, patch), capped. */
 	aiCommitPatch(id: string, hash: string) { return this.call<AiDiff>('ai_commit_patch', { id, hash }); }
-	aiPushDiff(id: string) { return this.call<PushDiff>('ai_push_diff', { id }); }
+	/** `base`: the branch to compare with (scope `branch`) or the commit the work started at (scope `work`); null for the default of each. */
+	aiReviewDiff(id: string, scope: ReviewScope, base: string | null = null) { return this.call<ReviewDiff>('ai_review_diff', { id, scope, base }); }
 	aiRangeFileDiff(id: string, base: string, head: string, path: string) { return this.call<DiffResult>('ai_range_file_diff', { id, base, head, path }); }
 	aiConflictFile(id: string, path: string) { return this.call<ConflictFile>('ai_conflict_file', { id, path }); }
 	/** The diff from the file as it is to `text`; nothing is written. */
@@ -1665,25 +1672,30 @@ class DemoBackend {
 				const c = this.commits.find((x) => x.hash === args.hash);
 				return { text: `commit ${c?.shortHash ?? ''}\n\n${c?.summary ?? ''}\n\n${c?.body ?? ''}\n\n${DEMO_DIFFS['src/player/queue.ts']}${DEMO_DIFFS['src/player/repeat.ts']}`, truncated: false, recent: [] } satisfies AiDiff;
 			}
-			case 'ai_push_diff': {
+			case 'ai_review_diff': {
+				const scope = String(args.scope) as ReviewScope;
+				const current = this.branchList.find((b) => b.isCurrent);
 				const unpushed = this.commits.filter((c) => c.unpushed).map((c) => ({ hash: c.hash, summary: c.summary }));
-				const base = this.commits.find((c) => !c.unpushed)?.hash ?? 'b'.repeat(40);
-				const against = this.branchList.find((b) => b.isCurrent)?.upstream ?? 'origin/main';
-				if (empty || !unpushed.length) {
-					return { text: '', truncated: false, base, head: base, against, commits: [], files: [] } satisfies PushDiff;
+				// The work in a checkout has no commits of its own here, and ends at the files as they are.
+				const commits = scope === 'work' ? [] : scope === 'branch' ? this.commits.slice(0, 3).map((c) => ({ hash: c.hash, summary: c.summary })) : unpushed;
+				const base = scope === 'work' ? String(args.base || this.commits[0].hash) : (this.commits.find((c) => !c.unpushed)?.hash ?? 'b'.repeat(40));
+				const against = scope === 'work' ? base.slice(0, 7) : scope === 'branch' ? `origin/${String(args.base || 'main')}` : (current?.upstream ?? 'origin/main');
+				if (empty || (scope !== 'work' && !commits.length)) {
+					return { scope, text: '', truncated: false, base, head: scope === 'work' ? '' : base, against, commits: [], files: [] } satisfies ReviewDiff;
 				}
 				return {
+					scope,
 					text: DEMO_DIFFS['src/player/queue.ts'] + DEMO_DIFFS['src/player/repeat.ts'],
 					truncated: false,
 					base,
-					head: this.commits[0].hash,
+					head: scope === 'work' ? '' : this.commits[0].hash,
 					against,
-					commits: unpushed,
+					commits,
 					files: [
 						{ path: 'src/player/queue.ts', oldPath: null, status: 'modified' },
 						{ path: 'src/player/repeat.ts', oldPath: null, status: 'added' },
 					],
-				} satisfies PushDiff;
+				} satisfies ReviewDiff;
 			}
 			case 'ai_range_file_diff':
 				return { text: DEMO_DIFFS[String(args.path)] ?? '', tooLarge: false } satisfies DiffResult;

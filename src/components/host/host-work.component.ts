@@ -4,6 +4,7 @@ import { BackendService } from '../../services/backend.service';
 import { html, css } from '@melodicdev/core/template';
 import { HostStore } from '../../services/host.store';
 import { HostWorkStore, jiraBranch } from '../../services/host-work.store';
+import { AiFeaturesStore } from '../../services/ai-features.store';
 import { RepoStore } from '../../services/repo.store';
 import type { HostCheck, HostNote, JiraIssue, MergeMethod, PrScope, PrSummary } from '../../services/backend.service';
 import { relativeTime } from '../../shared/format';
@@ -155,6 +156,7 @@ function pullsDialog(self: HostWorkComponent) {
 					? html`
 						<ml-button variant="outline" @ml:click=${() => host.openUrl(d.summary.url)}><ml-icon slot="icon-start" icon="arrow-square-out"></ml-icon>Open on ${where}</ml-button>
 						<ml-button variant="outline" ?loading=${busy === 'checkout'} ?disabled=${!!busy && busy !== 'checkout'} @ml:click=${() => work.checkout()}><ml-icon slot="icon-start" icon="git-branch"></ml-icon>Check out</ml-button>
+						<ml-button variant="outline" title=${self.ai.unavailable() || `Checks it out in its own worktree, then Claude looks for bugs and risks in everything it adds to ${d.summary.base}. Nothing is posted to ${where}.`} ?loading=${busy === 'claude'} ?disabled=${(!!busy && busy !== 'claude') || !!self.ai.unavailable()} @ml:click=${() => self.reviewWithClaude()}><ml-icon slot="icon-start" icon="sparkle"></ml-icon>Review with Claude</ml-button>
 						${d.summary.state === 'open' && !work.confirmMerge() ? html`<ml-button variant="primary" ?disabled=${!!busy || d.summary.draft} @ml:click=${() => work.confirmMerge.set(true)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>` : ''}
 					`
 					: ''}
@@ -352,7 +354,23 @@ export class HostWorkComponent {
 	@Service(HostWorkStore) readonly work!: HostWorkStore;
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
+	@Service(AiFeaturesStore) readonly ai!: AiFeaturesStore;
 	@Service(BackendService) private readonly _backend!: BackendService;
+
+	/**
+	 * The selected pull request, reviewed by Claude: its branch is checked out in a worktree of its
+	 * own and compared with the branch it is to be merged into. The findings stay in the app.
+	 */
+	async reviewWithClaude(): Promise<void> {
+		const pr = this.work.prDetail()?.summary;
+		if (!pr) {
+			return;
+		}
+		const word = this.host.prWord;
+		if (await this.work.checkout('claude')) {
+			await this.ai.review({ scope: 'branch', base: pr.base, label: `${word[0].toUpperCase()}${word.slice(1)} #${pr.id}` });
+		}
+	}
 
 	onCreate(): void {
 		this.work.watch();

@@ -2,6 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
 import { AgentsStore, scopeOf, type AgentSession, type WorkCheck } from '../../services/agents.store';
+import { AiFeaturesStore } from '../../services/ai-features.store';
 import { RepoStore } from '../../services/repo.store';
 import { LspService } from '../../services/lsp.service';
 import { HostStore } from '../../services/host.store';
@@ -263,7 +264,8 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 				${s.group ? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.compare(s.group!)}><ml-icon slot="icon-start" icon="columns"></ml-icon>Compare attempts</ml-button>` : ''}
 				${ask
 					? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.openAsk(scopeOf(s))}><ml-icon slot="icon-start" icon="plus"></ml-icon>New question</ml-button>`
-					: html`<ml-button variant="outline" size="sm" ?disabled=${running} @ml:click=${() => agents.review(s)}><ml-icon slot="icon-start" icon="git-diff"></ml-icon>Review changes</ml-button>`}
+					: html`<ml-button variant="outline" size="sm" ?disabled=${running} @ml:click=${() => agents.review(s)}><ml-icon slot="icon-start" icon="git-diff"></ml-icon>Review changes</ml-button>
+						<ml-button variant="outline" size="sm" ?disabled=${running || !!self.ai.unavailable()} title=${self.ai.unavailable() || (s.isolated ? 'Goes to its worktree, where Claude looks for bugs and risks in everything it changed, committed or not' : 'Goes to its checkout, where Claude looks for bugs and risks in what is not committed yet')} @ml:click=${() => self.ai.reviewSession(s)}><ml-icon slot="icon-start" icon="sparkle"></ml-icon>Review with Claude</ml-button>`}
 				${!ask && s.isolated && s.branch && s.branch !== mainBranch
 					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into a branch you choose, or open a pull request. Commit the agent's work first.`} @ml:click=${() => self.openMerge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>`
 					: ''}
@@ -765,6 +767,7 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 })
 export class AgentSessionComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
+	@Service(AiFeaturesStore) readonly ai!: AiFeaturesStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(LspService) readonly lsp!: LspService;

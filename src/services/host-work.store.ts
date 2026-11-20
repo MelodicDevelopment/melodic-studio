@@ -260,14 +260,17 @@ export class HostWorkStore {
 		}
 	}
 
-	/** The pull request's branch in a worktree of its own (made once, then reused), and the app pointed at it. */
-	async checkout(): Promise<void> {
+	/**
+	 * The pull request's branch in a worktree of its own (made once, then reused), and the app pointed at it.
+	 * True when it is. `as` is the button that asked, which shows as busy meanwhile.
+	 */
+	async checkout(as: 'checkout' | 'claude' = 'checkout'): Promise<boolean> {
 		const id = this.id;
 		const number = this.selectedPr();
 		if (!id || !number || this.prBusy()) {
-			return;
+			return false;
 		}
-		this.prBusy.set('checkout');
+		this.prBusy.set(as);
 		try {
 			const branch = await this.backend.prFetch(id, number);
 			const trees = await this.backend.worktrees(id);
@@ -277,8 +280,10 @@ export class HostWorkStore {
 			await this.repos.switchContext('changes');
 			this.closePulls();
 			this.toast.success(`#${number} is checked out`, `On ${branch}, in its own worktree.`);
+			return true;
 		} catch (e) {
 			this.fail(e);
+			return false;
 		} finally {
 			this.prBusy.set('');
 		}

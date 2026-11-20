@@ -3,6 +3,7 @@ import type { AiPanelComponent } from './ai-panel.component';
 import type { ExplainState, ReviewState } from '../../services/ai-features.store';
 import type { Finding, Severity } from '../../services/ai-prompts';
 import { dirName, fileName, plural } from '../../shared/format';
+import { describeReview } from '../../shared/review-offers';
 import { renderMarkdown } from './markdown';
 
 const SEVERITY_LABEL: Record<Severity, string> = { bug: 'Bug', risk: 'Risk', nit: 'Nit' };
@@ -40,6 +41,16 @@ function explainBody(self: AiPanelComponent, ex: ExplainState) {
 	`;
 }
 
+/** Hands findings to an agent. Its click stays its own: a row's click opens the finding in the diff. */
+function fixButton(self: AiPanelComponent, list: Finding[], size: 'xs' | 'sm') {
+	const b = self.ai.fixButton(list);
+	return html`
+		<span class="fix" @click=${(e: Event) => e.stopPropagation()}>
+			<ml-button variant="outline" size=${size} title=${b.title} ?disabled=${b.disabled} @ml:click=${() => self.ai.fixFindings(list)}><ml-icon slot="icon-start" icon="sparkle" size="sm"></ml-icon>${b.label}</ml-button>
+		</span>
+	`;
+}
+
 function findingRow(self: AiPanelComponent, f: Finding) {
 	const view = self.ai.reviewView();
 	const open = !!view && view.path === f.file && view.line === f.line;
@@ -47,7 +58,10 @@ function findingRow(self: AiPanelComponent, f: Finding) {
 		<div class="finding ${f.severity} ${open ? 'open' : ''}" title="Show this in the diff" @click=${() => self.ai.openFinding(f)}>
 			<div class="ft"><span class="sev">${SEVERITY_LABEL[f.severity]}</span><span class="title">${f.title}</span></div>
 			${f.detail ? html`<div class="fd">${renderMarkdown(f.detail)}</div>` : ''}
-			<div class="fl">${f.line !== null ? `Line ${f.line}` : 'Whole file'}</div>
+			<div class="fl">
+				<span>${f.line !== null ? `Line ${f.line}` : 'Whole file'}</span>
+				${fixButton(self, [f], 'xs')}
+			</div>
 		</div>
 	`;
 }
@@ -58,7 +72,7 @@ function findings(self: AiPanelComponent, rv: ReviewState) {
 			<div class="clean">
 				<ml-icon icon="check-circle" size="lg"></ml-icon>
 				<b>No problems found</b>
-				<span>${rv.summary || 'Claude found nothing in these commits that needs fixing before you push.'}</span>
+				<span>${rv.summary || (rv.request.scope === 'push' ? 'Claude found nothing in these commits that needs fixing before you push.' : 'Claude found nothing in these changes that needs fixing.')}</span>
 			</div>
 		`;
 	}
@@ -82,13 +96,16 @@ function reviewBody(self: AiPanelComponent, rv: ReviewState) {
 	const ai = self.ai;
 	const busy = isBusy(rv.state);
 	const range = rv.range;
+	const sent = ai.fixSent();
+	const unsent = rv.findings.filter((f) => !sent.has(f));
+	const what = describeReview(rv.request, range && { against: range.against, commits: range.commits.length, files: range.files.length });
 	return html`
 		<div class="sub">
-			<div class="t">Before you push</div>
-			<div class="d">${range ? `${plural(range.commits.length, 'commit')} and ${plural(range.files.length, 'changed file')}, compared with ${range.against}` : 'Everything a push would send'}</div>
+			<div class="t" title=${what.title}>${what.title}</div>
+			<div class="d" title=${what.detail}>${what.detail}</div>
 		</div>
 		<div class="body">
-			${rv.state === 'collecting' ? wait('Reading what would be pushed…') : ''}
+			${rv.state === 'collecting' ? wait(rv.request.scope === 'push' ? 'Reading what would be pushed…' : 'Reading the changes…') : ''}
 			${rv.state === 'running'
 				? html`
 					${wait('Claude is reviewing the changes. It may open files around them, so this can take a minute or two.')}
@@ -103,7 +120,8 @@ function reviewBody(self: AiPanelComponent, rv: ReviewState) {
 		<div class="foot">
 			${busy
 				? html`<ml-button variant="outline" size="sm" @ml:click=${() => ai.stopReview()}><ml-icon slot="icon-start" icon="stop" size="sm"></ml-icon>Stop</ml-button>`
-				: html`<ml-button variant="outline" size="sm" @ml:click=${() => ai.review()}><ml-icon slot="icon-start" icon="arrow-clockwise" size="sm"></ml-icon>Review again</ml-button>`}
+				: html`<ml-button variant="outline" size="sm" @ml:click=${() => ai.review(rv.request)}><ml-icon slot="icon-start" icon="arrow-clockwise" size="sm"></ml-icon>Review again</ml-button>`}
+			${rv.state === 'done' && unsent.length > 1 ? fixButton(self, unsent, 'sm') : ''}
 		</div>
 	`;
 }

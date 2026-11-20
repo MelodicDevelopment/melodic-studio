@@ -1,6 +1,6 @@
 //! Git plumbing for the AI features around changes: the bounded diffs a prompt carries
-//! (the checked files, one commit, everything a push would send) and the preview and
-//! apply steps of a proposed conflict resolution. Nothing here talks to Claude; the
+//! (the checked files, one commit, what a review covers: a push, a branch, or the work in a
+//! checkout) and the preview and apply steps of a proposed conflict resolution. Nothing here talks to Claude; the
 //! frontend builds the prompt and runs it through the `claude` CLI (see agent.rs).
 
 use crate::commands::repo;
@@ -50,20 +50,24 @@ pub struct PushCommit {
     pub summary: String,
 }
 
-/// Everything a push would send, as one diff.
+/// What a review covers, as one diff.
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct PushDiff {
+pub struct ReviewDiff {
+    /// push: what a push would send. branch: everything the branch has that another does not, which
+    /// is what its pull request carries. work: everything in the checkout since a commit, with what
+    /// is not committed yet and new files.
+    pub scope: String,
     /// The diff with new-file line numbers written in (see `numbered`), capped.
     pub text: String,
     pub truncated: bool,
-    /// The commit the diff starts from: where this branch left its upstream or the default branch.
+    /// The commit the diff starts from: where this branch left `against`, or the commit the work started at.
     pub base: String,
-    /// The commit it ends at (HEAD when it was read).
+    /// The commit it ends at (HEAD when it was read). Empty for `work`: that ends at the files as they are.
     pub head: String,
-    /// What `base` was measured against, e.g. `origin/main`.
+    /// What `base` was measured against, e.g. `origin/main`; for `work`, the short hash of `base`.
     pub against: String,
-    /// The commits in between, newest first.
+    /// The commits in between, newest first. `work` may have none.
     pub commits: Vec<PushCommit>,
     pub files: Vec<FileChange>,
 }
@@ -269,40 +273,124 @@ fn changed_files(git: &Git, base: &str, head: &str) -> Result<Vec<FileChange>> {
     Ok(files)
 }
 
+fn commits_in(git: &Git, range: &str) -> Result<Vec<PushCommit>> {
+    let limit = format!("-{MAX_PUSH_COMMITS}");
+    Ok(git
+        .run(&["log", &limit, "--format=%H%x1f%s", range])?
+        .lines()
+        .filter_map(|l| l.split_once('\x1f'))
+        .map(|(hash, summary)| PushCommit { hash: hash.to_string(), summary: summary.to_string() })
+        .collect())
+}
+
+/// The commits HEAD has that `against` does not, and their combined diff from where the two parted.
+fn range_diff(git: &Git, scope: &str, against: &str, shown: String) -> Result<ReviewDiff> {
+    let base = git.run(&["merge-base", against, "HEAD"]).map_err(|_| AppError::msg(format!("This branch shares no history with {shown}")))?.trim().to_string();
+    let head = git.run(&["rev-parse", "HEAD"])?.trim().to_string();
+    let commits = commits_in(git, &format!("{base}..{head}"))?;
+    if commits.is_empty() {
+        return Ok(ReviewDiff { scope: scope.into(), base, head, against: shown, ..Default::default() });
+    }
+    let files = changed_files(git, &base, &head)?;
+    let patch = git.run(&["diff", "--no-color", "--no-ext-diff", "-M", &base, &head])?;
+    let (text, truncated) = bounded(&split_patch(&numbered(&patch)), MAX_AI_DIFF_BYTES);
+    Ok(ReviewDiff { scope: scope.into(), text, truncated, base, head, against: shown, commits, files })
+}
+
+fn no_commits() -> AppError {
+    AppError::msg("There are no commits to review yet")
+}
+
 /// What a push would send: the upstream branch to HEAD, or, for a branch that was never
 /// pushed, the point where it left the default branch to HEAD. No commits means nothing to send.
-pub fn push_diff(git: &Git) -> Result<PushDiff> {
+pub fn push_diff(git: &Git) -> Result<ReviewDiff> {
     if !git.has_commits() {
-        return Err(AppError::msg("There are no commits to review yet"));
+        return Err(no_commits());
     }
     let against = match git.run(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) {
         Ok(upstream) => upstream.trim().to_string(),
         Err(_) => default_branch(git).ok_or_else(|| AppError::msg("This branch has no upstream and there is no default branch to compare it with, so there is nothing to review against"))?,
     };
-    let base = git.run(&["merge-base", &against, "HEAD"]).map_err(|_| AppError::msg(format!("This branch shares no history with {against}")))?.trim().to_string();
-    let head = git.run(&["rev-parse", "HEAD"])?.trim().to_string();
-    let range = format!("{base}..{head}");
-    let limit = format!("-{MAX_PUSH_COMMITS}");
-    let commits: Vec<PushCommit> = git
-        .run(&["log", &limit, "--format=%H%x1f%s", &range])?
-        .lines()
-        .filter_map(|l| l.split_once('\x1f'))
-        .map(|(hash, summary)| PushCommit { hash: hash.to_string(), summary: summary.to_string() })
-        .collect();
-    if commits.is_empty() {
-        return Ok(PushDiff { base, head, against, ..Default::default() });
-    }
-    let files = changed_files(git, &base, &head)?;
-    let patch = git.run(&["diff", "--no-color", "--no-ext-diff", "-M", &base, &head])?;
-    let (text, truncated) = bounded(&split_patch(&numbered(&patch)), MAX_AI_DIFF_BYTES);
-    Ok(PushDiff { text, truncated, base, head, against, commits, files })
+    range_diff(git, "push", &against, against.clone())
 }
 
-/// One file of a reviewed range, for showing a finding in place.
+/// Everything this branch has that `target` does not, pushed or not: what a pull request from it
+/// into `target` carries. `target` is a branch name (the remote's copy is used when there is one);
+/// without it, the default branch.
+pub fn branch_diff(git: &Git, target: Option<&str>) -> Result<ReviewDiff> {
+    if !git.has_commits() {
+        return Err(no_commits());
+    }
+    match target {
+        Some(target) => {
+            let full = crate::host_cli::base_ref(git, target)?;
+            let shown = full.strip_prefix("refs/remotes/").or_else(|| full.strip_prefix("refs/heads/")).unwrap_or(&full).to_string();
+            range_diff(git, "branch", &full, shown)
+        }
+        None => {
+            let against = default_branch(git).ok_or_else(|| AppError::msg("There is no default branch here to compare this branch with"))?;
+            range_diff(git, "branch", &against, against.clone())
+        }
+    }
+}
+
+/// Everything the checkout holds that the commit `since` does not: commits made after it, what is
+/// staged or only edited, and new files. Without `since`, HEAD: the uncommitted work alone. Reads
+/// only, so it is safe while an agent is still working there.
+pub fn work_diff(git: &Git, since: Option<&str>) -> Result<ReviewDiff> {
+    if !git.has_commits() {
+        return Err(no_commits());
+    }
+    if let Some(since) = since {
+        check_hash(since)?;
+    }
+    let work = crate::worktree::diff_since(git, since.unwrap_or("HEAD"))?;
+    let commits = if work.head.is_empty() || work.head == work.base { vec![] } else { commits_in(git, &format!("{}..{}", work.base, work.head))? };
+    let mut skipped = work.too_large;
+    let mut sections = Vec::with_capacity(work.files.len());
+    let mut files = Vec::with_capacity(work.files.len());
+    for file in work.files {
+        if file.diff.trim().is_empty() {
+            skipped = true;
+            sections.push(format!("[{} {}: diff not shown]\n", file.status, file.path));
+        } else {
+            sections.push(numbered(&file.diff));
+        }
+        // A file git does not track yet is, to a reviewer, an added one.
+        let status = if file.status == "untracked" { "added".to_string() } else { file.status };
+        files.push(FileChange { path: file.path, old_path: file.old_path, status });
+    }
+    let (text, truncated) = if files.is_empty() { (String::new(), false) } else { bounded(&sections, MAX_AI_DIFF_BYTES) };
+    let against = work.base.chars().take(7).collect();
+    Ok(ReviewDiff { scope: "work".into(), text, truncated: truncated || (skipped && !files.is_empty()), base: work.base, head: String::new(), against, commits, files })
+}
+
+/// The diff a review is made of. `base` is the target branch for `branch` and the starting commit for `work`.
+pub fn review_diff(git: &Git, scope: &str, base: Option<&str>) -> Result<ReviewDiff> {
+    let base = base.map(str::trim).filter(|b| !b.is_empty());
+    match scope {
+        "push" => push_diff(git),
+        "branch" => branch_diff(git, base),
+        "work" => work_diff(git, base),
+        _ => Err(AppError::msg("That is not something a review can cover")),
+    }
+}
+
+/// One file of a reviewed range, for showing a finding in place. An empty `head` is the working
+/// tree (a review of the work in a checkout), where the file may be one git does not track yet.
 pub fn range_file_diff(git: &Git, base: &str, head: &str, path: &str) -> Result<DiffResult> {
     check_hash(base)?;
-    check_hash(head)?;
-    let text = git.run(&["diff", "--no-color", "--no-ext-diff", base, head, "--", path])?;
+    let text = if head.is_empty() {
+        let text = git.run(&["diff", "--no-color", "--no-ext-diff", base, "--", path])?;
+        // Only a path git itself lists as untracked is read from disk: the name comes from Claude's answer.
+        if text.is_empty() && git.run(&["ls-files", "--others", "--exclude-standard", "-z", "--", path]).is_ok_and(|out| out.split('\0').any(|p| p == path)) {
+            return git.diff_worktree(path, None, "untracked");
+        }
+        text
+    } else {
+        check_hash(head)?;
+        git.run(&["diff", "--no-color", "--no-ext-diff", base, head, "--", path])?
+    };
     if text.len() > MAX_DIFF_BYTES {
         Ok(DiffResult { text: String::new(), too_large: true })
     } else {
@@ -425,8 +513,8 @@ pub async fn ai_commit_patch(state: State<'_, AppState>, id: String, hash: Strin
 }
 
 #[tauri::command]
-pub async fn ai_push_diff(state: State<'_, AppState>, id: String) -> Result<PushDiff> {
-    push_diff(&repo(&state, &id)?)
+pub async fn ai_review_diff(state: State<'_, AppState>, id: String, scope: String, base: Option<String>) -> Result<ReviewDiff> {
+    review_diff(&repo(&state, &id)?, &scope, base.as_deref())
 }
 
 #[tauri::command]
@@ -602,6 +690,92 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&g.dir);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn branch_diff_is_what_a_pull_request_carries() {
+        let g = scratch("branch");
+        let remote = g.dir.with_extension("remote.git");
+        let _ = std::fs::remove_dir_all(&remote);
+        Git::run_global(&["init", "-q", "--bare", "-b", "main", &remote.to_string_lossy()]).unwrap();
+        write(&g, "a.txt", "one\n");
+        g.commit(&["a.txt".into()], "Add a", "", false).unwrap();
+        g.set_remote(&remote.to_string_lossy()).unwrap();
+        g.push(false).unwrap();
+
+        // A branch that is pushed and level with its upstream: a push would send nothing, its pull request still has it all.
+        g.branch_create("topic", None).unwrap();
+        write(&g, "a.txt", "one\ntwo\n");
+        g.commit(&["a.txt".into()], "Second line", "", false).unwrap();
+        g.run(&["push", "-q", "-u", "origin", "topic"]).unwrap();
+        assert!(push_diff(&g).unwrap().commits.is_empty());
+        let d = branch_diff(&g, None).unwrap();
+        assert_eq!((d.scope.as_str(), d.against.as_str()), ("branch", "origin/main"));
+        assert_eq!(d.commits.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>(), ["Second line"]);
+        assert!(d.text.contains("     2 + two") && d.head == g.log(0, 1).unwrap()[0].hash);
+
+        // Against a branch named by the pull request: the remote's copy of it, else the local one.
+        assert_eq!(branch_diff(&g, Some("main")).unwrap().against, "origin/main");
+        g.run(&["branch", "release", "HEAD~1"]).unwrap();
+        let d = review_diff(&g, "branch", Some(" release ")).unwrap();
+        assert_eq!((d.against.as_str(), d.commits.len()), ("release", 1));
+        assert!(branch_diff(&g, Some("nowhere")).is_err());
+        assert!(branch_diff(&g, Some("--upload-pack=x")).is_err());
+        assert!(review_diff(&g, "everything", None).is_err());
+
+        // What is not committed is not part of it.
+        write(&g, "a.txt", "one\ntwo\nthree\n");
+        assert!(!branch_diff(&g, None).unwrap().text.contains("three"));
+
+        let _ = std::fs::remove_dir_all(&g.dir);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn work_diff_covers_commits_and_what_is_not_committed() {
+        let g = scratch("work");
+        write(&g, "a.txt", "one\ntwo\n");
+        g.commit(&["a.txt".into()], "Add a", "", false).unwrap();
+        let start = g.log(0, 1).unwrap()[0].hash.clone();
+
+        let none = work_diff(&g, None).unwrap();
+        assert!(none.files.is_empty() && none.text.is_empty() && !none.truncated);
+
+        // A commit since the start, an edit that is not committed, and a file git does not track yet.
+        write(&g, "a.txt", "one\ntwo\nthree\n");
+        g.commit(&["a.txt".into()], "Third line", "", false).unwrap();
+        write(&g, "a.txt", "one\ntwo\nthree\nfour\n");
+        write(&g, "src/new.txt", "hello\n");
+        let d = work_diff(&g, Some(&start)).unwrap();
+        assert_eq!((d.scope.as_str(), d.head.as_str(), d.base.as_str()), ("work", "", start.as_str()));
+        assert_eq!(d.against, start[..7]);
+        assert_eq!(d.commits.iter().map(|c| c.summary.as_str()).collect::<Vec<_>>(), ["Third line"]);
+        assert_eq!(d.files.iter().map(|f| (f.path.as_str(), f.status.as_str())).collect::<Vec<_>>(), [("a.txt", "modified"), ("src/new.txt", "added")]);
+        assert!(d.text.contains("     3 + three") && d.text.contains("     4 + four") && d.text.contains("     1 + hello"), "numbered by new-file line: {}", d.text);
+        assert!(!d.truncated);
+
+        // Without a starting commit: only what is not committed.
+        let d = review_diff(&g, "work", None).unwrap();
+        assert!(d.commits.is_empty());
+        assert!(d.text.contains("     3   three") && d.text.contains("     4 + four") && d.text.contains("     1 + hello"), "{}", d.text);
+        assert!(work_diff(&g, Some("main")).is_err(), "only hashes");
+
+        // A finding's file, as it is on disk now.
+        let a = range_file_diff(&g, &start, "", "a.txt").unwrap();
+        assert!(a.text.contains("+three") && a.text.contains("+four"));
+        let new = range_file_diff(&g, &start, "", "src/new.txt").unwrap();
+        assert!(new.text.contains("+hello"));
+        // A name that is not a file of this checkout reads nothing from disk.
+        let outside = g.dir.with_extension("outside.txt");
+        std::fs::write(&outside, "secret\n").unwrap();
+        let name = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        assert!(!range_file_diff(&g, &start, "", &name).map(|d| d.text).unwrap_or_default().contains("secret"));
+
+        // Nothing was staged or changed by reading.
+        assert!(g.run(&["diff", "--cached", "--name-only"]).unwrap().trim().is_empty());
+
+        let _ = std::fs::remove_dir_all(&g.dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
