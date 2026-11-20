@@ -53,7 +53,12 @@ pub struct RunOptions {
     /// The turn belongs to an investigation: it gets Studio's own tools for running the app
     /// (`investigate.rs`) and none of the user's settings, so nothing else can start it.
     pub investigate: Option<Investigate>,
+    /// Images the user attached to this message, by their names in the session's folder (`history.rs`).
+    pub images: Vec<String>,
 }
+
+/// More than this in one message is refused.
+const MAX_IMAGES: usize = 10;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -75,6 +80,10 @@ fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions, mcp: Option
     let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", mode].map(String::from).to_vec();
     if let Some(session) = resume.filter(|s| plain(s, "-") && !s.starts_with('-')) {
         args.extend(["--resume".to_string(), session.to_string()]);
+    }
+    if !options.images.is_empty() {
+        // The message is then one line of JSON on stdin, which is the only way an image gets in (checked with 2.1.329).
+        args.extend(["--input-format", "stream-json"].map(String::from));
     }
     if let Some(config) = mcp {
         // Restricted: the user's own settings (their allow rules, their hooks) do not apply, so what the
@@ -108,6 +117,25 @@ fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions, mcp: Option
         args.extend(rules.iter().cloned());
     }
     Ok(args)
+}
+
+/// What goes in on stdin for a turn: the prompt as it is, or with images one user message as a
+/// line of JSON, the images first and then the text (which may be empty).
+fn turn_input(prompt: &str, images: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    if images.is_empty() {
+        return prompt.as_bytes().to_vec();
+    }
+    use base64::Engine;
+    let mut content: Vec<serde_json::Value> = images
+        .iter()
+        .map(|(media_type, bytes)| serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }))
+        .collect();
+    if !prompt.trim().is_empty() {
+        content.push(serde_json::json!({ "type": "text", "text": prompt }));
+    }
+    let mut line = serde_json::json!({ "type": "user", "message": { "role": "user", "content": content } }).to_string().into_bytes();
+    line.push(b'\n');
+    line
 }
 
 fn claude() -> Command {
@@ -149,6 +177,7 @@ pub async fn agent_start(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     agents: State<'_, Agents>,
+    history: State<'_, crate::history::History>,
     id: String,
     cwd: String,
     key: String,
@@ -173,9 +202,19 @@ pub async fn agent_start(
         None => None,
     };
     let args = turn_args(&mode, resume.as_deref(), &options, mcp.as_ref().map(|file| file.to_string_lossy()).as_deref())?;
-    if prompt.trim().is_empty() {
+    if prompt.trim().is_empty() && options.images.is_empty() {
         return Err(AppError::msg("Give the agent something to do"));
     }
+    if options.images.len() > MAX_IMAGES {
+        return Err(AppError::msg(format!("A message takes {MAX_IMAGES} images at most")));
+    }
+    // The session's own images, which the window saved before it asked for the turn.
+    let mut images = Vec::new();
+    for name in &options.images {
+        images.push((crate::history::media_type(name)?, crate::history::image_read(&history.dir, &key, name)?));
+    }
+    let input = turn_input(&prompt, &images);
+    drop(images);
     if agents.running.lock().unwrap().contains_key(&key) {
         return Err(AppError::msg("This agent is still working"));
     }
@@ -190,9 +229,12 @@ pub async fn agent_start(
     c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = c.spawn().map_err(|e| AppError::msg(format!("Could not start Claude Code: {e}. Is the `claude` CLI installed?")))?;
 
-    // The prompt goes in on stdin so nothing in it can be read as a command-line option.
+    // The prompt goes in on stdin so nothing in it can be read as a command-line option. From a thread
+    // of its own: with images it is megabytes, and Claude Code may write before it has read it all.
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes())?;
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
     }
     let stdout = child.stdout.take().ok_or_else(|| AppError::msg("No output from Claude Code"))?;
     let mut stderr = child.stderr.take();
@@ -270,7 +312,32 @@ mod tests {
         let investigate = turn_args("acceptEdits", Some("s2"), &RunOptions { tools: Some(rules), builtin: Some(vec!["Edit".into(), "Bash".into()]), investigate: Some(Investigate::default()), ..Default::default() }, Some("/cache/x.json")).unwrap();
         assert_eq!(investigate[6..], ["--resume", "s2", "--restricted", "--strict-mcp-config", "--mcp-config", "/cache/x.json", "--disable-slash-commands", "--tools", "Edit,Bash", "--allowedTools", "Edit", "Bash(dotnet build:*)", "mcp__studio__run_target"]);
 
+        // Images: the message goes in as JSON, and the rules still come last.
+        let seen = args("acceptEdits", Some("s3"), RunOptions { images: vec!["a.png".into()], tools: Some(vec!["Read".into()]), ..Default::default() });
+        assert_eq!(seen[6..], ["--resume", "s3", "--input-format", "stream-json", "--allowedTools", "Read"]);
+
         assert!(turn_args("default", None, &RunOptions { tools: Some(vec!["--dangerously-skip-permissions".into()]), ..Default::default() }, None).is_err());
         assert!(turn_args("default", None, &RunOptions { builtin: Some(vec!["Read,Edit".into()]), ..Default::default() }, None).is_err());
+    }
+
+    #[test]
+    fn what_goes_in_on_stdin() {
+        // Text alone is sent as it is, to the byte.
+        assert_eq!(turn_input("Fix it\n--resume x", &[]), b"Fix it\n--resume x");
+        // With images it is one line of JSON: the images first, then the text.
+        let line = turn_input("What is\nthis?", &[("image/png", vec![1, 2, 3]), ("image/jpeg", vec![255])]);
+        assert_eq!(line.iter().filter(|b| **b == b'\n').count(), 1, "a line break in the text must not end the message");
+        assert_eq!(line.last(), Some(&b'\n'));
+        let message: serde_json::Value = serde_json::from_slice(&line).unwrap();
+        assert_eq!(message["type"], "user");
+        assert_eq!(message["message"]["role"], "user");
+        let content = message["message"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[0]["source"], serde_json::json!({ "type": "base64", "media_type": "image/png", "data": "AQID" }));
+        assert_eq!(content[1]["source"]["media_type"], "image/jpeg");
+        assert_eq!(content[2], serde_json::json!({ "type": "text", "text": "What is\nthis?" }));
+        // An image with nothing typed is a message too.
+        let alone: serde_json::Value = serde_json::from_slice(&turn_input("  ", &[("image/png", vec![1])])).unwrap();
+        assert_eq!(alone["message"]["content"].as_array().unwrap().len(), 1);
     }
 }

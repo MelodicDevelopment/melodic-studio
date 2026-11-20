@@ -6,7 +6,9 @@ import { RepoStore } from '../../services/repo.store';
 import { LspService } from '../../services/lsp.service';
 import { HostStore } from '../../services/host.store';
 import { DialogService } from '@melodicdev/components/dialog';
-import type { AgentMode } from '../../services/backend.service';
+import { isDesktop, type AgentMode } from '../../services/backend.service';
+import { imagesIn } from '../../services/agent-images';
+import { IMAGE_TYPES } from '../../shared/images';
 import { samePath } from '../../services/agent-paths';
 import { AGENT_MODES } from './agents.component';
 import { richText, richTextStyles, type RichOptions } from './rich-text';
@@ -187,6 +189,20 @@ function checkDetail(self: AgentSessionComponent, s: AgentSession) {
 	`;
 }
 
+/** An image that went with a message: small in the transcript, large on a click. */
+function sentShot(self: AgentSessionComponent, id: string, name: string) {
+	const url = self.agents.shot(id, name);
+	if (url === null) {
+		return html`<span class="shot wait"><ml-spinner size="sm"></ml-spinner></span>`;
+	}
+	if (!url) {
+		return html`<span class="shot gone" title="Its file is no longer in the app's data folder">Image not kept</span>`;
+	}
+	const key = `${id}/${name}`;
+	const big = self.bigShot === key;
+	return html`<span class="shot ${big ? 'big' : ''}"><img src=${url} alt="Image sent with this message" title=${big ? 'Show it small again' : 'Show it large'} @click=${() => (self.bigShot = big ? null : key)} /></span>`;
+}
+
 @MelodicComponent({
 	selector: 'ms-agent-session',
 	template: (self: AgentSessionComponent) => {
@@ -234,6 +250,8 @@ function checkDetail(self: AgentSessionComponent, s: AgentSession) {
 		}
 		const running = s.status === 'running';
 		const ask = s.kind === 'ask';
+		const attached = agents.attached()[s.id] ?? [];
+		const adding = agents.attaching()[s.id] ?? 0;
 		// Items before this one wait behind "Show earlier".
 		const hidden = Math.max(0, s.items.length - SHOWN_ITEMS - self.earlier);
 		const mainBranch = agents.worktrees().find((w) => w.isMain)?.branch;
@@ -277,21 +295,38 @@ function checkDetail(self: AgentSessionComponent, s: AgentSession) {
 						? html`<div class="tool"><ml-icon icon=${TOOL_ICONS[item.text] ?? 'wrench'} size="sm"></ml-icon><b>${item.text}</b><span>${item.detail ?? ''}</span></div>`
 						: item.kind === 'text'
 							? html`<div class="msg text">${richText(item.text, links, follow)}</div>`
-							: html`<div class="msg ${item.kind}">${item.text}</div>`
+							: html`<div class="msg ${item.kind}">${item.text}${item.images?.length ? html`<div class="shots">${item.images.map((name) => sentShot(self, s.id, name))}</div>` : ''}</div>`
 				)}
 				${running ? html`<div class="working"><ml-spinner size="sm"></ml-spinner>${ask ? 'Reading…' : 'Working…'}</div>` : ''}
 			</div>
 
-			<div class="composer" @keydown=${self.keydown}>
+			<div class="composer ${self.dropping ? 'dropping' : ''}" @keydown=${self.keydown} @paste=${self.paste} @dragover=${self.htmlOver} @dragleave=${self.htmlLeave} @drop=${self.htmlDrop}>
+				${attached.length || adding
+					? html`
+						<div class="shots">
+							${attached.map(
+								(a) => html`
+									<span class="shot">
+										<img src=${a.url} alt="Image to send" />
+										<button title="Remove this image" aria-label="Remove this image" @click=${() => agents.detach(s.id, a.name)}><ml-icon icon="x" size="xs"></ml-icon></button>
+									</span>
+								`
+							)}
+							${adding ? html`<span class="shot wait"><ml-spinner size="sm"></ml-spinner></span>` : ''}
+						</div>
+					`
+					: ''}
 				<ml-textarea rows="3" placeholder=${running ? (ask ? 'Looking for the answer…' : 'The agent is working…') : ask ? 'Ask a follow-up question' : 'Ask for a change, a fix, or an explanation'} .value=${self.draft} @ml:input=${(e: CustomEvent) => (self.draft = e.detail.value)}></ml-textarea>
 				<div class="row">
 					${ask
 						? html`<span class="note"><ml-icon icon="lock-simple" size="sm"></ml-icon>Read-only: it can search and read${scopeOf(s) === 'history' ? ' the files and the git history' : ' the files'}, and change nothing.</span>`
 						: html`<ml-select size="sm" .options=${AGENT_MODES} .value=${s.mode} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setMode(s.id, e.detail.value as AgentMode)}></ml-select>`}
 					<span class="grow"></span>
+					<input class="pick" type="file" accept=${Object.keys(IMAGE_TYPES).join(',')} multiple hidden @change=${self.picked} />
+					<ml-button variant="ghost" size="sm" title="Attach an image. You can also paste one, or drop it here." @ml:click=${() => self.pick()}><ml-icon slot="icon-start" icon="paperclip" size="sm"></ml-icon>Image</ml-button>
 					${running
 						? html`<ml-button variant="danger" size="sm" @ml:click=${() => agents.stop(s.id)}>Stop</ml-button>`
-						: html`<ml-button variant="primary" size="sm" ?disabled=${!self.draft.trim()} @ml:click=${() => self.send()}>${ask ? 'Ask' : 'Send'}</ml-button>`}
+						: html`<ml-button variant="primary" size="sm" ?disabled=${(!self.draft.trim() && !attached.length) || adding > 0} @ml:click=${() => self.send()}>${ask ? 'Ask' : 'Send'}</ml-button>`}
 				</div>
 			</div>
 		`;
@@ -601,6 +636,78 @@ function checkDetail(self: AgentSessionComponent, s: AgentSession) {
 			padding: 12px 16px;
 			border-top: 1px solid var(--ml-color-border);
 		}
+		.composer.dropping {
+			outline: 2px dashed var(--ml-color-primary);
+			outline-offset: -4px;
+		}
+		/* ---- images: waiting in the composer, and in a message that was sent ---- */
+		.shots {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+		}
+		.msg .shots {
+			margin-top: 8px;
+			white-space: normal;
+		}
+		.msg .shots:first-child {
+			margin-top: 0;
+		}
+		.shot {
+			position: relative;
+			display: inline-flex;
+		}
+		.shot img {
+			display: block;
+			height: 64px;
+			max-width: 160px;
+			object-fit: cover;
+			border-radius: 6px;
+			border: 1px solid var(--ml-color-border);
+			background: var(--ml-color-surface);
+		}
+		.msg .shot img {
+			height: 120px;
+			max-width: 280px;
+			cursor: zoom-in;
+		}
+		.msg .shot.big img {
+			height: auto;
+			max-width: 100%;
+			max-height: 70vh;
+			object-fit: contain;
+			cursor: zoom-out;
+		}
+		.shot button {
+			all: unset;
+			position: absolute;
+			top: -6px;
+			right: -6px;
+			display: grid;
+			place-items: center;
+			width: 18px;
+			height: 18px;
+			border-radius: 50%;
+			border: 1px solid var(--ml-color-border-strong);
+			background: var(--ml-color-surface-raised);
+			cursor: pointer;
+		}
+		.shot button:hover {
+			background: var(--ms-hover);
+		}
+		.shot.wait,
+		.shot.gone {
+			align-items: center;
+			justify-content: center;
+			box-sizing: border-box;
+			min-width: 64px;
+			height: 64px;
+			padding: 0 10px;
+			border-radius: 6px;
+			border: 1px dashed var(--ml-color-border-strong);
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+		}
 		.row {
 			display: flex;
 			align-items: center;
@@ -665,6 +772,11 @@ export class AgentSessionComponent {
 	elementRef!: HTMLElement;
 
 	draft = '';
+	/** Files are being dragged over the pane: the composer shows where they will land. */
+	dropping = false;
+	/** The sent image shown large, as `session/name`. */
+	bigShot: string | null = null;
+	private _unlistenDrop: (() => void) | null = null;
 	/** The session whose check is unfolded under its status line (the pill at the end of it). */
 	checkOpen: string | null = null;
 	/** Merge dialog: the branch picked (or NEW_BRANCH), and the new branch's name and starting point. */
@@ -781,11 +893,116 @@ export class AgentSessionComponent {
 
 	send(): void {
 		const s = this.agents.selected();
-		if (s && this.draft.trim()) {
-			void this.agents.send(s.id, this.draft);
+		// Not while a turn runs or an image is still being made ready: nothing would be sent, and the draft would be gone.
+		if (!s || s.status === 'running' || this.agents.attaching()[s.id]) {
+			return;
+		}
+		const images = this.agents.attached()[s.id] ?? [];
+		if (this.draft.trim() || images.length) {
+			void this.agents.send(s.id, this.draft, { images: this.agents.takeAttached(s.id) });
 			this.draft = '';
 		}
 	}
+
+	// ---- images: pasted, picked, dropped -----------------------------------
+
+	onCreate(): void {
+		void this.listenForDrops();
+	}
+
+	onDestroy(): void {
+		this._unlistenDrop?.();
+		this._unlistenDrop = null;
+	}
+
+	/** The session whose composer is on screen. */
+	private composing(): AgentSession | null {
+		const agents = this.agents;
+		return agents.asking() || agents.comparing() ? null : agents.selected();
+	}
+
+	/** A screenshot on the clipboard goes with the message; text is pasted as ever. */
+	readonly paste = (e: ClipboardEvent): void => {
+		const s = this.composing();
+		const images = imagesIn(e.clipboardData);
+		if (s && images.length) {
+			e.preventDefault();
+			void this.agents.attach(s.id, images);
+		}
+	};
+
+	pick(): void {
+		this.elementRef.shadowRoot?.querySelector<HTMLInputElement>('.pick')?.click();
+	}
+
+	readonly picked = (e: Event): void => {
+		const input = e.target as HTMLInputElement;
+		const s = this.composing();
+		if (s && input.files?.length) {
+			void this.agents.attach(s.id, [...input.files]);
+		}
+		input.value = ''; // the same file can be picked again
+	};
+
+	/** In the app, files dropped from outside arrive from the window with their paths (the explorer does the same). */
+	private async listenForDrops(): Promise<void> {
+		if (!isDesktop()) {
+			return; // the browser preview uses HTML drop events instead
+		}
+		const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+		const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+			const p = event.payload;
+			if (p.type === 'leave') {
+				this.dropping = false;
+				return;
+			}
+			// Positions arrive in physical pixels.
+			const box = this.elementRef.getBoundingClientRect();
+			const x = p.position.x / window.devicePixelRatio;
+			const y = p.position.y / window.devicePixelRatio;
+			const s = this.composing();
+			const over = !!s && box.width > 0 && x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+			if (p.type === 'drop') {
+				this.dropping = false;
+				if (s && over && p.paths.length) {
+					void this.agents.attachFiles(s.id, p.paths);
+				}
+			} else if (over !== this.dropping) {
+				this.dropping = over;
+			}
+		});
+		if (this._unlistenDrop === null && this.elementRef.isConnected) {
+			this._unlistenDrop = unlisten;
+		} else {
+			unlisten();
+		}
+	}
+
+	readonly htmlOver = (e: DragEvent): void => {
+		if (!isDesktop() && e.dataTransfer?.types.includes('Files')) {
+			e.preventDefault();
+			this.dropping = true;
+		}
+	};
+
+	readonly htmlLeave = (): void => {
+		if (!isDesktop()) {
+			this.dropping = false;
+		}
+	};
+
+	readonly htmlDrop = (e: DragEvent): void => {
+		if (isDesktop()) {
+			return;
+		}
+		e.preventDefault();
+		this.dropping = false;
+		const s = this.composing();
+		const images = imagesIn(e.dataTransfer);
+		if (s && images.length) {
+			void this.agents.attach(s.id, images);
+		}
+	};
 
 	/** Cmd/Ctrl+Enter sends. */
 	readonly keydown = (e: KeyboardEvent): void => {

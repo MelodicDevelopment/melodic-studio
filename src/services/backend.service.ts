@@ -74,6 +74,8 @@ export interface AgentRunOptions {
 	builtin?: string[];
 	/** The turn belongs to an investigation: it gets Studio's own tools for running the app and none of the user's settings. */
 	investigate?: { target: string | null };
+	/** Images that go with the message, by the names they were saved under for this session (`agentImageSave`). */
+	images?: string[];
 }
 /** Something a checkout can run, found in its project files (src-tauri/src/targets.rs). */
 export interface RunTarget {
@@ -627,6 +629,12 @@ export class BackendService {
 	agentSessionsLoad() { return this.call<{ sessions: string[]; unreadable: string[] }>('agent_sessions_load'); }
 	/** Keep one session's JSON text, or with null forget the session. Rejects when it cannot be written (a full disk, a folder that cannot be written). */
 	agentSessionSave(id: string, session: string | null) { return this.call<void>('agent_session_save', { id, session }); }
+	/** Keep an image attached to a message of a session; `data` is base64. It is deleted with the session. */
+	agentImageSave(id: string, name: string, data: string) { return this.call<void>('agent_image_save', { id, name, data }); }
+	/** An attached image, in base64. */
+	agentImageRead(id: string, name: string) { return this.call<string>('agent_image_read', { id, name }); }
+	/** An image file dropped on the window, in base64. Rejects for a file that is not named as an image. */
+	agentImageFile(path: string) { return this.call<{ mediaType: string; data: string }>('agent_image_file', { path }); }
 	agentStart(id: string, cwd: string, key: string, prompt: string, mode: AgentMode, resume: string | null, options: AgentRunOptions | null = null) { return this.call<void>('agent_start', { id, cwd, key, prompt, mode, resume, options }); }
 	agentStop(key: string) { return this.call<void>('agent_stop', { key }); }
 	/** Null when no server for that language is installed (and always in the browser preview). */
@@ -1146,6 +1154,8 @@ class DemoBackend {
 		}
 	}
 
+	private readonly demoImages = new Map<string, string>();
+
 	async call<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
 		await new Promise((r) => setTimeout(r, cmd === 'fetch' || cmd === 'pull' || cmd === 'push' || cmd === 'repo_clone' ? 700 : 40));
 		return this.handle(cmd, args) as T;
@@ -1481,6 +1491,17 @@ class DemoBackend {
 				const rest = demoSessions().filter((s) => s.id !== args.id);
 				localStorage.setItem(DEMO_SESSIONS_KEY, JSON.stringify(args.session ? [...rest, JSON.parse(String(args.session))] : rest));
 				return;
+			}
+			// The preview keeps attached images only while the page is open.
+			case 'agent_image_save':
+				this.demoImages.set(`${args.id}/${args.name}`, String(args.data));
+				return;
+			case 'agent_image_read': {
+				const data = this.demoImages.get(`${args.id}/${args.name}`);
+				if (!data) {
+					throw { kind: 'error', message: 'The preview does not keep images across a reload', paths: [] } satisfies AppError;
+				}
+				return data;
 			}
 			case 'agent_start': {
 				const key = String(args.key);

@@ -26,6 +26,8 @@ import { RepoStore } from './repo.store';
 import { ExplorerStore } from './explorer.store';
 import { WorkspaceStore } from './workspace.store';
 import { samePath } from './agent-paths';
+import { prepareImage, type Attachment } from './agent-images';
+import { IMAGE_TYPES, MAX_IMAGES } from '../shared/images';
 import { TerminalStore } from './terminal.store';
 import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, type InvestigationReport } from './ai-prompts';
 import { LspService, type Impact, type Problem } from './lsp.service';
@@ -38,6 +40,8 @@ export interface AgentItem {
 	text: string;
 	/** For a tool call: what it acted on (a path, a command). */
 	detail?: string;
+	/** For a message of the user's: the images sent with it, by their names in the session's folder. */
+	images?: string[];
 }
 
 export type AgentKind = 'task' | 'ask' | 'investigate';
@@ -433,6 +437,16 @@ export class AgentsStore {
 	readonly unread = computed<number>(() => this.sessions().filter((s) => s.unread).length);
 
 	private _listening: Promise<void> | null = null;
+	/** Images waiting in a session's composer, by session. In memory only, like the text beside them, but they outlive the pane (rebuilt on a tab switch). */
+	readonly attached = signal<Record<string, Attachment[]>>({});
+	/** Images being made ready, by session. */
+	readonly attaching = signal<Record<string, number>>({});
+	/** The images of the transcript on screen as `data:` addresses ('' for one whose file is gone). One session's at a time. */
+	private readonly _shots = new Map<string, string>();
+	private _shotsOf: string | null = null;
+	private readonly _shotsLoading = new Set<string>();
+	private readonly _shotsSeen = signal(0);
+
 	/** Sessions changed since they were last written, each with the timer that will write it. */
 	private readonly _unsaved = new Map<string, number>();
 	/** Sessions being written right now: one write per session at a time, since async commands can overtake each other. */
@@ -938,34 +952,131 @@ export class AgentsStore {
 		return this.find(session.id)?.status !== 'failed';
 	}
 
+	// ---- images with a message ---------------------------------------------
+
+	/** Put images in a session's composer: pasted, dropped or picked. Each is made ready (smaller, if it must be) first. */
+	async attach(id: string, files: Blob[]): Promise<void> {
+		const room = MAX_IMAGES - (this.attached()[id]?.length ?? 0) - (this.attaching()[id] ?? 0);
+		if (files.length > room) {
+			this.toast.info(`A message takes ${MAX_IMAGES} images at most`, room > 0 ? `Only the first ${room === 1 ? 'one was' : `${room} were`} added.` : 'Send these first.');
+		}
+		const taken = files.slice(0, Math.max(0, room));
+		if (!taken.length) {
+			return;
+		}
+		const count = (by: number): void => this.attaching.set({ ...this.attaching(), [id]: Math.max(0, (this.attaching()[id] ?? 0) + by) });
+		count(taken.length);
+		for (const file of taken) {
+			try {
+				const image = await prepareImage(file);
+				this.attached.set({ ...this.attached(), [id]: [...(this.attached()[id] ?? []), image] });
+			} catch (e) {
+				this.toast.error('That image was not added', e instanceof Error ? e.message : asAppError(e).message);
+			}
+			count(-1);
+		}
+	}
+
+	/** Image files dropped on the window from outside, by path: the native side reads them. */
+	async attachFiles(id: string, paths: string[]): Promise<void> {
+		const files: Blob[] = [];
+		for (const path of paths) {
+			try {
+				const { mediaType, data } = await this.backend.agentImageFile(path);
+				files.push(await (await fetch(`data:${mediaType};base64,${data}`)).blob());
+			} catch (e) {
+				this.toast.error('That file was not added', asAppError(e).message);
+			}
+		}
+		await this.attach(id, files);
+	}
+
+	detach(id: string, name: string): void {
+		this.attached.set({ ...this.attached(), [id]: (this.attached()[id] ?? []).filter((a) => a.name !== name) });
+	}
+
+	/** Hand over what is in a session's composer, which is then empty. */
+	takeAttached(id: string): Attachment[] {
+		const images = this.attached()[id] ?? [];
+		if (images.length) {
+			this.attached.set({ ...this.attached(), [id]: [] });
+		}
+		return images;
+	}
+
+	/**
+	 * An image of a transcript as an address for an `<img>`: null while it is being read, '' when its
+	 * file is gone. Only the session on screen is kept: asking for another session's lets the last one's go.
+	 */
+	shot(id: string, name: string): string | null {
+		this._shotsSeen();
+		if (this._shotsOf !== id) {
+			this._shotsOf = id;
+			this._shots.clear();
+		}
+		const known = this._shots.get(name);
+		if (known !== undefined) {
+			return known;
+		}
+		const key = `${id}/${name}`;
+		if (!this._shotsLoading.has(key)) {
+			this._shotsLoading.add(key);
+			const type = Object.keys(IMAGE_TYPES).find((t) => name.endsWith(`.${IMAGE_TYPES[t]}`)) ?? 'image/png';
+			void this.backend
+				.agentImageRead(id, name)
+				.then(
+					(data) => `data:${type};base64,${data}`,
+					() => ''
+				)
+				.then((url) => {
+					this._shotsLoading.delete(key);
+					if (this._shotsOf === id) {
+						this._shots.set(name, url);
+						this._shotsSeen.set(this._shotsSeen() + 1);
+					}
+				});
+		}
+		return null;
+	}
+
 	/**
 	 * Run another turn in an existing session. `shown` is what the transcript says was sent, when that is not
 	 * the prompt itself; `raw` sends the prompt as it is (an investigation otherwise wraps a follow-up in its rules).
+	 * `images` go with the message: they are saved in the session's folder first, and the native side reads them there.
 	 */
-	async send(id: string, prompt: string, options: { shown?: string; raw?: boolean } = {}): Promise<void> {
+	async send(id: string, prompt: string, options: { shown?: string; raw?: boolean; images?: Attachment[] } = {}): Promise<void> {
 		const session = this.find(id);
 		const text = prompt.trim();
-		if (!session || !text || session.status === 'running') {
+		const images = options.images ?? [];
+		if (!session || (!text && !images.length) || session.status === 'running') {
 			return;
 		}
 		await this.listen();
+		const names = images.map((a) => a.name);
+		const sent: AgentItem = { kind: 'user', text: options.shown ?? text, ...(names.length ? { images: names } : {}) };
 		// What the language servers said is about the files as they were; the turn changes them.
-		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, items: [...s.items, { kind: 'user', text: options.shown ?? text }] }));
+		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, items: [...s.items, sent] }));
 		this._live.add(id);
 		try {
+			for (const image of images) {
+				await this.backend.agentImageSave(id, image.name, image.data);
+				if (this._shotsOf === id) {
+					this._shots.set(image.name, image.url); // on screen already: no need to read it back
+				}
+			}
 			if (session.kind === 'investigate') {
 				const i = session.investigation;
 				// Claude may run and record again, so the report it gave before does not stand until it answers.
 				this.patch(id, { ended: null, approval: null });
 				const wire = options.raw || !session.sessionId ? text : investigateFollowUp(text);
-				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'acceptEdits', session.sessionId, { tools: INVESTIGATE_RULES, builtin: INVESTIGATE_BUILTIN, investigate: { target: i?.targetId ?? null } });
+				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'acceptEdits', session.sessionId, { tools: INVESTIGATE_RULES, builtin: INVESTIGATE_BUILTIN, investigate: { target: i?.targetId ?? null }, images: names });
 			} else if (session.kind === 'ask') {
 				const rules = session.tools ?? ASK_TOOLS.code;
 				// The rules of the session go in once; after that Claude Code's own session remembers them.
 				const wire = session.sessionId ? text : askPrompt(scopeOf(session), text);
-				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true });
+				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true, images: names });
 			} else {
-				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId);
+				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, names.length ? { images: names } : null);
 			}
 		} catch (e) {
 			this.update(id, (s) => ({ ...s, status: 'failed', items: [...s.items, { kind: 'error', text: asAppError(e).message }] }));
