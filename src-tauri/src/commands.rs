@@ -612,6 +612,21 @@ fn checkout(state: &State<'_, AppState>, id: &str, root: &str) -> Result<Git> {
     Ok(g)
 }
 
+/// The formatter the project of a file in the active checkout brings (Prettier), if it brings one.
+#[tauri::command]
+pub async fn format_tool(state: State<'_, AppState>, id: String, path: String) -> Result<Option<crate::format::Tool>> {
+    crate::format::tool(&repo(&state, &id)?.dir, &path)
+}
+
+/// `text`, the editor's copy of `path`, as the project's own formatter would write it; nothing when the
+/// project has none for this file. The file on disk is not touched.
+#[tauri::command]
+pub async fn format_file(state: State<'_, AppState>, id: String, root: String, path: String, text: String) -> Result<Option<String>> {
+    let g = checkout(&state, &id, &root)?;
+    // It starts a process and waits for it: off the thread that answers the window.
+    tauri::async_runtime::spawn_blocking(move || crate::format::format(&g.dir, &path, &text)).await.map_err(|e| AppError::msg(format!("Formatting stopped unexpectedly: {e}")))?
+}
+
 #[tauri::command]
 pub async fn files_create(state: State<'_, AppState>, id: String, root: String, dir: String, name: String, is_dir: bool) -> Result<String> {
     crate::files::create(&checkout(&state, &id, &root)?, &dir, &name, is_dir)

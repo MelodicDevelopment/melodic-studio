@@ -6,10 +6,12 @@ import { AgentsStore, MAX_ATTEMPTS, attemptBranch, branchFor, scopeOf, stateLabe
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
 import type { AgentMode, ClaudeSession, Worktree } from '../../services/backend.service';
-import { fileName, plural, relativeTime } from '../../shared/format';
+import { fileName, relativeTime } from '../../shared/format';
 import { workspace, type Conversation } from '../../services/workspace.store';
+import { baseName } from '../../services/agent-paths';
+import { BUCKETS, bucketOf, mostPressing, type Bucket } from '../../shared/attention';
 import { CONV_STATE_LABELS } from '../workspace/conversation-state';
-import { convAgentState } from './agent-state';
+import { convAgentState, stateStyles } from './agent-state';
 
 type DialogId = Parameters<DialogService['close']>[0];
 
@@ -34,19 +36,86 @@ function grouped(sessions: AgentSession[]): { group: string | null; sessions: Ag
 	return out;
 }
 
+/** A row of the list: a session (or the attempts of one task), a Claude conversation, or a session started in a terminal. */
+type Row = { bucket: Bucket; at: number; key: string } & (
+	| { kind: 'agents'; group: string | null; sessions: AgentSession[] }
+	| { kind: 'conversation'; conv: Conversation }
+	| { kind: 'outside'; repoId: string; session: ClaudeSession }
+);
+
+/** Outside sessions shown before "Show more". */
+const ELSEWHERE_SHOWN = 8;
+/** With every repository listed, outside sessions are the last few days' only, a few per repository. */
+const ELSEWHERE_DAYS = 3;
+const ELSEWHERE_PER_REPO = 5;
+/** A transcript that changed this recently may belong to a session still open in a terminal. */
+const RECENT_MS = 10 * 60_000;
+
+/** Everything the tab lists, with where it stands. `hidden` is how many outside sessions wait behind "Show more". */
+function rowsOf(self: AgentsComponent): { rows: Row[]; hidden: number } {
+	const agents = self.agents;
+	const all = agents.listScope() === 'all';
+	const repoId = self.repos.repo()?.id ?? '';
+	const rows: Row[] = [];
+	for (const g of grouped(all ? agents.sessions() : agents.current())) {
+		rows.push({
+			kind: 'agents',
+			key: g.group ?? g.sessions[0].id,
+			group: g.group,
+			sessions: g.sessions,
+			bucket: mostPressing(g.sessions.map((s) => bucketOf(stateOf(s), s.unread))),
+			at: Math.max(...g.sessions.map((s) => s.updated)),
+		});
+	}
+	for (const c of workspace().conversations()) {
+		if (c.kind === 'claude' && (all || c.repoId === repoId)) {
+			rows.push({ kind: 'conversation', key: c.id, conv: c, bucket: bucketOf(convAgentState(c), c.unread), at: c.updated });
+		}
+	}
+	let hidden = 0;
+	const since = Date.now() - ELSEWHERE_DAYS * 86_400_000;
+	for (const r of (self.repos.app()?.repos ?? []).filter((x) => all || x.id === repoId)) {
+		const found = workspace().elsewhereIn(r.id);
+		const shown = all ? found.filter((s) => s.modified >= since).slice(0, ELSEWHERE_PER_REPO) : self.allElsewhere ? found : found.slice(0, ELSEWHERE_SHOWN);
+		if (!all) {
+			hidden = found.length - shown.length;
+		}
+		for (const s of shown) {
+			rows.push({ kind: 'outside', key: `outside:${s.id}`, repoId: r.id, session: s, bucket: 'done', at: s.modified });
+		}
+	}
+	return { rows: rows.sort((a, b) => b.at - a.at), hidden };
+}
+
+/** The repository a row belongs to, said only while every repository is listed. */
+function where(self: AgentsComponent, repoId: string) {
+	if (self.agents.listScope() !== 'all') {
+		return '';
+	}
+	const repo = self.repos.app()?.repos.find((r) => r.id === repoId);
+	return html`<span class="repo" title=${repo?.path ?? 'No longer in Melodic Studio'}>${repo?.name ?? baseName(repoId)}</span>`;
+}
+
 function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 	const agents = self.agents;
 	const state = stateOf(s);
-	const on = s.id === agents.selectedId() && !agents.comparing() && !agents.asking();
+	const here = s.repoId === self.repos.repo()?.id;
+	const known = here || !!self.repos.app()?.repos.some((r) => r.id === s.repoId);
+	const on = here && s.id === agents.selectedId() && !agents.comparing() && !agents.asking();
 	return html`
-		<div class="session ${on ? 'sel' : ''} ${nested ? 'nested' : ''} ${s.unread ? 'unread' : ''}" @click=${() => agents.select(s.id)}>
+		<div class="session ${on ? 'sel' : ''} ${nested ? 'nested' : ''} ${s.unread ? 'unread' : ''}" @click=${() => (here ? agents.select(s.id) : void agents.open(s.id))}>
 			<div class="top">
-				${state === 'working' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state} ${s.kind === 'investigate' ? 'you' : ''}" title=${stateLabel(s)}></span>`}
+				${state === 'working' ? html`<span class="eq" aria-label="Working"><b></b><b></b><b></b></span>` : html`<span class="dot ${state} ${s.kind === 'investigate' ? 'you' : ''}" title=${stateLabel(s)}></span>`}
 				<span class="title">${nested ? `Attempt ${s.attempt}` : s.title}</span>
 				${s.unread ? html`<span class="new" title="Finished since you last looked"></span>` : ''}
-				<button class="x" title="Remove agent…" @click=${(e: Event) => (e.stopPropagation(), self.askRemove(s))}><ml-icon icon="x" size="xs"></ml-icon></button>
+				${here
+					? html`<button class="x" title="Remove agent…" @click=${(e: Event) => (e.stopPropagation(), self.askRemove(s))}><ml-icon icon="x" size="xs"></ml-icon></button>`
+					: known
+						? ''
+						: html`<button class="x" title="Forget this agent (its repository is no longer in Melodic Studio)" @click=${(e: Event) => (e.stopPropagation(), agents.remove(s, false))}><ml-icon icon="x" size="xs"></ml-icon></button>`}
 			</div>
 			<div class="meta">
+				${where(self, s.repoId)}
 				${s.kind === 'investigate'
 					? html`<ml-icon icon="sparkle" size="xs"></ml-icon><span class="branch said ${state}">${stateLabel(s)}</span>`
 					: s.kind === 'ask'
@@ -59,39 +128,37 @@ function sessionRow(self: AgentsComponent, s: AgentSession, nested: boolean) {
 }
 
 /** A Claude conversation of the workspace: clicking it shows its tab there. */
-function convRow(c: Conversation) {
+function convRow(self: AgentsComponent, c: Conversation) {
 	const state = convAgentState(c);
 	return html`
-		<div class="session ${c.unread ? 'unread' : ''}" title="Show this conversation in the Claude workspace" @click=${() => workspace().open(c.id)}>
+		<div class="session ${c.unread ? 'unread' : ''}" title="Show this conversation in the Claude pane" @click=${() => workspace().open(c.id)}>
 			<div class="top">
-				${state === 'working' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<span class="dot ${state}" title=${CONV_STATE_LABELS[c.state]}></span>`}
+				${state === 'working' ? html`<span class="eq" aria-label="Working"><b></b><b></b><b></b></span>` : html`<span class="dot ${state} ${c.state === 'waiting' ? 'you' : ''}" title=${CONV_STATE_LABELS[c.state]}></span>`}
 				<span class="title">${c.title}</span>
 				${c.unread ? html`<span class="new" title="Something happened since you last looked"></span>` : ''}
+				<button class="x" title=${c.state === 'saved' ? 'Forget this conversation (Claude Code keeps its transcript)' : 'End and forget this conversation'} @click=${(e: Event) => (e.stopPropagation(), workspace().close(c.id, true))}><ml-icon icon="x" size="xs"></ml-icon></button>
 			</div>
 			<div class="meta">
-				<ml-icon icon="sparkle" size="xs"></ml-icon><span class="branch">${c.state === 'waiting' ? 'Needs you' : (c.branch ?? CONV_STATE_LABELS[c.state])}</span>
+				${where(self, c.repoId)}
+				<ml-icon icon="sparkle" size="xs"></ml-icon><span class="branch ${c.state === 'waiting' ? 'said review' : ''}">${c.state === 'waiting' ? (c.waitingFor ?? 'Needs you') : `Claude conversation · ${c.branch ?? CONV_STATE_LABELS[c.state]}`}</span>
 				<span>${relativeTime(c.updated)}</span>
 			</div>
 		</div>
 	`;
 }
 
-/** Outside sessions shown before "Show more". */
-const ELSEWHERE_SHOWN = 8;
-/** A transcript that changed this recently may belong to a session still open in a terminal. */
-const RECENT_MS = 10 * 60_000;
-
 /** A Claude Code session started outside the app: clicking it adds it to the workspace, ready to resume. */
-function elsewhereRow(repoId: string, s: ClaudeSession) {
+function elsewhereRow(self: AgentsComponent, repoId: string, s: ClaudeSession) {
 	const recent = Date.now() - s.modified < RECENT_MS;
 	return html`
-		<div class="session" title=${`${s.prompt}\n\nStarted outside Melodic Studio. Click to continue it in the Claude workspace.`} @click=${() => workspace().adopt(repoId, s)}>
+		<div class="session" title=${`${s.prompt}\n\nStarted outside Melodic Studio. Click to continue it in the Claude pane.`} @click=${() => workspace().adopt(repoId, s)}>
 			<div class="top">
 				<ml-icon class="lead" icon="terminal-window" size="xs"></ml-icon>
 				<span class="title">${s.title ?? s.prompt}</span>
 				${recent ? html`<span class="live" title="Its transcript changed in the last few minutes: it may still be open in a terminal">active</span>` : ''}
 			</div>
 			<div class="meta">
+				${where(self, repoId)}
 				<ml-icon icon="git-branch" size="xs"></ml-icon><span class="branch">${s.branch ?? 'In a terminal'}</span>
 				<span>${relativeTime(s.modified)}</span>
 			</div>
@@ -99,105 +166,114 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 	`;
 }
 
-/** Sidebar "Agents" tab: sessions for this repository, its worktrees, and the dialogs for both. */
+function row(self: AgentsComponent, r: Row) {
+	if (r.kind === 'conversation') {
+		return convRow(self, r.conv);
+	}
+	if (r.kind === 'outside') {
+		return elsewhereRow(self, r.repoId, r.session);
+	}
+	if (!r.group) {
+		return sessionRow(self, r.sessions[0], false);
+	}
+	const agents = self.agents;
+	const first = r.sessions[0];
+	const here = first.repoId === self.repos.repo()?.id;
+	return html`
+		<div class="attempts ${here && agents.comparing() === r.group ? 'sel' : ''}" title="Compare the attempts side by side" @click=${() => (here ? agents.compare(r.group!) : void agents.open(first.id))}>
+			<ml-icon icon="columns" size="sm"></ml-icon>
+			<span class="title">${first.title}</span>
+			<span class="count">${r.sessions.length} attempts</span>
+		</div>
+		${repeat(
+			r.sessions,
+			(s) => s.id,
+			(s) => sessionRow(self, s, true)
+		)}
+	`;
+}
+
+/** The New button's list: everything that can be started, in one place. */
+function newMenu(self: AgentsComponent) {
+	const agents = self.agents;
+	const off = agents.cli() === null;
+	const issues = self.repos.status()?.host?.issues ? (self.repos.status()?.host?.issuesLabel ?? 'Issues') : null;
+	return html`
+		<ml-popover id="new-pop" placement="bottom-end" offset="4">
+			<button slot="trigger" class="newbtn" title="Start a task, a question, an investigation or a Claude conversation">
+				<ml-icon icon="plus" size="xs"></ml-icon>New<ml-icon icon="caret-down" size="xs"></ml-icon>
+			</button>
+			<div class="menu">
+				<button class="mitem" ?disabled=${off} title="Claude Code works on its own branch, in a worktree of its own" @click=${() => self.pick(() => self.openNew())}><ml-icon icon="robot" size="sm"></ml-icon><span class="grow">Task for an agent…</span><small>own worktree</small></button>
+				<button class="mitem" ?disabled=${off} title="A read-only chat about the code: nothing is changed" @click=${() => self.pick(() => agents.openAsk('code'))}><ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span class="grow">Ask about the code…</span><small>read-only</small></button>
+				<button class="mitem" ?disabled=${off} title="A read-only chat that can also read the git history" @click=${() => self.pick(() => agents.openAsk('history'))}><ml-icon icon="clock-counter-clockwise" size="sm"></ml-icon><span class="grow">Ask about its history…</span><small>read-only</small></button>
+				<button class="mitem ai" ?disabled=${off} title="Claude reproduces a bug in a worktree of its own, finds the cause and proposes a fix. Your files are not touched." @click=${() => self.pick(() => agents.openInvestigate())}><ml-icon icon="sparkle" size="sm"></ml-icon><span class="grow">Investigate a bug…</span></button>
+				${issues ? html`<button class="mitem" title="Start an agent on an issue from the host" @click=${() => self.pick(() => self.host.openIssues())}><ml-icon icon="list-checks" size="sm"></ml-icon><span class="grow">Start from ${issues.toLowerCase()}…</span></button>` : ''}
+				<div class="sep"></div>
+				<button class="mitem ai" ?disabled=${off} title=${`Claude Code itself, in a terminal, in ${workspace().checkoutName()}`} @click=${() => self.pick(() => void workspace().newClaude())}><ml-icon icon="sparkle" size="sm"></ml-icon><span class="grow">Claude conversation</span><small>Claude pane</small></button>
+			</div>
+		</ml-popover>
+	`;
+}
+
+/** Sidebar "Agents" tab: every agent session and Claude conversation, by how it stands, and the dialogs for starting and removing them. */
 @MelodicComponent({
 	selector: 'ms-agents',
 	template: (self: AgentsComponent) => {
 		const agents = self.agents;
-		const all = agents.current();
-		const investigations = all.filter((s) => s.kind === 'investigate');
-		const sessions = all.filter((s) => s.kind !== 'investigate');
-		const repoId = self.repos.repo()?.id;
-		const convs = workspace()
-			.conversations()
-			.filter((c) => c.kind === 'claude' && c.repoId === repoId)
-			.sort((a, b) => b.updated - a.updated);
-		if (repoId && !(repoId in workspace().elsewhere())) {
+		const all = agents.listScope() === 'all';
+		const repo = self.repos.repo();
+		if (repo && !(repo.id in workspace().elsewhere())) {
 			// First look at this repository (the tab outlives a repository switch): read its sessions now, not at the next poll.
-			queueMicrotask(() => void workspace().loadElsewhere(repoId));
+			queueMicrotask(() => void workspace().loadElsewhere(repo.id));
 		}
-		const elsewhere = repoId ? workspace().elsewhereIn(repoId) : [];
-		const shownElsewhere = self.allElsewhere ? elsewhere : elsewhere.slice(0, ELSEWHERE_SHOWN);
-		const comparing = agents.comparing();
+		const { rows, hidden } = rowsOf(self);
 		const trees = agents.worktrees();
+		const treesShown = agents.treesShown();
 		const doomed = self.doomed;
 		return html`
 			<div class="head">
-				<span class="grow">${plural(sessions.length, 'agent')}</span>
-				${self.repos.status()?.host?.issues ? html`<ml-button variant="outline" size="xs" title="Start an agent on an issue from the host" @ml:click=${() => self.host.openIssues()}><ml-icon slot="icon-start" icon="list-checks"></ml-icon>${self.repos.status()?.host?.issuesLabel ?? 'Issues'}</ml-button>` : ''}
-				<ml-button variant="primary" size="xs" ?disabled=${agents.cli() === null} @ml:click=${() => self.openNew()}><ml-icon slot="icon-start" icon="plus"></ml-icon>New task</ml-button>
+				<div class="scope" role="group" aria-label="Which repositories to list">
+					<button class=${all ? '' : 'on'} title="This repository's agents and conversations" @click=${() => self.setScope('repo')}><span class="name">${repo?.name ?? ''}</span></button>
+					<button class=${all ? 'on' : ''} title="Every repository in Melodic Studio" @click=${() => self.setScope('all')}>All<span class="long">&nbsp;repositories</span></button>
+				</div>
+				<span class="grow"></span>
+				${newMenu(self)}
 			</div>
 			<div class="list">
-				<div class="askrow ${agents.asking() ? 'sel' : ''}" title="A read-only chat about the code: nothing is changed" @click=${() => agents.openAsk('code')}>
-					<ml-icon icon="chat-circle-dots" size="sm"></ml-icon><span class="title">Ask about this repository…</span>
-				</div>
-				<div class="askrow ai" title="Claude reproduces a bug in a worktree of its own, finds the cause and proposes a fix. Your files are not touched." @click=${() => agents.openInvestigate()}>
-					<ml-icon icon="sparkle" size="sm"></ml-icon><span class="title">Investigate a bug…</span>
-				</div>
-				${investigations.length
-					? html`
-						<div class="group">Investigations</div>
-						${repeat(
-							investigations,
-							(s) => s.id,
-							(s) => sessionRow(self, s, false)
-						)}
-						${sessions.length ? html`<div class="group">Agents</div>` : ''}
-					`
-					: ''}
-				${all.length === 0 ? html`<div class="none">No agents yet. Give one a task and it works on its own branch while you carry on.</div>` : ''}
-				${repeat(
-					grouped(sessions),
-					(g) => g.group ?? g.sessions[0].id,
-					(g) =>
-						g.group
-							? html`
-							<div class="attempts ${comparing === g.group ? 'sel' : ''}" title="Compare the attempts side by side" @click=${() => agents.compare(g.group!)}>
-								<ml-icon icon="columns" size="sm"></ml-icon>
-								<span class="title">${g.sessions[0].title}</span>
-								<span class="count">${g.sessions.length} attempts</span>
-							</div>
+				${rows.length === 0 ? html`<div class="none">Nothing here yet. <b>New</b> starts a task for an agent, a question, an investigation or a Claude conversation.</div>` : ''}
+				${BUCKETS.map((b) => {
+					const mine = rows.filter((r) => r.bucket === b.key);
+					return mine.length
+						? html`
+							<div class="group ${b.key}">${b.label} · ${mine.length}</div>
 							${repeat(
-								g.sessions,
-								(s) => s.id,
-								(s) => sessionRow(self, s, true)
+								mine,
+								(r) => r.key,
+								(r) => row(self, r)
 							)}
 						`
-							: sessionRow(self, g.sessions[0], false)
-				)}
+						: '';
+				})}
+				${hidden > 0 ? html`<div class="more" @click=${() => (self.allElsewhere = true)}>Show ${hidden} more from the terminal</div>` : ''}
 
-				${convs.length || elsewhere.length
+				${!all && trees.length > 1
 					? html`
-						<div class="group">Claude conversations</div>
-						${repeat(
-							convs,
-							(c) => c.id,
-							(c) => convRow(c)
-						)}
-						${repeat(
-							shownElsewhere,
-							(s) => s.id,
-							(s) => elsewhereRow(repoId!, s)
-						)}
-						${elsewhere.length > shownElsewhere.length
-							? html`<div class="more" @click=${() => (self.allElsewhere = true)}>Show ${elsewhere.length - shownElsewhere.length} more from the terminal</div>`
+						<button class="group fold" title=${treesShown ? 'Fold the worktrees away' : 'Show the worktrees'} @click=${() => agents.treesShown.set(!treesShown)}>
+							<ml-icon icon=${treesShown ? 'caret-down' : 'caret-right'} size="xs"></ml-icon>Worktrees · ${trees.length}
+						</button>
+						${treesShown
+							? trees.map(
+									(w) => html`
+										<div class="tree ${w.active ? 'on' : ''}" title=${w.path} @click=${() => agents.view(w.isMain ? null : w.path, 'agents')}>
+											<ml-icon icon=${w.active ? 'check' : w.isMain ? 'house' : 'tree-structure'} size="sm"></ml-icon>
+											<span class="title">${w.branch ?? fileName(w.path)}${w.isMain ? html`<span class="dim"> · main checkout</span>` : ''}</span>
+											${w.changes ? html`<span class="count">${w.changes}</span>` : ''}
+											${w.isMain ? '' : html`<button class="x" title="Remove worktree…" @click=${(e: Event) => (e.stopPropagation(), self.askRemoveTree(w))}><ml-icon icon="trash" size="xs"></ml-icon></button>`}
+										</div>
+									`
+								)
 							: ''}
-					`
-					: ''}
-
-				${trees.length > 1
-					? html`
-						<div class="group">Worktrees</div>
-						${trees.map(
-							(w) => html`
-								<div class="tree ${w.active ? 'on' : ''}" title=${w.path} @click=${() => agents.view(w.isMain ? null : w.path, 'agents')}>
-									<ml-icon icon=${w.active ? 'check' : w.isMain ? 'house' : 'tree-structure'} size="sm"></ml-icon>
-									<span class="title">${w.branch ?? fileName(w.path)}${w.isMain ? html`<span class="dim"> · main checkout</span>` : ''}</span>
-									${w.changes ? html`<span class="count">${w.changes}</span>` : ''}
-									${w.isMain ? '' : html`<button class="x" title="Remove worktree…" @click=${(e: Event) => (e.stopPropagation(), self.askRemoveTree(w))}><ml-icon icon="trash" size="xs"></ml-icon></button>`}
-								</div>
-							`
-						)}
 					`
 					: ''}
 			</div>
@@ -264,16 +340,134 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 			flex: 1;
 			min-width: 0;
 		}
+		${stateStyles}
 		.head {
 			flex: none;
 			display: flex;
 			align-items: center;
 			gap: 8px;
-			height: 34px;
-			padding: 0 8px 0 10px;
+			padding: 2px 8px 8px 10px;
 			border-bottom: 1px solid var(--ml-color-border);
-			color: var(--ml-color-text-secondary);
+			/* "All repositories" is spelled out only where the sidebar has the room. */
+			container-type: inline-size;
+		}
+		/* This repository, or every one. */
+		.scope {
+			min-width: 0;
+			display: flex;
+			gap: 2px;
+			padding: 2px;
+			border: 1px solid var(--ml-color-border);
+			border-radius: 8px;
+		}
+		.scope button {
+			all: unset;
+			flex: none;
+			display: flex;
+			align-items: center;
+			box-sizing: border-box;
+			height: 22px;
+			padding: 0 8px;
+			border-radius: 6px;
+			font-size: 12px;
 			font-weight: 500;
+			white-space: nowrap;
+			color: var(--ml-color-text-muted);
+		}
+		.scope button:first-child {
+			flex: 0 1 auto;
+			min-width: 0;
+		}
+		.scope .name {
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.scope button:hover {
+			color: var(--ml-color-text);
+		}
+		.scope button.on {
+			background: var(--ms-seg-on);
+			box-shadow: var(--ms-seg-shadow);
+			color: var(--ml-color-text);
+		}
+		.scope .long {
+			display: none;
+		}
+		@container (min-width: 270px) {
+			.scope .long {
+				display: inline;
+			}
+		}
+		button:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: -2px;
+		}
+		/* New: the tab's one main action. */
+		.newbtn {
+			all: unset;
+			flex: none;
+			display: flex;
+			align-items: center;
+			gap: 5px;
+			height: 26px;
+			padding: 0 8px;
+			border-radius: 7px;
+			background: var(--ml-color-primary);
+			color: var(--ml-color-text-inverse);
+			font-size: 12.5px;
+			font-weight: 600;
+		}
+		.newbtn:hover {
+			background: var(--ml-color-primary-hover);
+		}
+		ml-popover {
+			display: flex;
+			--ml-popover-padding-x: 0;
+			--ml-popover-padding-y: 0;
+			--ml-popover-radius: 10px;
+		}
+		.menu {
+			display: flex;
+			flex-direction: column;
+			gap: 1px;
+			width: 270px;
+			box-sizing: border-box;
+			padding: 6px;
+			font-size: 13px;
+			color: var(--ml-color-text);
+		}
+		.mitem {
+			all: unset;
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			padding: 7px 8px;
+			border-radius: 6px;
+		}
+		.mitem:hover {
+			background: var(--ms-hover);
+		}
+		.mitem[disabled] {
+			opacity: 0.5;
+			pointer-events: none;
+		}
+		.mitem ml-icon {
+			flex: none;
+			color: var(--ml-color-text-muted);
+		}
+		/* Purple: it hands the work to Claude itself. */
+		.mitem.ai ml-icon {
+			color: var(--ms-ai);
+		}
+		.mitem small {
+			flex: none;
+			font-size: 11.5px;
+			color: var(--ml-color-text-muted);
+		}
+		.sep {
+			height: 1px;
+			margin: 5px 2px;
+			background: var(--ml-color-border);
 		}
 		.list {
 			flex: 1;
@@ -304,8 +498,7 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 			align-items: center;
 			gap: 8px;
 		}
-		/* ---- asking, and groups of parallel attempts ---- */
-		.askrow,
+		/* ---- groups of parallel attempts ---- */
 		.attempts {
 			display: flex;
 			align-items: center;
@@ -313,20 +506,9 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 			padding: 7px 8px 7px 12px;
 			border-bottom: 1px solid var(--ml-color-border-muted);
 		}
-		.askrow {
-			color: var(--ml-color-text-secondary);
-		}
-		.askrow .title {
-			font-weight: 400;
-		}
-		.askrow > ml-icon,
 		.attempts > ml-icon {
 			flex: none;
 			color: var(--ml-color-primary);
-		}
-		/* Purple: it hands the bug to Claude. */
-		.askrow.ai > ml-icon {
-			color: var(--ms-ai);
 		}
 		/* An investigation's state in words: magenta while it waits for an OK, green once the cause is found. */
 		.said.review {
@@ -338,11 +520,9 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 		.said.failed {
 			color: var(--ms-del);
 		}
-		.askrow:hover,
 		.attempts:hover {
 			background: var(--ms-hover);
 		}
-		.askrow.sel,
 		.attempts.sel {
 			background: var(--ms-selected);
 			color: var(--ms-selected-fg);
@@ -388,12 +568,28 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 		.more:hover {
 			background: var(--ms-hover);
 		}
+		/* Waiting on the user: magenta. */
 		.dot.review {
-			background: var(--ms-mod);
-		}
-		/* An investigation waiting for an OK is waiting on the user: magenta. */
-		.dot.review.you {
 			background: var(--ms-you);
+		}
+		/* Working: the equalizer bars (agent-state.ts), in the place a dot would take. */
+		.top > .eq {
+			flex: none;
+			margin: 0 4px;
+			color: var(--ms-run);
+		}
+		/* The repository's name, while every repository is listed. */
+		.repo {
+			flex: none;
+			max-width: 45%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			font-weight: 600;
+		}
+		.repo::after {
+			content: ' ·';
+			font-weight: 400;
 		}
 		.dot.stopped {
 			background: var(--ml-color-text-muted);
@@ -517,6 +713,28 @@ function elsewhereRow(repoId: string, s: ClaudeSession) {
 			background: var(--ms-hover);
 			color: var(--ml-color-text);
 		}
+		/* What waits on the user is named in magenta, like everything else that does. */
+		.group.needs {
+			color: var(--ml-color-text-link);
+		}
+		.group.fold {
+			all: unset;
+			display: flex;
+			align-items: center;
+			gap: 5px;
+			box-sizing: border-box;
+			width: 100%;
+			padding: 14px 12px 5px 8px;
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+			color: var(--ml-color-text-muted);
+			border-bottom: 1px solid var(--ml-color-border-muted);
+		}
+		.group.fold:hover {
+			color: var(--ml-color-text);
+		}
 		.group {
 			padding: 14px 12px 5px;
 			font-size: 11px;
@@ -595,8 +813,26 @@ export class AgentsComponent {
 	/** The branch field follows the task text until it is edited by hand. */
 	private _branchTouched = false;
 
+	elementRef!: HTMLElement;
+
 	/** Every outside session, not just the newest few. */
 	allElsewhere = false;
+
+	/** This repository, or every one: the others' sessions started in a terminal are read when they are first asked for. */
+	setScope(scope: 'repo' | 'all'): void {
+		this.agents.listScope.set(scope);
+		if (scope === 'all') {
+			for (const r of this.repos.app()?.repos ?? []) {
+				void workspace().loadElsewhere(r.id);
+			}
+		}
+	}
+
+	/** Something picked from the New list: the list goes first, or it would sit on top of the dialog. */
+	pick(start: () => void): void {
+		(this.elementRef.shadowRoot?.querySelector('#new-pop') as (HTMLElement & { component?: { close(): void } }) | null)?.component?.close();
+		start();
+	}
 	private _poll: ReturnType<typeof setInterval> | null = null;
 	private readonly _refresh = (): void => {
 		const id = this.repos.repo()?.id;

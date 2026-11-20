@@ -54,13 +54,132 @@ export const paneStyles = () => css`
 		height: 32px;
 		background: var(--ms-sidebar-bg);
 		border-bottom: 1px solid var(--ml-color-border);
+		/* A wide pane spells "New conversation" out; a narrow one keeps the plus. */
+		container-type: inline-size;
 	}
+	/* The tabs take what they need and shrink first; the buttons after them stay whole. */
 	.tabs {
-		flex: 1;
+		flex: 0 1 auto;
 		min-width: 0;
 		display: flex;
 		overflow-x: auto;
 		scrollbar-width: none;
+	}
+	.grow {
+		flex: 1;
+		min-width: 4px;
+	}
+	/* New conversation: the pane's one main action, so it is the magenta one. A wide pane spells it out. */
+	.tool.add {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 5px;
+		min-width: 28px;
+		width: auto;
+		color: var(--ml-color-primary);
+		font-size: 12px;
+		font-weight: 600;
+	}
+	.tool.add:hover {
+		color: var(--ml-color-primary);
+	}
+	.add .text {
+		display: none;
+	}
+	@container (min-width: 640px) {
+		.tool.add {
+			padding: 0 10px 0 8px;
+		}
+		.add .text {
+			display: inline;
+		}
+	}
+	.tool.more {
+		width: 16px;
+		/* The popover wraps its trigger, so there is no height to stretch to. */
+		height: 31px;
+	}
+	ml-popover {
+		display: flex;
+		--ml-popover-padding-x: 0;
+		--ml-popover-padding-y: 0;
+		--ml-popover-radius: 10px;
+	}
+	.menu {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		width: 290px;
+		box-sizing: border-box;
+		padding: 6px;
+		font-size: 13px;
+		color: var(--ml-color-text);
+	}
+	.newwt {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 6px 8px 10px;
+		margin-bottom: 4px;
+		border-bottom: 1px solid var(--ml-color-border);
+	}
+	.newwt label {
+		font-weight: 600;
+	}
+	.newwt .row {
+		display: flex;
+		gap: 6px;
+	}
+	.newwt input {
+		flex: 1;
+		min-width: 0;
+		height: 28px;
+		box-sizing: border-box;
+		padding: 0 8px;
+		border: 1px solid var(--ml-color-border-strong);
+		border-radius: 6px;
+		background: var(--ml-color-input-bg);
+		color: var(--ml-color-text);
+		font: inherit;
+		font-family: var(--ml-font-mono);
+		font-size: 12px;
+	}
+	.newwt input:focus {
+		outline: 2px solid var(--ml-color-primary);
+		outline-offset: -1px;
+	}
+	.newwt small {
+		color: var(--ml-color-text-muted);
+	}
+	.go {
+		all: unset;
+		flex: none;
+		display: grid;
+		place-items: center;
+		height: 28px;
+		padding: 0 12px;
+		border-radius: 6px;
+		background: var(--ml-color-primary);
+		color: var(--ml-color-text-inverse);
+		font-weight: 600;
+	}
+	.go[disabled] {
+		opacity: 0.5;
+	}
+	.mitem {
+		all: unset;
+		display: flex;
+		align-items: center;
+		gap: 9px;
+		padding: 7px 8px;
+		border-radius: 6px;
+	}
+	.mitem:hover {
+		background: var(--ms-hover);
+	}
+	.mitem ml-icon {
+		color: var(--ml-color-text-muted);
 	}
 	.ptab {
 		flex: none;
@@ -275,117 +394,6 @@ export const workspaceStyles = () => css`
 		min-height: 0;
 		background: var(--ml-color-surface);
 	}
-	${convStateStyles}
-	${buttons}
-	.bar {
-		flex: none;
-		display: flex;
-		align-items: center;
-		gap: 4px;
-		height: 34px;
-		padding: 0 4px 0 12px;
-		background: var(--ms-sidebar-bg);
-		border-bottom: 1px solid var(--ml-color-border);
-		font-size: 12px;
-		/* Beside the main pane the workspace can be as narrow as 320 px: the bar's labels fold to their icons. */
-		container-type: inline-size;
-	}
-	@container (max-width: 520px) {
-		.bar .label .text {
-			display: none;
-		}
-		/* The new-worktree form needs the room the title and the summary have. */
-		.bar.forming h2 .text,
-		.bar.forming .summary {
-			display: none;
-		}
-		.bar .newwt {
-			flex: 1;
-		}
-		.bar .newwt input {
-			flex: 1;
-			width: 0;
-			min-width: 48px;
-		}
-	}
-	.bar .tool {
-		height: 28px;
-		border-radius: 4px;
-	}
-	.bar h2 {
-		margin: 0;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 12px;
-		font-weight: 600;
-		color: var(--ml-color-text);
-	}
-	.bar h2 ml-icon {
-		color: var(--ml-color-primary);
-	}
-	.summary {
-		flex: 1;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--ml-color-text-muted);
-		padding-left: 8px;
-	}
-	.summary b {
-		color: var(--ms-mod);
-	}
-	.newwt {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.newwt input {
-		width: 180px;
-		height: 24px;
-		padding: 0 8px;
-		border: 1px solid var(--ml-color-border);
-		border-radius: 4px;
-		background: var(--ml-color-surface);
-		color: var(--ml-color-text);
-		font: inherit;
-	}
-	.newwt input:focus {
-		outline: 2px solid var(--ml-color-primary);
-		outline-offset: -1px;
-	}
-	.label {
-		all: unset;
-		display: flex;
-		align-items: center;
-		gap: 5px;
-		height: 26px;
-		padding: 0 8px;
-		border-radius: 4px;
-		color: var(--ml-color-text-muted);
-	}
-	.label:hover {
-		background: var(--ms-hover);
-		color: var(--ml-color-text);
-	}
-	.label.primary {
-		color: var(--ml-color-primary);
-		font-weight: 600;
-	}
-	.label .count {
-		min-width: 16px;
-		padding: 0 4px;
-		box-sizing: border-box;
-		border-radius: 999px;
-		background: var(--ms-mod);
-		color: var(--ml-color-text-inverse);
-		font-size: 10px;
-		font-weight: 700;
-		line-height: 16px;
-		text-align: center;
-	}
-
 	/* ---- the split tree ---- */
 	.root {
 		flex: 1;
@@ -442,145 +450,4 @@ export const workspaceStyles = () => css`
 		user-select: none;
 	}
 
-	/* ---- overview ---- */
-	.overview {
-		flex: 1;
-		min-height: 0;
-		overflow: auto;
-		padding: 16px;
-	}
-	.overview h3 {
-		margin: 18px 0 8px;
-		font-size: 11px;
-		font-weight: 700;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
-		color: var(--ml-color-text-muted);
-	}
-	.overview h3:first-child {
-		margin-top: 0;
-	}
-	.grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-		gap: 10px;
-	}
-	.card {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		min-width: 0;
-		padding: 12px;
-		border: 1px solid var(--ml-color-border);
-		border-radius: 8px;
-		background: var(--ml-color-surface);
-		cursor: default;
-	}
-	.card:hover {
-		border-color: var(--ml-color-primary);
-	}
-	.card.waiting {
-		border-color: var(--ms-mod);
-		box-shadow: 0 0 0 1px var(--ms-mod);
-	}
-	.card .line {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
-	}
-	.card .title {
-		flex: 1;
-		min-width: 0;
-		font-weight: 600;
-		font-size: 13px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.card .new {
-		flex: none;
-		width: 7px;
-		height: 7px;
-		border-radius: 50%;
-		background: var(--ml-color-primary);
-	}
-	.card .meta {
-		font-size: 11px;
-		color: var(--ml-color-text-muted);
-	}
-	.card .meta span {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.card .when {
-		margin-left: auto;
-		flex: none;
-	}
-	.card .said {
-		margin: 0;
-		font-size: 12px;
-		line-height: 1.45;
-		color: var(--ml-color-text);
-		display: -webkit-box;
-		-webkit-line-clamp: 3;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-		overflow-wrap: anywhere;
-	}
-	.card .said.ask {
-		color: var(--ms-mod);
-		font-weight: 600;
-	}
-	.subs {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		padding: 6px 8px;
-		border-radius: 6px;
-		background: var(--ms-hover);
-		font-size: 11px;
-	}
-	.sub {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		color: var(--ml-color-text-muted);
-	}
-	.sub.running {
-		color: var(--ml-color-text);
-	}
-	.sub span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.sub .type {
-		flex: none;
-		opacity: 0.7;
-	}
-	.card .x {
-		all: unset;
-		display: grid;
-		place-items: center;
-		width: 20px;
-		height: 20px;
-		border-radius: 4px;
-		color: var(--ml-color-text-muted);
-	}
-	.card .x:hover {
-		background: var(--ms-hover);
-		color: var(--ml-color-text);
-	}
-	.none {
-		padding: 40px 16px;
-		text-align: center;
-		color: var(--ml-color-text-muted);
-	}
 `;

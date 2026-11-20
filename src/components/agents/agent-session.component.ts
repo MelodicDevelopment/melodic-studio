@@ -10,6 +10,7 @@ import type { AgentMode } from '../../services/backend.service';
 import { samePath } from '../../services/agent-paths';
 import { AGENT_MODES } from './agents.component';
 import { richText, richTextStyles, type RichOptions } from './rich-text';
+import { stateChip, stateStyles } from './agent-state';
 
 type DialogId = Parameters<DialogService['close']>[0];
 
@@ -119,11 +120,14 @@ function impactList(self: AgentSessionComponent, s: AgentSession, check: WorkChe
 	`;
 }
 
+/** "from the language server" in a tooltip: whose verdict the check is. */
+const CHECK_SOURCE = 'From the language server: the files as the agent left them, compared with the commit it started from';
+
 /**
- * What the language servers made of the task's change, between the header and the transcript.
- * Their messages are compiler output, and so are symbol names: text bindings only.
+ * What the language servers made of the task's change, at the end of the line under the title:
+ * a pill that says how it went, and opens the detail under the line.
  */
-function checkStrip(self: AgentSessionComponent, s: AgentSession) {
+function checkPill(self: AgentSessionComponent, s: AgentSession) {
 	const check = s.check;
 	if (!check || s.kind !== 'task') {
 		return '';
@@ -132,7 +136,25 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 		// What the server says it is busy with ("cargo check"), when it says.
 		const work = self.lsp.workAt(s.cwd)[0];
 		const doing = work ? ` (${[work.label, work.title].filter(Boolean).join(': ')})` : '';
-		return html`<div class="check"><ml-spinner size="xs"></ml-spinner><span>Checking the change with the language server${doing}…</span></div>`;
+		return html`<span class="pill checking" title=${`Checking the change with the language server${doing}`}><span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>Checking…</span>`;
+	}
+	const open = self.checkOpen === s.id;
+	const found = check.problems.length;
+	return html`
+		<button class="pill ${found ? 'bad' : 'ok'}" title=${`${CHECK_SOURCE}. Click to ${open ? 'fold it away' : 'see it'}.`} aria-expanded=${open ? 'true' : 'false'} @click=${() => (self.checkOpen = open ? null : s.id)}>
+			<ml-icon icon=${found ? 'warning' : 'check-circle'} size="sm"></ml-icon>${found ? count(found, 'new error') : 'No new errors'}<ml-icon icon=${open ? 'caret-down' : 'caret-right'} size="xs"></ml-icon>
+		</button>
+	`;
+}
+
+/**
+ * The check's detail, shown when its pill is clicked: what was looked at, the errors, what else uses what changed.
+ * The messages are compiler output, and so are symbol names: text bindings only.
+ */
+function checkDetail(self: AgentSessionComponent, s: AgentSession) {
+	const check = s.check;
+	if (!check || s.kind !== 'task' || check.state === 'checking' || self.checkOpen !== s.id) {
+		return '';
 	}
 	// Kept short: the pane is often narrow. The server's name says whose verdict it is.
 	const servers = `(${check.servers.join(', ')})`;
@@ -142,7 +164,7 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 	if (!found.length) {
 		return html`
 			<div class="check ok">
-				<div class="line"><ml-icon icon="check-circle" size="sm"></ml-icon><span class="grow" title="From the language server: the files as the agent left them, compared with the commit it started from">No new errors in ${looked(check)} ${servers}.${known}${partial}</span></div>
+				<div class="line"><span class="grow" title=${CHECK_SOURCE}>No new errors in ${looked(check)} ${servers}.${known}${partial}</span></div>
 				${impactList(self, s, check)}
 			</div>
 		`;
@@ -151,8 +173,7 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 	return html`
 		<div class="check bad">
 			<div class="line">
-				<ml-icon icon="warning" size="sm"></ml-icon>
-				<span class="grow" title="From the language server: the files as the agent left them, compared with the commit it started from"><b>${count(found.length, 'new error')}</b> in ${looked(check)} ${servers}.${known}${partial}</span>
+				<span class="grow" title=${CHECK_SOURCE}><b>${count(found.length, 'new error')}</b> in ${looked(check)} ${servers}.${known}${partial}</span>
 				<ml-button variant="primary" size="sm" ?disabled=${running} title="Sends this list to the agent as its next turn" @ml:click=${() => self.agents.fixProblems(s.id)}>Ask Claude to fix ${found.length === 1 ? 'it' : 'them'}</ml-button>
 			</div>
 			<ul>
@@ -220,19 +241,7 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 		const follow = self.follow;
 		return html`
 			<div class="head">
-				<div class="grow">
-					<h2>${s.title}</h2>
-					<div class="meta">
-						${ask
-							? html`<span title=${`It can use: ${(s.tools ?? []).join(', ')}`}><ml-icon icon="lock-simple" size="sm"></ml-icon>Read-only${scopeOf(s) === 'history' ? ', with git history' : ''}</span>`
-							: ''}
-						<span><ml-icon icon="git-branch" size="sm"></ml-icon>${s.branch ?? 'detached'}</span>
-						${ask ? '' : s.isolated ? html`<span title=${s.cwd}><ml-icon icon="tree-structure" size="sm"></ml-icon>own worktree</span>` : html`<span><ml-icon icon="house" size="sm"></ml-icon>main checkout</span>`}
-						${s.group ? html`<span>Attempt ${s.attempt}</span>` : ''}
-						${!ask && tree?.changes ? html`<span><ml-icon icon="files" size="sm"></ml-icon>${tree.changes} uncommitted</span>` : ''}
-						${s.cost ? html`<span>$${s.cost.toFixed(2)}</span>` : ''}
-					</div>
-				</div>
+				<h2 class="grow" title=${s.title}>${s.title}</h2>
 				${s.group ? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.compare(s.group!)}><ml-icon slot="icon-start" icon="columns"></ml-icon>Compare attempts</ml-button>` : ''}
 				${ask
 					? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.openAsk(scopeOf(s))}><ml-icon slot="icon-start" icon="plus"></ml-icon>New question</ml-button>`
@@ -241,8 +250,22 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into a branch you choose, or open a pull request. Commit the agent's work first.`} @ml:click=${() => self.openMerge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>`
 					: ''}
 			</div>
+			<div class="status">
+				${stateChip(s)}
+				<div class="meta grow">
+					${ask
+						? html`<span title=${`It can use: ${(s.tools ?? []).join(', ')}`}><ml-icon icon="lock-simple" size="sm"></ml-icon>Read-only${scopeOf(s) === 'history' ? ', with git history' : ''}</span>`
+						: ''}
+					<span><ml-icon icon="git-branch" size="sm"></ml-icon>${s.branch ?? 'detached'}</span>
+					${ask ? '' : s.isolated ? html`<span title=${s.cwd}><ml-icon icon="tree-structure" size="sm"></ml-icon>own worktree</span>` : html`<span><ml-icon icon="house" size="sm"></ml-icon>main checkout</span>`}
+					${s.group ? html`<span>Attempt ${s.attempt}</span>` : ''}
+					${!ask && tree?.changes ? html`<span><ml-icon icon="files" size="sm"></ml-icon>${tree.changes} uncommitted</span>` : ''}
+					${s.cost ? html`<span>$${s.cost.toFixed(2)}</span>` : ''}
+				</div>
+				${checkPill(self, s)}
+			</div>
 			${mergeDialog(self, s, tree?.changes ?? 0)}
-			${checkStrip(self, s)}
+			${checkDetail(self, s)}
 
 			<div class="log">
 				${hidden ? html`<button class="earlier" @click=${() => self.showEarlier()}>Show earlier (${hidden.toLocaleString('en-US')} more)</button>` : ''}
@@ -323,33 +346,69 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 			gap: 8px;
 			margin: 6px 0;
 		}
+		${stateStyles}
 		.head {
 			flex: none;
 			display: flex;
 			align-items: center;
 			gap: 8px;
-			padding: 12px 16px;
-			border-bottom: 1px solid var(--ml-color-border);
+			padding: 12px 16px 6px;
 		}
-		.check {
+		/* One line under the title for everything about where the session stands: its state, its checkout, what it cost, and how the check of its change went. */
+		.status {
 			flex: none;
 			display: flex;
 			align-items: center;
-			gap: 8px;
-			padding: 8px 16px;
+			gap: 10px;
+			min-height: 24px;
+			padding: 0 16px 10px;
 			border-bottom: 1px solid var(--ml-color-border);
-			font-size: 12.5px;
-			color: var(--ml-color-text-secondary);
 		}
-		.check.ok ml-icon {
+		.pill {
+			all: unset;
 			flex: none;
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			height: 24px;
+			box-sizing: border-box;
+			padding: 0 8px;
+			border-radius: 6px;
+			font-size: 12px;
+			font-weight: 500;
+			white-space: nowrap;
+		}
+		.pill:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: 1px;
+		}
+		.pill.checking {
+			color: var(--ms-run-text);
+		}
+		.pill.ok {
 			color: var(--ml-color-success);
 		}
-		.check.ok,
-		.check.bad {
+		.pill.ok:hover {
+			background: var(--ms-hover);
+		}
+		.pill.bad {
+			background: var(--ml-color-warning-subtle);
+			color: var(--ml-color-warning);
+		}
+		.pill.bad:hover {
+			filter: brightness(1.1);
+		}
+		/* The check's detail, under the line, while its pill is open. */
+		.check {
+			flex: none;
+			display: flex;
 			flex-direction: column;
 			align-items: stretch;
 			gap: 6px;
+			padding: 8px 16px 10px;
+			border-bottom: 1px solid var(--ml-color-border);
+			font-size: 12.5px;
+			color: var(--ml-color-text-secondary);
 		}
 		.check.bad {
 			background: var(--ml-color-warning-subtle);
@@ -366,7 +425,7 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 			flex: 1 1 220px;
 		}
 		.check details {
-			padding-left: 24px;
+			padding-left: 0;
 		}
 		.check summary {
 			cursor: pointer;
@@ -375,13 +434,9 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 		.check details ul {
 			padding: 4px 0 2px 14px;
 		}
-		.check.bad .line ml-icon {
-			flex: none;
-			color: var(--ml-color-warning);
-		}
 		.check ul {
 			margin: 0;
-			padding: 0 0 2px 24px;
+			padding: 0 0 2px;
 			list-style: none;
 			display: flex;
 			flex-direction: column;
@@ -435,13 +490,17 @@ function checkStrip(self: AgentSessionComponent, s: AgentSession) {
 			overflow: hidden;
 			text-overflow: ellipsis;
 		}
+		/* One line: what does not fit is cut off at the end. */
 		.meta {
 			display: flex;
-			flex-wrap: wrap;
-			gap: 4px 14px;
-			margin-top: 4px;
+			gap: 14px;
+			overflow: hidden;
+			white-space: nowrap;
 			font-size: 12px;
 			color: var(--ml-color-text-muted);
+		}
+		.meta span {
+			flex: none;
 		}
 		.meta span {
 			display: inline-flex;
@@ -603,6 +662,8 @@ export class AgentSessionComponent {
 	elementRef!: HTMLElement;
 
 	draft = '';
+	/** The session whose check is unfolded under its status line (the pill at the end of it). */
+	checkOpen: string | null = null;
 	/** Merge dialog: the branch picked (or NEW_BRANCH), and the new branch's name and starting point. */
 	into = '';
 	newName = '';

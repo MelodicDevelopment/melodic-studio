@@ -476,6 +476,66 @@ fn app_client_typescript() {
     );
 }
 
+/// The same for a server the app never installs (rust-analyzer, Pyright): whatever this machine has
+/// on its PATH, or nothing to run, which is said and is not a failure.
+fn app_client_found(server: &str, checks: Value) {
+    let spec = servers::named(server).unwrap();
+    let root = fixture(server);
+    let Some(launch) = servers::launch(spec, &root, &managed()) else {
+        println!("skipped: {} is not installed on this machine", spec.program);
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
+        return;
+    };
+    let plan = json!({
+        "server": spec.name,
+        "binary": launch.program.to_string_lossy(),
+        "args": launch.args,
+        "env": launch.env.iter().cloned().collect::<HashMap<String, String>>(),
+        "root": root.to_string_lossy(),
+        "initializationOptions": launch.initialization_options,
+        "checks": checks,
+    });
+    let work = root.parent().unwrap().to_path_buf();
+    let plan_file = work.join("plan.json");
+    std::fs::write(&plan_file, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let out = proc::command("node").arg(project.join("scripts").join("lsp-smoke.mjs")).arg(&plan_file).current_dir(project).output().expect("node runs");
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "the app's client failed against {server}:\n{stdout}\n{stderr}");
+    println!("{stdout}");
+    let _ = std::fs::remove_dir_all(work);
+}
+
+#[test]
+#[ignore = "e2e: runs the frontend's client in Node against the rust-analyzer on PATH, if there is one (node, cargo)"]
+fn app_client_rust() {
+    app_client_found(
+        "rust",
+        json!([
+            { "file": "src/main.rs", "language": "rust",
+              "hover": { "needle": "greet(\"world\")", "contains": "fn greet(name: &str) -> String" },
+              "rename": { "needle": "greet(\"world\")", "to": "welcome", "files": ["src/main.rs", "src/greeter.rs"] },
+              "symbol": { "query": "gree", "contains": "greet" },
+              "definition": { "needle": "greet(\"world\")", "file": "src/greeter.rs", "text": "pub fn greet" } },
+        ]),
+    );
+}
+
+#[test]
+#[ignore = "e2e: runs the frontend's client in Node against the pyright-langserver on PATH, if there is one (node)"]
+fn app_client_python() {
+    app_client_found(
+        "python",
+        json!([
+            { "file": "main.py", "language": "python",
+              "hover": { "needle": "greet(\"world\")", "contains": "greet(name: str) -> str" },
+              "rename": { "needle": "greet(\"world\")", "to": "welcome", "files": ["main.py", "greeter.py"] },
+              "definition": { "needle": "greet(\"world\")", "file": "greeter.py", "text": "def greet" },
+              "diagnostics": null },
+        ]),
+    );
+}
+
 #[test]
 #[ignore = "e2e: runs the frontend's client in Node against intelephense (network, node)"]
 fn app_client_php() {
@@ -489,6 +549,8 @@ fn app_client_php() {
               "highlights": { "needle": "greeter->greet", "count": 2 },
               "definition": { "needle": "greet('world')", "file": "src/Greeter.php", "text": "public function greet" },
               "symbols": ["greeter"], "diagnostics": null,
+              // Rename is intelephense's paid half: without a licence key it says it has none, and the editor says why (RENAME_NOTES).
+              "offers": { "renameProvider": false },
               "edit": { "after": "greet('world');", "insert": "\nmissing_function();", "diagnostics": "Undefined function" } },
             { "file": "src/Greeter.php", "language": "php", "symbols": ["Greeter", "greet"] },
             { "file": "broken.php", "language": "php", "diagnostics": "Undefined function",

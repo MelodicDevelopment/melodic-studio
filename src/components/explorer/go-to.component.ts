@@ -6,7 +6,7 @@ import { RepoStore } from '../../services/repo.store';
 import { ExplorerStore } from '../../services/explorer.store';
 import { FileIndexStore } from '../../services/file-index.store';
 import { WorkspaceStore } from '../../services/workspace.store';
-import { LspService, type SymbolHit } from '../../services/lsp.service';
+import { LspService, type Coverage, type SymbolHit } from '../../services/lsp.service';
 import { isMac } from '../../services/backend.service';
 import { marked, parseGoTo, rankFiles, type Ranked } from '../../shared/fuzzy';
 import { nothing } from '../ai/ai-entry';
@@ -17,6 +17,23 @@ const goTo = signal<{ start: string } | null>(null);
 /** Open the "Go to" box: on files (Cmd/Ctrl+P), or on symbols (Cmd/Ctrl+T, the same as typing `@` first). */
 export function openGoTo(mode: 'files' | 'symbols' = 'files'): void {
 	goTo.set({ start: mode === 'symbols' ? '@' : '' });
+}
+
+/** For this long after its servers were started, an empty answer may only mean a server has not read the project yet. */
+const STILL_READING_MS = 12_000;
+
+/** "TypeScript and Rust" */
+function listed(names: string[]): string {
+	return names.length < 3 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** What the symbol search covers in this checkout, said under the box. */
+function coverNote(coverage: Coverage | null): string {
+	if (!coverage || (!coverage.covered.length && !coverage.without.length)) {
+		return 'This checkout has no files in a language that has a language server here, so there are no symbols to search.';
+	}
+	const missing = coverage.without.length ? ` No language server answers for ${listed(coverage.without)}: see Settings > Language servers.` : '';
+	return coverage.covered.length ? `Searches ${listed(coverage.covered)}.${missing}` : `Nothing can be searched yet.${missing}`;
 }
 
 /** Monaco's SymbolKind, as a word for the row. */
@@ -213,6 +230,9 @@ export class GoToComponent {
 	private _asked = 0;
 	private _timer = 0;
 	private _shown: { start: string } | null = null;
+	/** The language servers being started for the symbol search, once each time the box is open; and when that began. */
+	private _covering: Promise<Coverage | null> | null = null;
+	private _coveredAt = 0;
 
 	get mode(): 'files' | 'symbols' {
 		return this.query.startsWith('@') ? 'symbols' : 'files';
@@ -263,6 +283,32 @@ export class GoToComponent {
 
 	close(): void {
 		goTo.set(null);
+		window.clearTimeout(this._timer);
+		this._asked++;
+		// The files shown to the servers for the search are closed again; the servers stay, as after any opened file.
+		this._lsp.uncover();
+		this._covering = null;
+	}
+
+	/**
+	 * The symbol half is on screen: start the servers of the languages this checkout has, so a language is
+	 * covered without one of its files having been opened first, and say which ones are.
+	 */
+	private cover(): Promise<Coverage | null> {
+		if (!this._covering) {
+			this._coveredAt = Date.now();
+			this.note = 'Starting the language servers for this checkout…';
+			const covering = (this._covering = (async () => {
+				const listed = this.files.list() ?? (await this.files.load());
+				return listed ? this._lsp.cover(listed.index.paths, this.files.recent()) : null;
+			})().catch(() => null));
+			void covering.then((coverage) => {
+				if (this._covering === covering && this.mode === 'symbols' && !parseGoTo(this.query).query) {
+					this.note = coverNote(coverage);
+				}
+			});
+		}
+		return this._covering;
 	}
 
 	typed(value: string): void {
@@ -270,10 +316,15 @@ export class GoToComponent {
 		this.active = 0;
 		window.clearTimeout(this._timer);
 		if (this.mode === 'symbols') {
+			const covering = this.cover();
 			if (!value.slice(1).trim()) {
 				this.symbols = [];
-				this._asked++;
-				this.note = 'Searches what the language server knows: open a file in the Files tab first, and it covers that language.';
+				const asked = ++this._asked;
+				void covering.then((coverage) => {
+					if (asked === this._asked && this._covering === covering) {
+						this.note = coverNote(coverage);
+					}
+				});
 			} else {
 				this._timer = window.setTimeout(() => void this.search(), 150);
 			}
@@ -327,14 +378,22 @@ export class GoToComponent {
 		if (!query || this.mode !== 'symbols') {
 			return;
 		}
-		const found = await this._lsp.findSymbols(query);
+		const coverage = await this.cover();
+		const found = asked === this._asked ? await this._lsp.findSymbols(query) : null;
 		if (asked !== this._asked) {
 			return; // a later keystroke's answer is the one wanted
 		}
 		this.active = 0;
 		if (found === null) {
 			this.symbols = [];
-			this.note = 'No language server is running for this checkout yet. Open a file in the Files tab, and its language can be searched.';
+			this.note = coverNote(coverage);
+			return;
+		}
+		if (!found.length && Date.now() - this._coveredAt < STILL_READING_MS) {
+			// A server that has only just started answers with nothing until it has read the project: ask again shortly.
+			this.symbols = [];
+			this.note = 'The language servers are still reading the project…';
+			this._timer = window.setTimeout(() => void this.search(), 1200);
 			return;
 		}
 		// The servers' own order is by how well a name matches; names that start with what was typed come first within it.

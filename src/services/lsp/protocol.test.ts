@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyTextEdits, Client, codeActions, COMPLETION_KIND, changesSince, clientCapabilities, completions, inlayHints, touches, workspaceEdit, workspaceSymbols, contentChanges, highlights, languageOf, newSince, oldSpans, progress, resolved, saveWanted, signatureHelp, statusChanges, symbolsAt, syncKind, triggerCharacters, type EditorSymbol, type Span, type LspMessage } from './protocol.ts';
+import { applyTextEdits, planEdit, Client, codeActions, COMPLETION_KIND, changesSince, clientCapabilities, completions, inlayHints, touches, workspaceEdit, workspaceSymbols, contentChanges, highlights, languageOf, newSince, oldSpans, progress, resolved, saveWanted, signatureHelp, statusChanges, symbolsAt, syncKind, triggerCharacters, type EditorSymbol, type FileState, type Span, type LspMessage } from './protocol.ts';
 
 /** A client whose messages land in a list, delivered a tick late like the app's own carrier. */
 function wired(): { client: Client; sent: LspMessage[] } {
@@ -300,12 +300,88 @@ test('edits are applied against the text as it was, whatever order they come in'
 	assert.equal(applyTextEdits(text, []), text);
 });
 
-test('the files and edits of a workspace edit', () => {
+test('the steps of a workspace edit', () => {
 	const edit = { range: span(0, 0, 0, 1), newText: 'x' };
-	assert.deepEqual(workspaceEdit({ changes: { 'file:///a.ts': [edit], 'file:///b.ts': [] } }), [{ uri: 'file:///a.ts', edits: [edit] }]);
-	assert.deepEqual(workspaceEdit({ documentChanges: [{ textDocument: { uri: 'file:///a.ts', version: 3 }, edits: [edit] }, { textDocument: { uri: 'file:///a.ts', version: 3 }, edits: [edit] }] }), [{ uri: 'file:///a.ts', edits: [edit, edit] }]);
-	assert.equal(workspaceEdit({ documentChanges: [{ kind: 'rename', oldUri: 'file:///a.ts', newUri: 'file:///b.ts' }] }), null, 'moving files is not done from here');
+	assert.deepEqual(workspaceEdit({ changes: { 'file:///a.ts': [edit], 'file:///b.ts': [] } }), [{ kind: 'edit', uri: 'file:///a.ts', edits: [edit] }]);
+	assert.deepEqual(
+		workspaceEdit({ documentChanges: [{ textDocument: { uri: 'file:///a.ts', version: 3 }, edits: [edit] }, { textDocument: { uri: 'file:///a.ts', version: 3 }, edits: [edit] }] }),
+		[{ kind: 'edit', uri: 'file:///a.ts', edits: [edit, edit] }],
+		"one file's edits are kept together"
+	);
+	assert.deepEqual(
+		workspaceEdit({
+			documentChanges: [
+				{ kind: 'create', uri: 'file:///new.ts', options: { ignoreIfExists: true } },
+				{ textDocument: { uri: 'file:///new.ts', version: null }, edits: [edit] },
+				{ kind: 'rename', oldUri: 'file:///new.ts', newUri: 'file:///b.ts' },
+				{ textDocument: { uri: 'file:///b.ts', version: null }, edits: [edit] },
+				{ kind: 'delete', uri: 'file:///a.ts', options: { ignoreIfNotExists: true } },
+			],
+		}),
+		[
+			{ kind: 'create', uri: 'file:///new.ts', overwrite: false, ignoreIfExists: true },
+			{ kind: 'edit', uri: 'file:///new.ts', edits: [edit] },
+			{ kind: 'rename', from: 'file:///new.ts', to: 'file:///b.ts', overwrite: false, ignoreIfExists: false },
+			{ kind: 'edit', uri: 'file:///b.ts', edits: [edit] },
+			{ kind: 'delete', uri: 'file:///a.ts', ignoreIfNotExists: true },
+		],
+		'file operations keep their place among the edits'
+	);
+	assert.equal(workspaceEdit({ documentChanges: [{ kind: 'chmod', uri: 'file:///a.ts' }] }), null, 'a kind of change that is not known');
 	assert.deepEqual(workspaceEdit(null), []);
+});
+
+test('an edit with file operations is planned whole or not at all', () => {
+	const there = (text: string | null, open = false, dirty = false): FileState => ({ exists: true, text, open, dirty });
+	const insert = (text: string) => ({ range: span(0, 0, 0, 0), newText: text });
+	const files = new Map([
+		['src/a.ts', there('export const a = 1;\nexport const b = 2;\n', true)],
+		['src/use.ts', there("import { b } from './a';\n")],
+		['src/draft.ts', there('x', true, true)],
+		['logo.png', there(null)],
+	]);
+	// "Move to a new file": the file is made, filled, and the others follow.
+	const move = planEdit(
+		[
+			{ kind: 'create', uri: 'src/b.ts', overwrite: false, ignoreIfExists: false },
+			{ kind: 'edit', uri: 'src/b.ts', edits: [insert('export const b = 2;\n')] },
+			{ kind: 'edit', uri: 'src/a.ts', edits: [{ range: span(1, 0, 2, 0), newText: '' }] },
+			{ kind: 'edit', uri: 'src/use.ts', edits: [{ range: span(0, 0, 0, 24), newText: "import { b } from './b';" }] },
+		],
+		files
+	);
+	assert.deepEqual(move, {
+		ops: [
+			{ kind: 'create', path: 'src/b.ts' },
+			{ kind: 'write', path: 'src/b.ts', text: 'export const b = 2;\n' },
+			{ kind: 'model', path: 'src/a.ts', edits: [{ range: span(1, 0, 2, 0), newText: '' }] },
+			{ kind: 'write', path: 'src/use.ts', text: "import { b } from './b';\n" },
+		],
+	});
+	// A renamed file is edited under its new name, with the text it had.
+	assert.deepEqual(planEdit([{ kind: 'rename', from: 'src/use.ts', to: 'src/user.ts', overwrite: false, ignoreIfExists: false }, { kind: 'edit', uri: 'src/user.ts', edits: [insert('// moved\n')] }], files), {
+		ops: [
+			{ kind: 'rename', from: 'src/use.ts', to: 'src/user.ts', replace: false },
+			{ kind: 'write', path: 'src/user.ts', text: "// moved\nimport { b } from './a';\n" },
+		],
+	});
+	const refused = (steps: Parameters<typeof planEdit>[0]): string => {
+		const plan = planEdit(steps, files);
+		return 'reason' in plan ? plan.reason : '';
+	};
+	assert.match(refused([{ kind: 'edit', uri: 'src/use.ts', edits: [insert('x')] }, { kind: 'create', uri: 'src/a.ts', overwrite: false, ignoreIfExists: false }]), /already exists\. Nothing was changed\.$/, 'one step that cannot be done stops them all');
+	assert.match(refused([{ kind: 'rename', from: 'src/use.ts', to: 'src/a.ts', overwrite: false, ignoreIfExists: false }]), /already exists/);
+	assert.match(refused([{ kind: 'rename', from: 'src/draft.ts', to: 'src/final.ts', overwrite: false, ignoreIfExists: false }]), /unsaved edits: save it first/);
+	assert.match(refused([{ kind: 'delete', uri: 'src/draft.ts', ignoreIfNotExists: false }]), /unsaved edits/);
+	assert.match(refused([{ kind: 'delete', uri: 'src/nothing.ts', ignoreIfNotExists: false }]), /not a file that is there/);
+	assert.match(refused([{ kind: 'edit', uri: 'logo.png', edits: [insert('x')] }]), /could not be read or edited/);
+	assert.match(refused([{ kind: 'edit', uri: 'src/use.ts', edits: [{ range: span(9, 0, 9, 1), newText: 'x' }] }]), /could not be read or edited/);
+	assert.match(refused([{ kind: 'create', uri: 'src/a.ts', overwrite: true, ignoreIfExists: false }]), /open in the editor/);
+	// What a server allows to be skipped is skipped, and replacing is only done when it says so.
+	assert.deepEqual(planEdit([{ kind: 'create', uri: 'src/a.ts', overwrite: false, ignoreIfExists: true }, { kind: 'delete', uri: 'src/nothing.ts', ignoreIfNotExists: true }], files), { ops: [] });
+	assert.deepEqual(planEdit([{ kind: 'rename', from: 'src/use.ts', to: 'logo.png', overwrite: true, ignoreIfExists: false }, { kind: 'delete', uri: 'src/use.ts', ignoreIfNotExists: true }], files), {
+		ops: [{ kind: 'rename', from: 'src/use.ts', to: 'logo.png', replace: true }],
+	});
 });
 
 test('quick fixes: actions, bare commands, and what the server says of them', () => {

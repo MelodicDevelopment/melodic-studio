@@ -378,6 +378,12 @@ export interface ProjectOutput {
 }
 /** What to do when something copied or moved in already has a namesake there. `ask` changes nothing and answers the clashes. */
 export type OnConflict = 'ask' | 'replace' | 'keep-both' | 'skip';
+
+/** A project's own formatter (src-tauri/src/format.rs). */
+export interface FormatTool {
+	name: string;
+	version: string | null;
+}
 export interface Placed {
 	/** Repository-relative paths written. */
 	done: string[];
@@ -676,6 +682,10 @@ export class BackendService {
 	worktreeRead(id: string, path: string, file: string, rev?: string) { return this.call<FileContent>('worktree_read', { id, path, file, rev }); }
 	/** `root` is the checkout the text was read from; the save is refused if another one is active by now. */
 	writeFile(id: string, path: string, text: string, root: string) { return this.call<void>('write_file', { id, path, text, root }); }
+	/** The formatter the file's project brings (Prettier), if it brings one. Looks at the disk only. */
+	formatTool(id: string, path: string) { return this.call<FormatTool | null>('format_tool', { id, path }); }
+	/** `text` as the project's own formatter would write it; null when the project has none for this file. The file is not touched. */
+	formatFile(id: string, root: string, path: string, text: string) { return this.call<string | null>('format_file', { id, root, path, text }); }
 	// New Project. Output arrives as `project-output` events; answers the new folder.
 	projectTemplates() { return this.call<ProjectTemplate[]>('project_templates'); }
 	projectCreate(template: string, parent: string, name: string, options: Record<string, string>) { return this.call<string>('project_create', { request: { template, parent, name, options } }); }
@@ -1581,6 +1591,9 @@ class DemoBackend {
 				return demoReadFile(String(args.file ?? args.path));
 			case 'write_file':
 				return demoWriteFile(String(args.path), String(args.text));
+			case 'format_tool':
+			case 'format_file':
+				return null; // the demo project brings no formatter of its own
 			case 'files_list':
 				return { paths: empty ? [] : demoFiles(), truncated: false };
 			case 'files_search':

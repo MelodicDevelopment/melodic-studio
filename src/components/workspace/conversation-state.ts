@@ -15,11 +15,6 @@ export function stateDot(c: Conversation) {
 	return html`<span class="dot ${c.state}" title=${CONV_STATE_LABELS[c.state]}></span>`;
 }
 
-/** The state as a labelled pill (overview cards). */
-export function stateChip(c: Conversation) {
-	return html`<span class="chip ${c.state}">${c.state === 'working' || c.state === 'starting' ? html`<ml-spinner size="xs"></ml-spinner>` : html`<i></i>`}${CONV_STATE_LABELS[c.state]}</span>`;
-}
-
 /** Plain text, to interpolate into a component's css template. */
 export const convStateStyles = `
 	.dot {
@@ -57,37 +52,5 @@ export const convStateStyles = `
 		.dot.starting {
 			animation: none;
 		}
-	}
-	.chip {
-		flex: none;
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 1px 8px 1px 7px;
-		border: 1px solid currentColor;
-		border-radius: 999px;
-		font-size: 11px;
-		font-weight: 600;
-		line-height: 17px;
-		white-space: nowrap;
-		color: var(--ml-color-text-muted);
-	}
-	.chip i {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: currentColor;
-	}
-	.chip.working,
-	.chip.starting {
-		color: var(--ml-color-primary);
-		background: var(--ml-color-primary-subtle);
-		border-color: transparent;
-	}
-	.chip.waiting {
-		color: var(--ms-mod);
-	}
-	.chip.idle {
-		color: var(--ms-add);
 	}
 `;

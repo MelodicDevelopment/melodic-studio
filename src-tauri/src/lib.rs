@@ -6,6 +6,7 @@ mod conversation;
 mod dev;
 mod error;
 mod files;
+mod format;
 mod history;
 mod git;
 mod init;
@@ -201,6 +202,8 @@ pub fn run() {
             commands::files_search,
             commands::files_list,
             commands::write_file,
+            commands::format_tool,
+            commands::format_file,
             host_cli::issues_status,
             host_cli::issues_list,
             host_cli::pr_context,

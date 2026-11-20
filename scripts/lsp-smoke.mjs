@@ -24,6 +24,7 @@
  *   symbols?: string[],                   // names the outline must hold
  *   diagnostics?: string | null,          // a marker message must contain it; null = no errors
  *   rename?: { needle, to, files: string[] },  // renaming the name at `needle`: the files the edit covers, and every edit applies
+ *   offers?: { [capability]: boolean },   // what the server says it can do, e.g. { renameProvider: false }
  *   symbol?: { query, contains },         // workspace symbol search: a name it must find
  *   hints?: { contains },                 // inlay hints for the whole file: a label one of them carries
  *   edit?: { after, insert, diagnostics, fix?: { title, text } }, // type `insert` after `after` (as a range if the server takes ranges): an error must follow
@@ -212,12 +213,17 @@ for (const check of plan.checks) {
 			(list) => list.length === check.highlights.count
 		);
 	}
+	for (const [capability, wanted] of Object.entries(check.offers ?? {})) {
+		if (!!client.capabilities[capability] !== wanted) {
+			fail(`${plan.server} ${wanted ? 'should offer' : 'should not offer'} ${capability}, and says ${JSON.stringify(client.capabilities[capability])}`);
+		}
+	}
 	if (check.rename) {
 		const params = { textDocument: { uri }, position: position(text, check.rename.needle), newName: check.rename.to };
 		const same = (a, b) => decodeURIComponent(a).toLowerCase() === decodeURIComponent(b).toLowerCase();
 		const files = await eventually(
 			`renaming ${check.rename.needle} in ${check.file}`,
-			async () => workspaceEdit(await client.request('textDocument/rename', params)) ?? [],
+			async () => (workspaceEdit(await client.request('textDocument/rename', params)) ?? []).filter((step) => step.kind === 'edit'),
 			(list) => check.rename.files.every((file) => list.some((f) => same(f.uri, fileUri(join(plan.root, file)))))
 		);
 		result.rename = {};

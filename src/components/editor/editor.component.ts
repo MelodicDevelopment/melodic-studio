@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor';
 import { MelodicComponent } from '@melodicdev/core/components';
-import { Service } from '@melodicdev/core/injection';
+import { Injector, Service } from '@melodicdev/core/injection';
 import { effect, untracked } from '@melodicdev/core/signals';
 import { EditorSettingsStore } from '../../services/editor-settings.store';
 import { html, css } from '@melodicdev/core/template';
@@ -10,6 +10,7 @@ import { isMac } from '../../services/backend.service';
 import { dirName, fileName, relativeTime } from '../../shared/format';
 import { RunStore } from '../../services/run.store';
 import { SearchStore } from '../../services/search.store';
+import { FormatterService } from '../../services/formatter.service';
 import { adoptMonacoStyles, loadMonaco, releaseMonacoStyles } from '../../shared/monaco';
 
 function message(icon: string, text: string) {
@@ -348,7 +349,7 @@ export class EditorComponent {
 		model.updateOptions({ ...(size ? { tabSize: size, indentSize: size } : {}), ...(ec.indentStyle ? { insertSpaces: ec.indentStyle === 'space' } : {}) });
 	}
 
-	/** Cmd/Ctrl+S: format first when Settings asks (the language server's formatter, or Monaco's own), then save. */
+	/** Cmd/Ctrl+S: format first when Settings asks (the project's own formatter, else the language server's, else Monaco's), then save. */
 	private async saveShown(): Promise<void> {
 		const path = this._shown;
 		const editor = this._editor;
@@ -357,6 +358,11 @@ export class EditorComponent {
 		}
 		if (this._settings.settings().formatOnSave) {
 			try {
+				// The project's Prettier, when it has one, is the formatter Monaco is about to pick.
+				const model = editor.getModel();
+				if (model) {
+					await Injector.get(FormatterService).ready(model);
+				}
 				await editor.getAction('editor.action.formatDocument')?.run();
 			} catch {
 				/* no formatter for this language */

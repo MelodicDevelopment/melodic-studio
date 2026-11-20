@@ -390,6 +390,10 @@ export class AgentsStore {
 	readonly busy = signal(false);
 	/** Set while the main pane shows the box for a new question instead of a session. */
 	readonly asking = signal<{ scope: AskScope; seed: string } | null>(null);
+	/** What the Agents tab lists: the open repository's sessions and conversations, or every repository's. Kept here because the tab is rebuilt on every switch. */
+	readonly listScope = signal<'repo' | 'all'>('repo');
+	/** Whether the Agents tab's Worktrees section is unfolded. */
+	readonly treesShown = signal(false);
 	/** The group whose attempts the main pane is comparing, if any. */
 	readonly comparing = signal<string | null>(null);
 	/**

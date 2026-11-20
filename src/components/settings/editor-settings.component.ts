@@ -64,7 +64,7 @@ const ZOOM_LABELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map(
 			<h4>Saving</h4>
 			<ml-select label="Auto-save" .options=${AUTO_SAVE} .value=${s.autoSave} @ml:change=${(e: CustomEvent) => store.set('autoSave', e.detail.value as EditorSettings['autoSave'])}></ml-select>
 			<div class="toggles">
-				${toggle('formatOnSave', 'Format on save', `${mod}S formats the file first, with its language server or the editor's own formatter`)}
+				${toggle('formatOnSave', 'Format on save', `${mod}S formats the file first: with the project's own Prettier when it has one, else its language server or the editor's own formatter`)}
 				${toggle('trimTrailing', 'Trim trailing spaces on save')}
 				${toggle('finalNewline', 'End files with a newline on save')}
 				${toggle('editorconfig', "Follow the repository's .editorconfig", 'Indentation, trimming and the final newline per file type; it wins over the settings here')}

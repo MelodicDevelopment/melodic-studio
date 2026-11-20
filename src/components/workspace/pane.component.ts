@@ -1,7 +1,7 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, repeat } from '@melodicdev/core/template';
-import { WorkspaceStore, panesOf, type Conversation, type Drop, type Pane } from '../../services/workspace.store';
+import { WorkspaceStore, cornerPane, panesOf, type Conversation, type Drop, type Pane } from '../../services/workspace.store';
 import { isMac } from '../../services/backend.service';
 import { paneStyles } from './workspace.styles';
 import { stateDot } from './conversation-state';
@@ -121,6 +121,9 @@ function body(self: PaneComponent, pane: Pane, conv: Conversation | null) {
 		const target = drag && drag.pane === pane.id ? drag.drop : null;
 		const several = panesOf(layout!).length > 1;
 		const mod = isMac() ? '⌘' : 'Ctrl+';
+		// The workspace has no bar of its own: its two buttons sit in the top right pane's row.
+		const corner = cornerPane(layout!).id === pane.id;
+		const full = store.view() === 'full';
 		return html`
 			<div class="pane ${store.focusedPane() === pane.id && several ? 'focused' : ''}" @pointerdown=${() => store.focusedPane.set(pane.id)}>
 				<div class="head">
@@ -130,12 +133,34 @@ function body(self: PaneComponent, pane: Pane, conv: Conversation | null) {
 							(c) => c.id,
 							(c) => tab(self, pane, c),
 						)}
-						<button class="tool" title="New Claude conversation" @click=${() => store.newClaude({ pane: pane.id })}><ml-icon icon="plus" size="sm"></ml-icon></button>
 					</div>
-					<button class="tool" title="New terminal here" @click=${() => store.newShell(pane.id)}><ml-icon icon="terminal-window" size="sm"></ml-icon></button>
-					<button class="tool" title=${`Split right (${mod}\\)`} @click=${() => store.split(pane.id, 'row')}><ml-icon icon="square-split-horizontal" size="sm"></ml-icon></button>
-					<button class="tool" title="Split down" @click=${() => store.split(pane.id, 'column')}><ml-icon icon="square-split-vertical" size="sm"></ml-icon></button>
-					${several ? html`<button class="tool" title="Close this pane (its tabs move next door)" @click=${() => store.closePane(pane.id)}><ml-icon icon="x" size="sm"></ml-icon></button>` : ''}
+					<button class="tool add" title=${`New Claude conversation in ${store.checkoutName()}`} aria-label="New Claude conversation" @click=${() => store.newClaude({ pane: pane.id })}>
+						<ml-icon icon="plus" size="sm"></ml-icon><span class="text">New conversation</span>
+					</button>
+					<ml-popover placement="bottom-end" offset="2" @ml:open=${() => self.menuOpened()}>
+						<button slot="trigger" class="tool more" title="New conversation in a new worktree, or a terminal" aria-label="More ways to start"><ml-icon icon="caret-down" size="xs"></ml-icon></button>
+						<div class="menu">
+							<form class="newwt" @submit=${(e: Event) => self.startInWorktree(e)}>
+								<label for="wt-branch">New conversation in a new worktree</label>
+								<div class="row">
+									<input id="wt-branch" placeholder="New branch name" autocomplete="off" spellcheck="false" .value=${self.branch} @input=${(e: Event) => (self.branch = (e.target as HTMLInputElement).value.replace(/\s+/g, '-'))} />
+									<button class="go" type="submit" ?disabled=${!self.branch.trim()}>Start</button>
+								</div>
+								<small>Its own branch and folder, beside the repository.</small>
+							</form>
+							<button class="mitem" @click=${() => self.newShell()}><ml-icon icon="terminal-window" size="sm"></ml-icon>New terminal</button>
+						</div>
+					</ml-popover>
+					<span class="grow"></span>
+					<button class="tool" title=${`Split right (${mod}\\)`} aria-label="Split right" @click=${() => store.split(pane.id, 'row')}><ml-icon icon="square-split-horizontal" size="sm"></ml-icon></button>
+					<button class="tool" title="Split down" aria-label="Split down" @click=${() => store.split(pane.id, 'column')}><ml-icon icon="square-split-vertical" size="sm"></ml-icon></button>
+					${several ? html`<button class="tool" title="Close this pane (its tabs move next door)" aria-label="Close this pane" @click=${() => store.closePane(pane.id)}><ml-icon icon="x" size="sm"></ml-icon></button>` : ''}
+					${corner
+						? html`
+							<button class="tool" title=${full ? (store.fits() ? 'Show the files beside it' : 'Back to the files (the window is too narrow for both)') : 'Fill the window'} aria-label=${full ? 'Show the files' : 'Fill the window'} @click=${() => store.setView(full ? 'side' : 'full')}><ml-icon icon=${full ? 'arrows-in-simple' : 'arrows-out-simple'} size="sm"></ml-icon></button>
+							<button class="tool" title=${`Hide (${mod}Shift+K). Conversations keep running.`} aria-label="Hide the Claude pane" @click=${() => store.setView('hidden')}><ml-icon icon="caret-right" size="sm"></ml-icon></button>
+						`
+						: ''}
 				</div>
 				${active?.state === 'waiting' ? html`<div class="asking"><ml-icon icon="hand" size="sm"></ml-icon><span>${active.waitingFor}</span></div>` : ''}
 				<div class="screens"></div>
@@ -151,6 +176,33 @@ export class PaneComponent {
 
 	paneId = '';
 	elementRef!: HTMLElement;
+	/** The branch typed into "New conversation in a new worktree". */
+	branch = '';
+
+	private closeMenu(): void {
+		(this.elementRef.shadowRoot?.querySelector('ml-popover') as (HTMLElement & { component?: { close(): void } }) | null)?.component?.close();
+	}
+
+	/** The menu beside the plus opened: the cursor goes to the branch box. */
+	menuOpened(): void {
+		requestAnimationFrame(() => this.elementRef.shadowRoot?.querySelector<HTMLInputElement>('.newwt input')?.focus());
+	}
+
+	startInWorktree(e: Event): void {
+		e.preventDefault();
+		const branch = this.branch.trim();
+		if (!branch) {
+			return;
+		}
+		this.branch = '';
+		this.closeMenu();
+		void this.store.newClaude({ branch, pane: this.paneId });
+	}
+
+	newShell(): void {
+		this.closeMenu();
+		this.store.newShell(this.paneId);
+	}
 
 	private _attached = '';
 	private _screens: HTMLElement | null = null;

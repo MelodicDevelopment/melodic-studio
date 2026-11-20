@@ -5,6 +5,10 @@ import type { Branch, RepoSummary } from '../../services/backend.service';
 import { hostIcon } from '../../shared/repo-groups';
 import { terminals } from '../../services/terminal.store';
 
+/** A check run's state, in words and as an icon. */
+const CI_LABEL: Record<string, string> = { pass: 'passed', fail: 'failed', pending: 'running', skipped: 'skipped' };
+const CI_ICON: Record<string, string> = { pass: 'check-circle', fail: 'x-circle', pending: 'circle-notch', skipped: 'minus-circle' };
+
 function repoRow(self: ToolbarComponent, r: RepoSummary, deep: boolean) {
 	const repo = self.store.repo();
 	return html`
@@ -142,6 +146,10 @@ export function toolbarTemplate(self: ToolbarComponent) {
 	const syncing = busy === 'fetch' || busy === 'pull' || busy === 'push';
 	const local = self.localBranches;
 	const remote = self.remoteBranches;
+	/** The worktree on screen instead of the main checkout, if one is. */
+	const worktree = repo?.worktree ?? null;
+	const work = self.work;
+	const ci = st?.host ? work.ciState() : '';
 
 	return html`
 		<div class="bar drag ${self.mac && !store.showRepoTabs() ? 'mac' : ''}" @mousedown=${self.drag}>
@@ -170,9 +178,9 @@ export function toolbarTemplate(self: ToolbarComponent) {
 			${repo && st
 				? html`
 					<ml-popover id="branch-pop" placement="bottom-start" offset="0" @ml:open=${() => self.opened('branch-pop')}>
-						<button slot="trigger" class="seg" ?disabled=${busy === 'checkout'} @contextmenu=${(e: MouseEvent) => self.branchMenu(e)}>
-							${busy === 'checkout' ? html`<ml-spinner size="sm"></ml-spinner>` : html`<ml-icon icon="git-branch" size="md"></ml-icon>`}
-							<span class="txt"><span class="k">${st.detached ? 'Detached HEAD' : 'Current branch'}</span><span class="v">${st.branch}</span></span>
+						<button slot="trigger" class="seg ${worktree ? 'wt' : ''}" ?disabled=${busy === 'checkout'} title=${worktree ? `Viewing the worktree at ${worktree}. Changes, History and Files all show this checkout.` : ''} @contextmenu=${(e: MouseEvent) => self.branchMenu(e)}>
+							${busy === 'checkout' ? html`<ml-spinner size="sm"></ml-spinner>` : html`<ml-icon icon=${worktree ? 'tree-structure' : 'git-branch'} size="md"></ml-icon>`}
+							<span class="txt"><span class="k">${st.detached ? 'Detached HEAD' : worktree ? 'Worktree' : 'Current branch'}</span><span class="v">${st.branch}</span></span>
 							<ml-icon icon="caret-down" size="xs"></ml-icon>
 						</button>
 						<div class="panel">
@@ -193,6 +201,9 @@ export function toolbarTemplate(self: ToolbarComponent) {
 							</div>
 						</div>
 					</ml-popover>
+					${worktree
+						? html`<button class="back" title="Back to the main checkout" @click=${() => self.agents.view(null)}><ml-icon icon="arrow-left" size="sm"></ml-icon><span>Back to main</span></button>`
+						: ''}
 
 					${sync
 						? html`
@@ -209,15 +220,35 @@ export function toolbarTemplate(self: ToolbarComponent) {
 
 			<span class="spacer drag"></span>
 			${repo && st ? html`<ms-run-control></ms-run-control>` : ''}
-			<ms-workspace-button></ms-workspace-button>
-			<ms-agent-board></ms-agent-board>
-			${st?.host ? html`<ms-ci-status></ms-ci-status>` : ''}
+			<ms-claude-control></ms-claude-control>
 			${st?.host
 				? html`
 					<ml-popover id="host-pop" placement="bottom-end" offset="0">
-						<button slot="trigger" class="tool wide" title=${`Open on ${st.host.name}`}><ml-icon icon=${hostIcon(st.host.provider)} size="md"></ml-icon><ml-icon icon="caret-down" size="xs"></ml-icon></button>
-						<div class="panel narrow">
+						<button slot="trigger" class="tool wide" title=${ci ? `${st.host.name}: checks ${CI_LABEL[ci]} on ${work.runsBranch() ?? st.branch}` : `Open on ${st.host.name}`}>
+							<ml-icon icon=${hostIcon(st.host.provider)} size="md"></ml-icon>
+							${ci ? html`<ml-icon class="ci ${ci}" icon=${CI_ICON[ci]} size="sm"></ml-icon>` : ''}
+							<ml-icon icon="caret-down" size="xs"></ml-icon>
+						</button>
+						<div class="panel ${ci ? 'checks' : 'narrow'}">
 							<div class="list">
+								${ci
+									? html`
+										<div class="group">Checks on ${work.runsBranch() ?? st.branch}</div>
+										${work.runs().map(
+											(r) => html`
+												<div class="item run">
+													<ml-icon class="ci ${r.state}" icon=${CI_ICON[r.state] ?? 'minus-circle'} size="sm"></ml-icon>
+													<span class="name">${r.name}<span class="path">${r.title}${r.created ? ` · ${relativeTime(r.created)}` : ''}</span></span>
+													<span class="acts on">
+														${r.state === 'fail' ? html`<button title="Run the failed jobs again" @click=${() => work.rerun(r)}><ml-icon icon="arrow-clockwise" size="sm"></ml-icon></button>` : ''}
+														${r.url ? html`<button title=${`Open on ${st.host!.name}`} @click=${() => self.host.openUrl(r.url)}><ml-icon icon="arrow-square-out" size="sm"></ml-icon></button>` : ''}
+													</span>
+												</div>
+											`
+										)}
+										<div class="item" @click=${() => work.loadRuns()}><ml-icon icon="arrows-clockwise" size="sm"></ml-icon><span class="name">${work.runsLoading() ? 'Looking…' : 'Look again'}</span></div>
+									`
+									: ''}
 								<div class="group">${st.host.name}</div>
 								<div class="item" @click=${() => self.openHost('remote')}><ml-icon icon="globe" size="sm"></ml-icon><span class="name">Repository</span></div>
 								${st.host.issues ? html`<div class="item" @click=${() => self.openHost('issues')}><ml-icon icon="list-checks" size="sm"></ml-icon><span class="name">${st.host.issuesLabel}</span></div>` : ''}

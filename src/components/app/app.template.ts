@@ -1,6 +1,6 @@
 import { html } from '@melodicdev/core/template';
 import type { AppComponent } from './app.component';
-import type { FileChange } from '../../services/backend.service';
+import { isMac, type FileChange } from '../../services/backend.service';
 import { dirName, fileName, longTime, plural, statusMark } from '../../shared/format';
 import type { ParsedDiff } from '../../shared/diff';
 import { aiSidePanel, explainButton, fileAction, proposalPane, reviewCard, reviewPane } from '../ai/ai-entry';
@@ -232,7 +232,6 @@ export function appTemplate(self: AppComponent) {
 					: !st
 						? html`<div class="center"><ml-spinner size="lg"></ml-spinner></div>`
 						: html`
-							<ms-worktree-banner></ms-worktree-banner>
 							<div class="work ${self.resizing ? 'resizing' : ''}">
 								<aside style="width: ${self.sidebarWidth}px">
 									<div class="tabs">
@@ -248,7 +247,7 @@ export function appTemplate(self: AppComponent) {
 									<div class="upper ${view} ${self.wsResizing ? 'resizing' : ''}">
 										<main>${tab === 'changes' ? changesPane(self) : tab === 'history' ? historyPane(self) : tab === 'agents' ? html`<ms-agent-session></ms-agent-session>` : html`<ms-editor></ms-editor>`}</main>
 										${view === 'hidden'
-											? ''
+											? html`<button class="wsrail" title=${`Show the Claude pane (${isMac() ? '⌘' : 'Ctrl+'}Shift+K)`} aria-label="Show the Claude pane" @click=${() => self.workspace.toggle()}><ml-icon icon="caret-left" size="sm"></ml-icon></button>`
 											: html`
 												<div class="wsresizer" @pointerdown=${self.startWsResize} @pointermove=${self.moveWsResize} @pointerup=${self.endWsResize} @pointercancel=${self.endWsResize} @dblclick=${() => self.workspace.resetWidth()}></div>
 												<ms-workspace style=${view === 'side' ? `width: ${self.workspace.width()}px` : ''}></ms-workspace>

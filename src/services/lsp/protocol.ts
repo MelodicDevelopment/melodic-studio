@@ -897,30 +897,171 @@ export function applyTextEdits(text: string, edits: LspTextEdit[]): string | nul
 	return out + text.slice(at);
 }
 
-export interface FileEdits {
-	uri: string;
-	edits: LspTextEdit[];
-}
+/**
+ * One step of a WorkspaceEdit, in the order the server gave them. The `uri` fields hold what the
+ * server sent; `planEdit` takes the same steps with repository-relative paths in their place.
+ */
+export type EditStep =
+	| { kind: 'edit'; uri: string; edits: LspTextEdit[] }
+	| { kind: 'create'; uri: string; overwrite: boolean; ignoreIfExists: boolean }
+	| { kind: 'rename'; from: string; to: string; overwrite: boolean; ignoreIfExists: boolean }
+	| { kind: 'delete'; uri: string; ignoreIfNotExists: boolean };
 
 /**
- * The text edits of a WorkspaceEdit, by file. Null when it also wants files created, renamed or
- * deleted: that is not done from here, and half an edit is worse than none.
+ * The steps of a WorkspaceEdit: text edits by file, and files created, renamed and deleted
+ * (`documentChanges` with resource operations, which `clientCapabilities` offers). A file's text
+ * edits are kept together, as servers mean them, until a file operation touches that file.
+ * Null when it holds a kind of change this does not know: half an edit is worse than none.
  */
-export function workspaceEdit(edit: unknown): FileEdits[] | null {
-	const e = (edit ?? {}) as { changes?: Record<string, LspTextEdit[]>; documentChanges?: { kind?: string; textDocument?: { uri?: string }; edits?: LspTextEdit[] }[] };
-	const byFile = new Map<string, LspTextEdit[]>();
-	const add = (uri: string, edits: LspTextEdit[]): void => void byFile.set(uri, [...(byFile.get(uri) ?? []), ...edits.filter((x) => x?.range && typeof x.newText === 'string')]);
+export function workspaceEdit(edit: unknown): EditStep[] | null {
+	interface Change {
+		kind?: string;
+		uri?: string;
+		oldUri?: string;
+		newUri?: string;
+		options?: { overwrite?: boolean; ignoreIfExists?: boolean; ignoreIfNotExists?: boolean };
+		textDocument?: { uri?: string };
+		edits?: LspTextEdit[];
+	}
+	const e = (edit ?? {}) as { changes?: Record<string, LspTextEdit[]>; documentChanges?: Change[] };
+	const steps: EditStep[] = [];
+	const open = new Map<string, Extract<EditStep, { kind: 'edit' }>>();
+	const add = (uri: string, edits: LspTextEdit[]): void => {
+		const good = edits.filter((x) => x?.range && typeof x.newText === 'string');
+		if (!good.length) {
+			return;
+		}
+		let step = open.get(uri);
+		if (!step) {
+			step = { kind: 'edit', uri, edits: [] };
+			open.set(uri, step);
+			steps.push(step);
+		}
+		step.edits.push(...good);
+	};
 	if (Array.isArray(e.documentChanges)) {
 		for (const change of e.documentChanges) {
-			if (change.kind || !change.textDocument?.uri) {
+			const options = change.options ?? {};
+			if (!change.kind && change.textDocument?.uri) {
+				add(change.textDocument.uri, change.edits ?? []);
+			} else if (change.kind === 'create' && change.uri) {
+				open.delete(change.uri);
+				steps.push({ kind: 'create', uri: change.uri, overwrite: !!options.overwrite, ignoreIfExists: !!options.ignoreIfExists });
+			} else if (change.kind === 'rename' && change.oldUri && change.newUri) {
+				open.delete(change.oldUri);
+				open.delete(change.newUri);
+				steps.push({ kind: 'rename', from: change.oldUri, to: change.newUri, overwrite: !!options.overwrite, ignoreIfExists: !!options.ignoreIfExists });
+			} else if (change.kind === 'delete' && change.uri) {
+				open.delete(change.uri);
+				steps.push({ kind: 'delete', uri: change.uri, ignoreIfNotExists: !!options.ignoreIfNotExists });
+			} else {
 				return null;
 			}
-			add(change.textDocument.uri, change.edits ?? []);
 		}
 	} else {
 		Object.entries(e.changes ?? {}).forEach(([uri, edits]) => add(uri, edits ?? []));
 	}
-	return [...byFile].filter(([, edits]) => edits.length).map(([uri, edits]) => ({ uri, edits }));
+	return steps;
+}
+
+/** What is known of a file before an edit is applied to it. */
+export interface FileState {
+	exists: boolean;
+	/** Its text. Null when it does not exist, or is not text that can be edited (binary, too large). */
+	text: string | null;
+	/** Open in the editor: its edits go through the editor, where they can be undone. */
+	open: boolean;
+	/** Open with edits that are not saved. */
+	dirty: boolean;
+}
+
+/** What applying an edit comes to, one thing to do after another. */
+export type EditOp =
+	| { kind: 'create'; path: string }
+	/** A file that is not open in the editor: its whole new text. */
+	| { kind: 'write'; path: string; text: string }
+	/** A file open in the editor: the edits, for the editor to make. */
+	| { kind: 'model'; path: string; edits: LspTextEdit[] }
+	| { kind: 'rename'; from: string; to: string; replace: boolean }
+	| { kind: 'delete'; path: string };
+
+const GONE: FileState = { exists: false, text: null, open: false, dirty: false };
+
+/**
+ * Check a whole edit against the files as they are and work out what to do, before anything is
+ * touched: either all of it can be done, or the answer is the reason none of it will be.
+ * `steps` name files by repository-relative path; `files` has every one of them (a missing one
+ * counts as not there). Unsaved edits are never moved, replaced or deleted along with their file.
+ */
+export function planEdit(steps: EditStep[], files: ReadonlyMap<string, FileState>): { ops: EditOp[] } | { reason: string } {
+	const now = new Map<string, FileState>();
+	const at = (path: string): FileState => now.get(path) ?? files.get(path) ?? GONE;
+	const no = (what: string): { reason: string } => ({ reason: `${what} Nothing was changed.` });
+	const ops: EditOp[] = [];
+	for (const step of steps) {
+		if (step.kind === 'create') {
+			const file = at(step.uri);
+			if (!file.exists) {
+				ops.push({ kind: 'create', path: step.uri });
+				now.set(step.uri, { exists: true, text: '', open: false, dirty: false });
+			} else if (step.overwrite) {
+				if (file.open) {
+					return no(`It would empty ${step.uri}, which is open in the editor.`);
+				}
+				ops.push({ kind: 'write', path: step.uri, text: '' });
+				now.set(step.uri, { ...file, text: '' });
+			} else if (!step.ignoreIfExists) {
+				return no(`It would create ${step.uri}, which already exists.`);
+			}
+		} else if (step.kind === 'rename') {
+			const from = at(step.from);
+			const to = at(step.to);
+			if (!from.exists) {
+				return no(`It would rename ${step.from}, which is not a file that is there.`);
+			}
+			if (from.dirty) {
+				return no(`It would rename ${step.from}, which has unsaved edits: save it first.`);
+			}
+			if (to.exists && !step.overwrite) {
+				if (step.ignoreIfExists) {
+					continue;
+				}
+				return no(`It would rename ${step.from} to ${step.to}, which already exists.`);
+			}
+			if (to.dirty) {
+				return no(`It would replace ${step.to}, which has unsaved edits.`);
+			}
+			ops.push({ kind: 'rename', from: step.from, to: step.to, replace: to.exists });
+			// Its tab, if it has one, moves along; the text is edited on disk from here on.
+			now.set(step.to, { exists: true, text: from.text, open: false, dirty: false });
+			now.set(step.from, GONE);
+		} else if (step.kind === 'delete') {
+			const file = at(step.uri);
+			if (!file.exists) {
+				if (step.ignoreIfNotExists) {
+					continue;
+				}
+				return no(`It would delete ${step.uri}, which is not a file that is there.`);
+			}
+			if (file.dirty) {
+				return no(`It would delete ${step.uri}, which has unsaved edits.`);
+			}
+			ops.push({ kind: 'delete', path: step.uri });
+			now.set(step.uri, GONE);
+		} else {
+			const file = at(step.uri);
+			if (!file.exists) {
+				return no(`It would edit ${step.uri}, which is not there.`);
+			}
+			const text = file.text === null ? null : applyTextEdits(file.text, step.edits);
+			if (text === null) {
+				return no(`${step.uri} could not be read or edited.`);
+			}
+			ops.push(file.open ? { kind: 'model', path: step.uri, edits: step.edits } : { kind: 'write', path: step.uri, text });
+			now.set(step.uri, { ...file, text });
+		}
+	}
+	return { ops };
 }
 
 /** A quick fix or refactoring a server offers. `raw` is its own object, which it wants back to resolve or run it. */

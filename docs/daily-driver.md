@@ -180,6 +180,21 @@ live in one place (the Agents tab; the toolbar button becomes a count that takes
 list); the Claude pane's own toolbar keeps what is used and folds the rest into a menu; strips and banners above the
 transcript share one line and collapse. Nothing is removed without his say.
 
+**Built 2026-11-19.** The mock-up (https://claude.ai/artifact/NrozH9CkM5vy9GjkgukX2e, "Today" beside "Proposed") went
+through five rounds with Rick. What he changed: folding the Claude pane's buttons into menus made him hunt for a new
+conversation, for splitting, for filling the window and for the way back from hiding, so every one of those is a
+visible button again and only the two rare starts (a new worktree, a terminal) are behind a caret; and a hidden pane
+leaves a strip with an arrow where it was, with no second count on it. What was built is in CLAUDE.md under "Fewer
+surfaces": agents listed in one place by how they stand, one New button, one toolbar control for the pane and the
+count, the pane's bar and the Overview gone, a session's standing on one line with the check as a pill, the worktree
+in the toolbar instead of a banner, the checks in the host menu. The right side of the toolbar went from six buttons
+to four and the Claude pane from two bars and eleven buttons to one row of six. In the window, on a scratch
+repository: all of the pane's buttons against a real Claude Code conversation and a real shell, the strip and its
+arrow, a 1280 px window where the pane gives way and comes back alone, the toolbar's list, the Agents tab with every
+repository listed, the worktree in the toolbar and the way back. Only in the preview: the check's pill and its
+detail (with a made-up check), the checks in the host menu, the count with something really waiting, rows of a
+second repository.
+
 ### 7. IntelliSense rough spots
 
 - Refactorings that create, rename or delete files ("Move to a new file") are refused today (`workspaceEdit` returns
@@ -194,11 +209,51 @@ transcript share one line and collapse. Nothing is removed without his say.
 - The agent check: a changed file that is open in the editor is not compared with how it was; Rust's `cargo check`
   errors have no "before"; it takes about seven seconds on a small project. Improve what is cheap, note the rest.
 
+**Built 2026-11-20.**
+
+- File operations in edits: offered (`documentChanges`, `resourceOperations`) and applied all-or-nothing through
+  `planEdit` and the Files tab's own create, move and trash. In the window rust-analyzer's "Extract module to file"
+  made `src/greeter.rs`, replaced the module in the open `main.rs` and saved it, with a toast and both in Changes.
+  What the plan assumed about "Move to a new file" was wrong: typescript-language-server makes the file itself and
+  sends plain edits, so that one already worked (run again here: the function moved, the import in the caller
+  rewritten). Renaming and deleting files through an edit are covered by `planEdit`'s tests only: no server here
+  was made to ask for one.
+- Auto fix: the guess was wrong. Monaco keeps the command off until a code action provider names the kinds it
+  provides (`providedCodeActionKinds`), and ours named none; Refactor, Source Action, Organize Imports and Fix All
+  were off for the same reason. In the window all are on, and Auto Fix turned `gret(` into `greet(`.
+- Symbol search: opening the `@` half starts the servers of the checkout's languages and says what it searches.
+  In the window, with nothing opened before, "Searches TypeScript and JavaScript" was up within 400 ms and
+  `@gree` found `greet` 250 ms after it was typed.
+- Rename, through the app's own client against the real servers (`cargo test -- --ignored app_client`, two new
+  fixtures): TypeScript, C#, Rust (rust-analyzer 1.97.1) and Python (Pyright) each rename across two or three
+  files and every edit applies. intelephense 1.18.5 answers `renameProvider: false` without a licence key, so the
+  editor now says "Intelephense renames only with a licence key" at the cursor instead of nothing. Rename was
+  not run in the window for the four new languages: what differs per server is the edit it sends, which is what
+  the tests check; applying it is the same code that ran in the window for TypeScript.
+- The check: the wait for the server's verdict on the files as they were is only paid when the change shows
+  errors. On a three-file TypeScript project in the window: 2.0 s for a change with no errors (three waits before,
+  about 7 s), 5.5 s for one that breaks a caller in a file it did not touch, found and listed as before.
+  Not done, because neither is cheap: a changed file that is open in the editor is still not compared with how it
+  was (it would mean swapping the text under an editor someone may be typing in), and `cargo check` still has no
+  "before" (it would take a second checkout at the starting commit and a second build).
+
 ### 8. Format with the project's own formatter
 
 When a project has Prettier (its `node_modules/.bin/prettier` and a config), Format document and format on save use
 it for the files it handles, through `proc::command()` with the text on stdin; everything else stays with the
 language server. Nothing is installed for the user. The same shape fits `ruff format` and `black` later.
+
+**Built 2026-11-20.** `format.rs` (`format_tool`, `format_file`) and `services/formatter.service.ts`; how it finds
+and runs Prettier and why each file gets a provider of its own is in CLAUDE.md under "The project's own formatter".
+In the window, on a scratch repository with Prettier 3.10.1 installed in it and `{ semi: false, singleQuote: true,
+tabWidth: 3 }`: a TypeScript file came back in Prettier's style, not the language server's, in about 140 ms, with
+the cursor where it was and one undo putting it back; `NOTES.md` and `tsconfig.json`, which have no language
+server, were formatted too; a syntax error gave a toast and changed nothing; `src/main.rs` in the same project went
+to rust-analyzer (350 ms); a file named in `.prettierignore` was left as it was; and with format on save on, Cmd+S
+wrote the formatted text. The finder (nearest copy, config required, a copy that cannot run does not count) and
+the process plumbing (text larger than a pipe, a path with a space, the two ways Prettier fails) are Rust tests
+against a stand-in script run by the real `node`. Not run: a monorepo package with its own Prettier in the window
+(the finder's test covers it), a Prettier plugin, Prettier 2, and anything on Windows or Linux.
 
 ### 9. Hardening
 

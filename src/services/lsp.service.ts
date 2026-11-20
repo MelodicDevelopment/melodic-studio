@@ -58,7 +58,10 @@ import {
 	type EditorChange,
 	type EditorCompletion,
 	type EditorMarker,
-	type FileEdits,
+	planEdit,
+	type EditOp,
+	type EditStep,
+	type FileState,
 	type Located,
 	type LspDiagnostic,
 	type LspMessage,
@@ -151,7 +154,30 @@ export interface SymbolHit {
 }
 
 /** How applying a server's edit went: the files it changed, or why nothing was. */
-type Applied = { ok: true; files: string[]; unsaved: string[] } | { ok: false; reason: string };
+/** `made`: what was done to files as such ("Created src/a.ts"), for saying it; text edits are in `files`. */
+type Applied = { ok: true; files: string[]; unsaved: string[]; made: string[] } | { ok: false; reason: string };
+
+/** What the symbol search (`cover`) can look through, and what it cannot yet, by the names people use. */
+export interface Coverage {
+	covered: string[];
+	without: string[];
+}
+
+/** A language's name for people, for when it has no server whose own label could be used. */
+const LANGUAGE_NAMES: Record<string, string> = { typescript: 'TypeScript', javascript: 'JavaScript', rust: 'Rust', python: 'Python', go: 'Go', php: 'PHP', csharp: 'C#' };
+
+/** Why a server that answers for a language still does not rename, where that is known (by its name in lsp/servers.rs). */
+const RENAME_NOTES: Record<string, string> = {
+	// Checked against intelephense 1.18.5: without a licence key it answers `renameProvider: false`.
+	php: 'Intelephense renames only with a licence key (intelephense.com); without one it cannot rename.',
+};
+
+/** The kinds of action a server may offer. Monaco keeps its fix, refactor and source commands off until a provider names the kinds it has. */
+const ACTION_KINDS = ['quickfix', 'refactor', 'refactor.extract', 'refactor.inline', 'refactor.rewrite', 'source', 'source.organizeImports', 'source.fixAll'];
+
+/** The folder part and the name of a repository-relative path. */
+const folderOf = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf('/')));
+const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 /**
  * A server whose checkout has not been on screen for this long is stopped (rust-analyzer holds half a
@@ -363,7 +389,7 @@ export class LspService {
 				provideRenameEdits: (model, position, newName, token) => this.rename(model, position, newName, token),
 				resolveRenameLocation: (model, position, token) => this.renameAt(model, position, token),
 			});
-			monaco.languages.registerCodeActionProvider(language, { provideCodeActions: (model, range, context, token) => this.actions(model, range, context, token) });
+			monaco.languages.registerCodeActionProvider(language, { provideCodeActions: (model, range, context, token) => this.actions(model, range, context, token) }, { providedCodeActionKinds: ACTION_KINDS });
 			monaco.languages.registerInlayHintsProvider(language, { onDidChangeInlayHints: hintsChanged.event, provideInlayHints: (model, range, token) => this.hints(model, range, token) });
 		}
 		// What a picked quick fix runs: Monaco would apply a fix's edit itself, but only to files it has open.
@@ -531,7 +557,17 @@ export class LspService {
 				this._hintsStale();
 				return Promise.resolve(null);
 			}
-			return method === 'workspace/applyEdit' ? this.applyEdit(client, (params as { edit?: unknown } | undefined)?.edit).then((done) => (done.ok ? { applied: true } : { applied: false, failureReason: done.reason })) : undefined;
+			if (method !== 'workspace/applyEdit') {
+				return undefined;
+			}
+			const asked = params as { label?: string; edit?: unknown } | undefined;
+			return this.applyEdit(client, asked?.edit).then((done) => {
+				if (done.ok && done.made.length) {
+					// Files came, moved or went ("Move to a new file"): said, since the editor does not show it.
+					Injector.get(ToastService).success(asked?.label ?? 'Refactoring applied', `${done.made.join('. ')}. It is all in Changes to review.`);
+				}
+				return done.ok ? { applied: true } : { applied: false, failureReason: done.reason };
+			});
 		};
 		if (!(await client.initialize(clientCapabilities(JSON.parse(capabilities), started.server)))) {
 			// It refused, never answered, or was gone before it could (a stand-in binary, a missing runtime).
@@ -635,6 +671,14 @@ export class LspService {
 		}
 		const client = await this.client(language);
 		const uri = model.uri.toString();
+		// The symbol search showed this file to the server: that copy goes before the editor's own is opened.
+		const shownFor = this._shownFor.get(uri);
+		if (shownFor) {
+			this._shownFor.delete(uri);
+			if (shownFor.live) {
+				shownFor.notify('textDocument/didClose', { textDocument: { uri } });
+			}
+		}
 		// A check has this file open with the server for a moment; opening it twice would confuse the two.
 		for (let tries = 0; tries < 600 && this._checking.has(uri); tries++) {
 			await new Promise((done) => setTimeout(done, 200));
@@ -923,8 +967,12 @@ export class LspService {
 		const client = await this.ready(model);
 		const word = model.getWordAtPosition(position);
 		const here = word ? { range: { startLineNumber: position.lineNumber, startColumn: word.startColumn, endLineNumber: position.lineNumber, endColumn: word.endColumn }, text: word.word } : null;
-		if (!client?.capabilities.renameProvider) {
+		if (!client) {
 			return null;
+		}
+		if (!client.capabilities.renameProvider) {
+			// Said at the cursor, where the box for the new name would have been.
+			return { range: here?.range ?? { startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column }, text: here?.text ?? '', rejectReason: this.noRename(client) };
 		}
 		if (!(client.capabilities.renameProvider as { prepareProvider?: boolean }).prepareProvider) {
 			return here;
@@ -937,14 +985,22 @@ export class LspService {
 		return found?.defaultBehavior && here ? here : { range: here?.range ?? { startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column }, text: here?.text ?? '', rejectReason: 'This cannot be renamed.' };
 	}
 
+	/** Why this server does not rename: its own reason where one is known, else that it does not. */
+	private noRename(client: Client): string {
+		return RENAME_NOTES[client.server] ?? `${this._labels.get(client.key) ?? client.server}'s language server does not rename.`;
+	}
+
 	/**
 	 * Rename the name under the cursor everywhere the server finds it. The edit is applied here
 	 * (see `applyEdit`), so what goes back to Monaco is empty, or the reason nothing was renamed.
 	 */
 	async rename(model: Monaco.editor.ITextModel, position: Monaco.Position, newName: string, token?: Monaco.CancellationToken): Promise<(Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection) | null> {
 		const client = await this.ready(model);
-		if (!client?.capabilities.renameProvider) {
+		if (!client) {
 			return null;
+		}
+		if (!client.capabilities.renameProvider) {
+			return { edits: [], rejectReason: this.noRename(client) };
 		}
 		client.error = null;
 		const edit = await client.request<unknown>('textDocument/rename', { ...this.where(model, position), newName }, 30_000, token);
@@ -961,10 +1017,12 @@ export class LspService {
 	}
 
 	/**
-	 * Apply an edit a server asked for, to the checkout on screen. Everything is checked first and
-	 * nothing is changed unless all of it can be. A file open in the editor is edited there (so it can
-	 * be undone) and saved if it had no unsaved edits before; any other file is rewritten on disk.
-	 * Either way the result is in the Changes tab, which is where an edit across files gets reviewed.
+	 * Apply an edit a server asked for, to the checkout on screen: text edits, and files created,
+	 * renamed or deleted. Everything is checked first (`planEdit`) and nothing is changed unless all
+	 * of it can be. A file open in the editor is edited there (so it can be undone) and saved if it
+	 * had no unsaved edits before; any other file is rewritten on disk. Files are created, moved and
+	 * trashed the way the Files tab does it (`files.rs`: nothing is replaced unasked, a deleted file
+	 * goes to the trash). Either way the result is in the Changes tab, where an edit across files is reviewed.
 	 */
 	private async applyEdit(client: Client, edit: unknown): Promise<Applied> {
 		const monaco = this._monaco!;
@@ -973,55 +1031,145 @@ export class LspService {
 		if (!at || !id || at.id !== id || at.root !== client.root) {
 			return { ok: false, reason: 'Its checkout is not the one on screen any more, so nothing was changed.' };
 		}
-		const files = workspaceEdit(edit);
-		if (!files) {
-			return { ok: false, reason: 'It needs files created, renamed or deleted, which is not done from here yet. Nothing was changed.' };
+		const found = workspaceEdit(edit);
+		if (!found) {
+			return { ok: false, reason: 'It asks for a kind of change to files that is not known here. Nothing was changed.' };
 		}
-		const explorer = Injector.get(ExplorerStore);
-		const plans: { path: string; model: Monaco.editor.ITextModel | null; wasDirty: boolean; edits: FileEdits['edits']; text: string }[] = [];
-		for (const file of files) {
-			const resource = monaco.Uri.parse(file.uri);
+		// The same steps, naming files by their path in the checkout.
+		const uris = new Map<string, Monaco.Uri>();
+		const outside: string[] = [];
+		const locate = (uri: string): string => {
+			const resource = monaco.Uri.parse(uri);
 			const path = this.relativeIn(client.root, resource);
 			if (path === null) {
-				return { ok: false, reason: `It would change ${resource.path.split('/').pop() ?? 'a file'}, which is outside this checkout. Nothing was changed.` };
+				outside.push(resource.path.split('/').pop() ?? 'a file');
+				return '';
 			}
+			uris.set(path, resource);
+			return path;
+		};
+		const steps: EditStep[] = found.map((step) => (step.kind === 'rename' ? { ...step, from: locate(step.from), to: locate(step.to) } : { ...step, uri: locate(step.uri) }));
+		if (outside.length) {
+			return { ok: false, reason: `It would change ${outside[0]}, which is outside this checkout. Nothing was changed.` };
+		}
+		// The files as they are: the editor's text for one that is open there, the disk's for the rest.
+		const explorer = Injector.get(ExplorerStore);
+		const files = new Map<string, FileState>();
+		const wasDirty = new Set<string>();
+		for (const [path, resource] of uris) {
 			const model = monaco.editor.getModel(resource);
 			if (model && !model.isDisposed()) {
-				plans.push({ path, model, wasDirty: !!explorer.tabs().find((tab) => tab.path === path)?.dirty, edits: file.edits, text: '' });
+				const dirty = !!explorer.tabs().find((tab) => tab.path === path)?.dirty;
+				if (dirty) {
+					wasDirty.add(path);
+				}
+				files.set(path, { exists: true, text: model.getValue(), open: true, dirty });
 				continue;
 			}
 			const now = await this.backend.readFile(id, path).catch(() => null);
-			const text = now && !now.binary && !now.tooLarge ? applyTextEdits(now.text, file.edits) : null;
-			if (text === null) {
-				return { ok: false, reason: `${path} could not be read or edited. Nothing was changed.` };
-			}
-			plans.push({ path, model: null, wasDirty: false, edits: file.edits, text });
+			files.set(path, now ? { exists: true, text: now.binary || now.tooLarge ? null : now.text, open: false, dirty: false } : { exists: false, text: null, open: false, dirty: false });
 		}
-		const unsaved: string[] = [];
+		const plan = planEdit(steps, files);
+		if ('reason' in plan) {
+			return { ok: false, reason: plan.reason };
+		}
+		const unsaved = new Set<string>();
+		const touched = new Set<string>();
+		const written = new Set<string>();
+		const made: string[] = [];
+		const disk: DiskChange[] = [];
 		try {
-			for (const plan of plans) {
-				if (!plan.model) {
-					await this.backend.writeFile(id, plan.path, plan.text, client.root);
-					continue;
-				}
-				plan.model.pushStackElement();
-				plan.model.pushEditOperations(
-					null,
-					plan.edits.map((e) => ({ range: editorRange(e.range), text: e.newText })),
-					() => null
-				);
-				plan.model.pushStackElement();
-				if (plan.wasDirty || !(await explorer.save(plan.path))) {
-					unsaved.push(plan.path);
-				}
+			for (const op of plan.ops) {
+				await this.doEdit(op, { id, root: client.root, uris, wasDirty, unsaved, touched, written, made, disk });
 			}
 		} catch (e) {
+			void this.repos.refresh();
 			return { ok: false, reason: `It stopped part way: ${e instanceof Error ? e.message : String((e as { message?: string })?.message ?? e)}. Look at Changes for what was done.` };
 		}
-		// The files rewritten on disk: a server that does not watch it is told, and Changes shows them.
-		this.changed(client.root, plans.filter((plan) => !plan.model).map((plan) => ({ path: plan.path, type: 2 as const })));
+		// A tab on a file that was rewritten on disk (one that was renamed first) shows what is there now.
+		for (const path of written) {
+			await explorer.reload(path);
+		}
+		// The Files tree shows what came and went. A file that was only written may be new as well: the
+		// TypeScript server makes the file of "Move to a new file" itself and then sends plain edits to it.
+		if (made.length || written.size) {
+			await explorer.rescan();
+		}
+		// What changed on disk: a server that does not watch it is told, and Changes shows it.
+		this.changed(client.root, disk);
 		void this.repos.refresh();
-		return { ok: true, files: plans.map((plan) => plan.path), unsaved };
+		return { ok: true, files: [...touched], unsaved: [...unsaved], made };
+	}
+
+	/** One step of an edit that `planEdit` found possible. Throws when the disk no longer agrees. */
+	private async doEdit(
+		op: EditOp,
+		run: { id: string; root: string; uris: Map<string, Monaco.Uri>; wasDirty: Set<string>; unsaved: Set<string>; touched: Set<string>; written: Set<string>; made: string[]; disk: DiskChange[] }
+	): Promise<void> {
+		const monaco = this._monaco!;
+		const explorer = Injector.get(ExplorerStore);
+		switch (op.kind) {
+			case 'create':
+				await this.makeFolders(run.id, run.root, folderOf(op.path));
+				await this.backend.createEntry(run.id, run.root, folderOf(op.path), nameOf(op.path), false);
+				run.made.push(`Created ${op.path}`);
+				run.touched.add(op.path);
+				run.disk.push({ path: op.path, type: 1 });
+				return;
+			case 'write':
+				await this.backend.writeFile(run.id, op.path, op.text, run.root);
+				run.written.add(op.path);
+				run.touched.add(op.path);
+				run.disk.push({ path: op.path, type: 2 });
+				return;
+			case 'model': {
+				const resource = run.uris.get(op.path);
+				const model = resource ? monaco.editor.getModel(resource) : null;
+				if (!model || model.isDisposed()) {
+					throw new Error(`${op.path} was closed meanwhile`);
+				}
+				model.pushStackElement();
+				model.pushEditOperations(
+					null,
+					op.edits.map((e) => ({ range: editorRange(e.range), text: e.newText })),
+					() => null
+				);
+				model.pushStackElement();
+				run.touched.add(op.path);
+				if (run.wasDirty.has(op.path) || !(await explorer.save(op.path))) {
+					run.unsaved.add(op.path);
+				}
+				return;
+			}
+			case 'rename': {
+				await this.makeFolders(run.id, run.root, folderOf(op.to));
+				const placed = await explorer.move([op.from], folderOf(op.to), nameOf(op.to), op.replace ? 'replace' : 'ask');
+				if (!placed?.done.length) {
+					throw new Error(`${op.from} could not be renamed`);
+				}
+				run.made.push(`Renamed ${op.from} to ${op.to}`);
+				run.touched.delete(op.from);
+				run.touched.add(op.to);
+				run.disk.push({ path: op.from, type: 3 }, { path: op.to, type: 1 });
+				return;
+			}
+			case 'delete':
+				if (!(await explorer.trash([op.path]))) {
+					throw new Error(`${op.path} could not be removed`);
+				}
+				run.made.push(`Moved ${op.path} to the trash`);
+				run.touched.delete(op.path);
+				run.disk.push({ path: op.path, type: 3 });
+		}
+	}
+
+	/** Make the folders of `dir` that are not there yet, outermost first. */
+	private async makeFolders(id: string, root: string, dir: string): Promise<void> {
+		if (!dir || (await this.backend.listDir(id, dir).then(() => true, () => false))) {
+			return;
+		}
+		await this.makeFolders(id, root, folderOf(dir));
+		await this.backend.createEntry(id, root, folderOf(dir), nameOf(dir), true);
 	}
 
 	async actions(model: Monaco.editor.ITextModel, range: Monaco.Range, context: Monaco.languages.CodeActionContext, token?: Monaco.CancellationToken): Promise<Monaco.languages.CodeActionList | null> {
@@ -1057,6 +1205,10 @@ export class LspService {
 				Injector.get(ToastService).warning(`"${raw.title ?? 'That fix'}" was not applied`, done.reason);
 				return;
 			}
+			if (done.made.length) {
+				// Files came, moved or went: said, since the editor does not show it.
+				Injector.get(ToastService).success(raw.title ?? 'Done', `${done.made.join('. ')}. It is all in Changes to review.`);
+			}
 		}
 		if (action.command?.command) {
 			// The server does it, and asks for an edit to be applied if it comes to one (`workspace/applyEdit`).
@@ -1064,9 +1216,78 @@ export class LspService {
 		}
 	}
 
+	/** Files shown to a server only so that it can answer the symbol search, by address. Closed again by `uncover`. */
+	private readonly _shownFor = new Map<string, Client>();
+
 	/**
-	 * Symbols by name across the checkout on screen, from the servers running in it (the ones a file
-	 * has been opened for). Null when none of them can search.
+	 * Get the checkout on screen ready for the symbol search: start the server of every language it
+	 * has files of, and show each one file of its language (TypeScript only knows a project once a
+	 * file of it is open). Until this a language was covered only after one of its files had been
+	 * opened in the editor. `paths` is the checkout's file list; of a language's files the one
+	 * opened most lately is shown, else the one nearest the top.
+	 * Resolves to the languages that can now be searched and the ones that have files but no server.
+	 */
+	async cover(paths: string[], recent: string[] = []): Promise<Coverage | null> {
+		const at = this.root();
+		if (!at) {
+			return null;
+		}
+		await this.attach();
+		const monaco = this._monaco!;
+		const lately = new Map(recent.map((path, i) => [path, i]));
+		const rank = (path: string): number[] => [lately.get(path) ?? Infinity, path.split('/').length, path.length];
+		const better = (a: string, b: string): boolean => {
+			const [x, y] = [rank(a), rank(b)];
+			const i = x.findIndex((v, n) => v !== y[n]);
+			return i >= 0 && x[i] < y[i];
+		};
+		const shown = new Map<string, string>();
+		for (const path of paths) {
+			const language = languageOf(path);
+			const have = language ? shown.get(language) : undefined;
+			if (language && (have === undefined || better(path, have))) {
+				shown.set(language, path);
+			}
+		}
+		const covered = new Set<string>();
+		const without = new Set<string>();
+		await Promise.all(
+			[...shown].map(async ([language, path]) => {
+				const client = await this.client(language);
+				const name = (client && this._labels.get(client.key)) ?? LANGUAGE_NAMES[language] ?? language;
+				if (!client?.live || !client.capabilities.workspaceSymbolProvider) {
+					without.add(name);
+					return;
+				}
+				covered.add(name);
+				const uri = monaco.Uri.file(joinPath(at.root, path)).toString();
+				if (this._docs.has(uri) || this._checking.has(uri) || this._shownFor.has(uri)) {
+					return;
+				}
+				const file = await this.backend.readFile(at.id, path).catch(() => null);
+				if (file && !file.binary && !file.tooLarge && client.live && !this._docs.has(uri) && !this._shownFor.has(uri)) {
+					this._shownFor.set(uri, client);
+					client.notify('textDocument/didOpen', { textDocument: { uri, languageId: languageId(language, path), version: 1, text: file.text } });
+				}
+			})
+		);
+		// One server can answer for two languages (TypeScript and JavaScript): it is named once.
+		return { covered: [...covered].sort(), without: [...without].filter((name) => !covered.has(name)).sort() };
+	}
+
+	/** The symbol search is over: the files shown to servers for it are closed again. */
+	uncover(): void {
+		for (const [uri, client] of this._shownFor) {
+			if (client.live) {
+				client.notify('textDocument/didClose', { textDocument: { uri } });
+			}
+		}
+		this._shownFor.clear();
+	}
+
+	/**
+	 * Symbols by name across the checkout on screen, from the servers running in it (`cover` starts
+	 * them; before it, the ones a file has been opened for). Null when none of them can search.
 	 */
 	async findSymbols(query: string): Promise<SymbolHit[] | null> {
 		const at = this.root();
@@ -1104,11 +1325,13 @@ export class LspService {
 	 * Each server is first shown the changed files as they were at `base`, which with everything else
 	 * on disk is the project as it was. The symbols on the changed lines are looked up and their
 	 * references asked for; the files those are in are opened too. Then the changed files are swapped
-	 * for what is on disk now. Errors reported the second time and not the first are the change's own:
-	 * ones that were already there, and ones the checkout itself causes (no `node_modules` in a new
-	 * worktree), are in both.
+	 * for what is on disk now, and the server's errors read. Only when there are some are the files
+	 * swapped back to see which of them were there before: errors reported for the files as they are
+	 * and not for the files as they were are the change's own, and ones that were already there, or
+	 * that the checkout itself causes (no `node_modules` in a new worktree), are in both. A change
+	 * with no errors, which is most of them, is done after one wait instead of three.
 	 *
-	 * A server says nothing when it is done, so each step waits until the files have been reported on
+	 * A server says nothing when it is done, so each wait is until the files have been reported on
 	 * and the server has been quiet, with no work in progress, for a moment. Everything opened is
 	 * closed again, and a server started only for this is stopped.
 	 */
@@ -1250,15 +1473,13 @@ export class LspService {
 				return;
 			}
 
-			// ---- as it was ----
-			const start = Date.now();
+			// ---- as it was: shown to the server so that what the change touched can be looked up ----
 			plans.forEach((plan) => plan.before !== null && show(plan.wasUri, plan.was, true, plan.before));
-			let before: Located[] = [];
 			if (open.size) {
-				await settle(start, [...open.keys()]);
+				// It has read them once it answers something asked behind them. A server started for this may still be loading the project.
+				await client.request('textDocument/documentSymbol', { textDocument: { uri: [...open.keys()][0] } }, CHECK_QUIET_MS);
 				await this.impactOf(client, root, plans, touched, result);
 				const users = [...new Set(result.impact.flatMap((i) => i.uses.map((use) => use.path)))].filter((path) => languageOf(path) !== null && !open.has(uriOf(path))).slice(0, MAX_USERS);
-				const opened = Date.now();
 				for (const path of users) {
 					const uri = uriOf(path);
 					const text = this._docs.has(uri) || this._checking.has(uri) ? null : await read(path);
@@ -1267,11 +1488,6 @@ export class LspService {
 						result.users++;
 					}
 				}
-				if (result.users) {
-					await settle(opened, [...open].filter(([, doc]) => !doc.changed).map(([uri]) => uri));
-				}
-				// What a build of the disk says is about the files as they are now, whatever the server was shown.
-				before = now().filter((e) => !DISK_SOURCES.includes(e.source ?? ''));
 			}
 
 			// ---- as it is ----
@@ -1293,6 +1509,27 @@ export class LspService {
 			}
 			await settle(flip, flipped);
 			const after = now();
+
+			// ---- as it was, once more, only when something is wrong now: was it wrong before? ----
+			// Most changes bring no errors, and then there is nothing to compare: the wait for the server's
+			// verdict on the old files, which used to come first every time, is only paid when it is needed.
+			// What a build of the disk says is about the files as they are now, whatever the server is shown.
+			let before: Located[] = [];
+			if (client.live && after.some((e) => !DISK_SOURCES.includes(e.source ?? '')) && plans.some((plan) => plan.before !== null)) {
+				const back = Date.now();
+				const shown: string[] = [];
+				for (const plan of plans) {
+					if (plan.after !== null && (plan.before === null || plan.wasUri !== plan.uri)) {
+						hide(plan.uri);
+					}
+					if (plan.before !== null) {
+						show(plan.wasUri, plan.was, true, plan.before);
+						shown.push(plan.wasUri);
+					}
+				}
+				await settle(back, shown);
+				before = now().filter((e) => !DISK_SOURCES.includes(e.source ?? ''));
+			}
 			const fresh = newSince(before, after);
 			result.files += plans.length;
 			result.known += after.length - fresh.length;

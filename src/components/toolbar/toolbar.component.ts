@@ -33,6 +33,7 @@ export class ToolbarComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(AgentsStore) readonly agents!: AgentsStore;
+	@Service(HostWorkStore) readonly work!: HostWorkStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 	elementRef!: HTMLElement;
 
@@ -106,6 +107,8 @@ export class ToolbarComponent {
 	};
 
 	onCreate(): void {
+		// The checks of the branch on screen, shown on the host button and at the top of its menu.
+		this.work.watch();
 		window.addEventListener('click', this._dismiss);
 		window.addEventListener('blur', this._dismiss);
 		window.addEventListener('keydown', this._escape);

@@ -4,7 +4,13 @@
 		"workspaceFolders": true,
 		"applyEdit": true,
 		"workspaceEdit": {
-			"documentChanges": false
+			"documentChanges": true,
+			"resourceOperations": [
+				"create",
+				"rename",
+				"delete"
+			],
+			"failureHandling": "abort"
 		},
 		"executeCommand": {},
 		"symbol": {},

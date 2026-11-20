@@ -91,6 +91,28 @@ export const appStyles = () => css`
 		flex: 1;
 		max-width: none;
 	}
+	/* What is left of the Claude pane while it is hidden: the arrow that brings it back, where the one that hid it was. */
+	.wsrail {
+		all: unset;
+		flex: none;
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+		box-sizing: border-box;
+		width: 28px;
+		padding-top: 8px;
+		border-left: 1px solid var(--ml-color-border);
+		background: var(--ms-sidebar-bg);
+		color: var(--ml-color-text-muted);
+	}
+	.wsrail:hover {
+		background: var(--ms-hover);
+		color: var(--ml-color-text);
+	}
+	.wsrail:focus-visible {
+		outline: 2px solid var(--ml-color-primary);
+		outline-offset: -2px;
+	}
 	.wsresizer {
 		flex: none;
 		width: 1px;

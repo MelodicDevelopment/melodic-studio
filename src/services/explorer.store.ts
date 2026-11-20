@@ -453,6 +453,20 @@ export class ExplorerStore {
 		}
 	}
 
+	/**
+	 * A file was rewritten on disk by the app itself (an edit a language server asked for): its tab,
+	 * if it has one without edits of its own, shows what is there now.
+	 */
+	async reload(path: string): Promise<void> {
+		const tab = this.tabs().find((t) => t.path === path);
+		const buf = this.buffer(path);
+		if (tab && !tab.dirty && buf) {
+			// Text carried over from before a rename is older than what was just written.
+			buf.pending = undefined;
+			await this.revert(path);
+		}
+	}
+
 	/** Close a tab. One with unsaved edits asks first, unless `discard` is set. */
 	close(path: string, discard = false): void {
 		const tabs = this.tabs();

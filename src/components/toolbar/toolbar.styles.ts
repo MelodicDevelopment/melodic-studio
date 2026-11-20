@@ -107,6 +107,39 @@ export const toolbarStyles = () => css`
 		background: rgba(0, 0, 0, 0.22);
 		border-color: transparent;
 	}
+	/* A worktree is on screen instead of the main checkout: the branch says so, in azure, with the way back beside it. */
+	.seg.wt {
+		border-color: color-mix(in srgb, var(--ms-run) 55%, transparent);
+		background: color-mix(in srgb, var(--ms-run) 12%, var(--ms-toolbar-raised));
+	}
+	.seg.wt .k {
+		display: block;
+		color: var(--ms-run);
+	}
+	.back {
+		all: unset;
+		flex: none;
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		height: 28px;
+		box-sizing: border-box;
+		padding: 0 10px 0 8px;
+		border: 1px solid var(--ms-toolbar-border);
+		border-radius: 8px;
+		background: var(--ms-toolbar-raised);
+		color: var(--ms-toolbar-fg);
+		font-size: 12px;
+		font-weight: 500;
+		white-space: nowrap;
+	}
+	.back:hover {
+		background: var(--ms-toolbar-hover);
+	}
+	.back:focus-visible {
+		outline: 2px solid var(--ml-color-primary);
+		outline-offset: -2px;
+	}
 	.seg:focus-visible {
 		outline: 2px solid var(--ml-color-primary);
 		outline-offset: -2px;
@@ -174,6 +207,27 @@ export const toolbarStyles = () => css`
 	}
 	.panel.narrow {
 		width: 260px;
+	}
+	/* The host menu with the branch's check runs at its top. */
+	.panel.checks {
+		width: 340px;
+	}
+	.tool .ci.pass,
+	.item > ml-icon.ci.pass {
+		color: var(--ms-add);
+	}
+	.tool .ci.fail,
+	.item > ml-icon.ci.fail {
+		color: var(--ms-del);
+	}
+	.tool .ci.pending,
+	.item > ml-icon.ci.pending {
+		color: var(--ms-mod);
+	}
+	/* A run's buttons are always there: re-running a failed one is what the row is for. */
+	.acts.on,
+	.item:hover .acts.on {
+		display: inline-flex;
 	}
 	.tool:hover {
 		background: var(--ms-toolbar-hover);

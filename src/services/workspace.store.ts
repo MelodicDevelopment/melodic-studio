@@ -114,6 +114,14 @@ function emptyPane(): Pane {
 	return { type: 'pane', id: newId('p'), tabs: [], active: null };
 }
 
+/** The pane in the top right corner: the one that carries the workspace's own buttons (fill the window, hide). */
+export function cornerPane(node: LayoutNode): Pane {
+	while (node.type === 'split') {
+		node = node.dir === 'row' ? node.children[node.children.length - 1] : node.children[0];
+	}
+	return node;
+}
+
 /** Every pane in a layout, in reading order. */
 export function panesOf(node: LayoutNode): Pane[] {
 	return node.type === 'pane' ? [node] : node.children.flatMap(panesOf);
@@ -188,7 +196,6 @@ export class WorkspaceStore {
 	readonly conversations = signal<Conversation[]>(loadConversations());
 	readonly layouts = signal<Record<string, LayoutNode>>({});
 	private readonly _views = signal<Record<string, WorkspaceView>>(savedViews());
-	private readonly _overviews = signal<Record<string, boolean>>({});
 	private readonly _firstView = asView(read<unknown>(VIEW_KEY, 'side')) ?? 'side';
 	/** The open repository's view: each repository tab keeps its own. */
 	readonly view = computed<WorkspaceView>(() => this._views()[this.repos.repo()?.id ?? ''] ?? this._firstView);
@@ -208,8 +215,6 @@ export class WorkspaceStore {
 		const r = this._room();
 		return r ? sideWidth(this._dragged(), r.room, r.window) : (this._dragged() ?? MIN_SIDE_W);
 	});
-	/** The card grid of every conversation instead of the panes (per repository tab, like the view). */
-	readonly overview = computed(() => !!this._overviews()[this.repos.repo()?.id ?? '']);
 	/** The pane new tabs go to and keys act on. */
 	readonly focusedPane = signal<string | null>(null);
 	/** A tab being dragged, and where it would land. */
@@ -351,21 +356,6 @@ export class WorkspaceStore {
 		}
 	}
 
-	showOverview(on: boolean): void {
-		this.setOverview(on);
-		if (!on) {
-			this.markSeen();
-			requestAnimationFrame(() => this.focusActive());
-		}
-	}
-
-	private setOverview(on: boolean): void {
-		const id = this.repos.repo()?.id;
-		if (id && this.overview() !== on) {
-			this._overviews.set({ ...this._overviews(), [id]: on });
-		}
-	}
-
 	// ---- starting things ----------------------------------------------------
 
 	/**
@@ -501,7 +491,6 @@ export class WorkspaceStore {
 	private addTab(conv: Conversation, pane?: string): void {
 		this.conversations.set([...this.conversations(), conv]);
 		this.save();
-		this.setOverview(false);
 		this.reveal();
 		this.place(conv.id, pane ?? this.targetPane(), 'center');
 	}
@@ -525,7 +514,6 @@ export class WorkspaceStore {
 		if (this.repos.repo()?.id !== conv.repoId) {
 			await this.repos.selectRepo(conv.repoId);
 		}
-		this.setOverview(false);
 		this.reveal();
 		const layout = this.ensureLayout();
 		const pane = layout && panesOf(layout).find((p) => p.tabs.includes(id));
@@ -553,7 +541,7 @@ export class WorkspaceStore {
 
 	/**
 	 * Close a tab. A shell ends. A Claude conversation ends too but is kept (saved), so it can
-	 * be resumed from the overview; `forget` drops it from the list as well.
+	 * be resumed from the Agents tab; `forget` drops it from the list as well.
 	 */
 	close(id: string, forget = false): void {
 		const conv = this.get(id);
@@ -990,7 +978,7 @@ export class WorkspaceStore {
 
 	/** Whether a conversation is on screen right now (and the window has the user's attention). */
 	isVisible(id: string): boolean {
-		if (this.shown() === 'hidden' || this.overview() || (typeof document !== 'undefined' && (document.hidden || !document.hasFocus()))) {
+		if (this.shown() === 'hidden' || (typeof document !== 'undefined' && (document.hidden || !document.hasFocus()))) {
 			return false;
 		}
 		const layout = this.layout();
