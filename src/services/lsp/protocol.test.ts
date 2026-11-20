@@ -3,15 +3,35 @@ import assert from 'node:assert/strict';
 import { applyTextEdits, planEdit, Client, codeActions, COMPLETION_KIND, changesSince, clientCapabilities, completions, inlayHints, touches, workspaceEdit, workspaceSymbols, contentChanges, highlights, languageOf, newSince, oldSpans, progress, resolved, saveWanted, signatureHelp, statusChanges, symbolsAt, syncKind, triggerCharacters, type EditorSymbol, type FileState, type Span, type LspMessage } from './protocol.ts';
 
 /** A client whose messages land in a list, delivered a tick late like the app's own carrier. */
+/** Messages on their way out of a client a test wired. */
+let sending = 0;
+
 function wired(): { client: Client; sent: LspMessage[] } {
 	const sent: LspMessage[] = [];
 	const client = new Client({ key: 'k', root: '/repo', fresh: true, server: 'typescript', initializationOptions: null }, 'file:///repo', async (message) => {
-		await new Promise((done) => setTimeout(done, 1));
-		sent.push(message as LspMessage);
+		sending++;
+		try {
+			await new Promise((done) => setTimeout(done, 1));
+			sent.push(message as LspMessage);
+		} finally {
+			sending--;
+		}
 	});
 	return { client, sent };
 }
-const settled = (): Promise<void> => new Promise((done) => setTimeout(done, 30));
+
+/**
+ * Until everything on its way has been sent: no message going out, two turns of the loop running.
+ * (Not a fixed wait: 30 ms was not always enough for two messages on a busy machine, and the tests
+ * failed on the Windows and Linux runners. A message waiting its turn starts in the same turn the
+ * one before it ends, so nothing is ever between two sends when a turn begins.)
+ */
+const settled = async (): Promise<void> => {
+	for (let quiet = 0; quiet < 2; ) {
+		await new Promise((done) => setTimeout(done, 1));
+		quiet = sending ? 0 : quiet + 1;
+	}
+};
 
 test('messages go out in the order they were asked for', async () => {
 	const { client, sent } = wired();
