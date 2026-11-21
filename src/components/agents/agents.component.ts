@@ -2,14 +2,10 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
-<<<<<<< HEAD
-import { AgentsStore, DRAFT_IMAGES, MAX_ATTEMPTS, attemptBranch, branchFor, nameOf, scopeOf, stateLabel, stateOf, summary, type AgentSession } from '../../services/agents.store';
-=======
-import { AgentsStore, MAX_ATTEMPTS, attemptBranch, scopeOf, stateLabel, stateOf, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, DRAFT_IMAGES, MAX_ATTEMPTS, attemptBranch, nameOf, scopeOf, stateLabel, stateOf, summary, type AgentSession } from '../../services/agents.store';
 import { AiService, type Ask } from '../../services/ai.service';
 import { MODELS, branchNamePrompt } from '../../services/ai-prompts';
 import { branchFor, namedBranch, wantsNaming } from '../../shared/branch-name';
->>>>>>> agent/dynamic-branch-naming
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
 import { isMac, type AgentMode, type ClaudeSession, type Worktree } from '../../services/backend.service';
@@ -291,12 +287,8 @@ function newMenu(self: AgentsComponent) {
 				<h3 slot="dialog-header">New agent task</h3>
 				<div class="dlg">
 					<ml-textarea label="Task" rows="5" placeholder="Describe what you want done. Be as specific as you would be with a colleague." .value=${self.task} @ml:input=${(e: CustomEvent) => self.setTask(e.detail.value)}></ml-textarea>
-<<<<<<< HEAD
 					<ms-attach .box=${DRAFT_IMAGES.task} .pick=${true}></ms-attach>
-					<ml-checkbox label="Work in a separate worktree on a new branch" hint="Recommended: the agent cannot disturb your checkout, and several can run at once." .checked=${self.isolate} @ml:change=${(e: CustomEvent) => (self.isolate = e.detail.checked)}></ml-checkbox>
-=======
 					<ml-checkbox label="Work in a separate worktree on a new branch" hint="Recommended: the agent cannot disturb your checkout, and several can run at once." .checked=${self.isolate} @ml:change=${(e: CustomEvent) => self.setIsolate(e.detail.checked)}></ml-checkbox>
->>>>>>> agent/dynamic-branch-naming
 					${self.isolate
 						? html`<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}${self.naming ? ' · Claude is naming it…' : ''}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
 						: html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent will edit the checkout you are looking at, alongside your own uncommitted changes.</span></p>`}
@@ -886,11 +878,8 @@ export class AgentsComponent {
 		this.branch = '';
 		this.attempts = 1;
 		this._branchTouched = false;
-<<<<<<< HEAD
-		this.agents.takeAttached(DRAFT_IMAGES.task);
-=======
 		this._named = null;
->>>>>>> agent/dynamic-branch-naming
+		this.agents.takeAttached(DRAFT_IMAGES.task);
 		this._dialogs.open('new-agent' as DialogId);
 	}
 
@@ -966,21 +955,17 @@ export class AgentsComponent {
 	}
 
 	async start(): Promise<void> {
-<<<<<<< HEAD
 		const agents = this.agents;
 		// Not while an image is still being made ready: the task would go without it.
 		if (agents.attaching()[DRAFT_IMAGES.task]) {
 			return;
 		}
+		// What the field shows is what is started: a name still on its way is not waited for.
+		this.stopNaming();
 		// They stay in the dialog until the task has started, so a failed start loses nothing.
 		const images = agents.attached()[DRAFT_IMAGES.task] ?? [];
 		if (await agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1, images })) {
 			agents.takeAttached(DRAFT_IMAGES.task);
-=======
-		// What the field shows is what is started: a name still on its way is not waited for.
-		this.stopNaming();
-		if (await this.agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1 })) {
->>>>>>> agent/dynamic-branch-naming
 			this.close('new-agent');
 		}
 	}
