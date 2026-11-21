@@ -122,6 +122,8 @@ export interface WorkCheck {
 /** More changed files than this and only the first ones are checked. */
 const MAX_CHECKED = 60;
 const CHECK_KEY = 'studio.agents.check';
+/** The Merge dialog's "delete the worktree and branch afterwards" box, as the user last left it. */
+const CLEANUP_KEY = 'studio.agents.merge-cleanup';
 
 /** The state of one investigation. `summary` and everything in `approval` and `report` come from the program or from Claude: text only. */
 export interface Investigation {
@@ -410,6 +412,14 @@ export function askPrompt(scope: AskScope, question: string): string {
 /** The tool names in a list of permission rules: `Bash(git log:*)` -> `Bash`. */
 function toolNames(rules: string[]): string[] {
 	return [...new Set(rules.map((r) => r.replace(/\(.*$/, '')))];
+}
+
+function readCleanupSetting(): boolean {
+	try {
+		return localStorage.getItem(CLEANUP_KEY) !== 'off';
+	} catch {
+		return true;
+	}
 }
 
 function readCheckSetting(): boolean {
@@ -1191,10 +1201,11 @@ export class AgentsStore {
 	 * that has it, else the main checkout, which switches to it first (refused while it has
 	 * uncommitted changes). With `from`, `into` is a new branch made from `from` in the main checkout.
 	 */
-	async merge(session: AgentSession, into: string, from: string | null = null): Promise<boolean> {
+	async merge(session: AgentSession, into: string, from: string | null = null, cleanup = false): Promise<boolean> {
 		if (!session.branch || !into || into === session.branch || !(await this.showRepo(session))) {
 			return false;
 		}
+		let merged = false;
 		try {
 			const trees = await this.backend.worktrees(session.repoId);
 			const holder = from ? null : trees.find((w) => w.branch === into);
@@ -1219,17 +1230,50 @@ export class AgentsStore {
 					}
 				}
 			}
-			const ok = await this.repos.merge(session.branch);
-			if (ok) {
+			merged = await this.repos.merge(session.branch);
+			if (merged) {
 				this.update(session.id, settledOf, false);
 			}
-			return ok;
 		} catch (e) {
 			this.fail(e);
-			return false;
 		} finally {
 			await this.loadWorktrees();
 			await this.repos.loadBranches();
+		}
+		if (merged && cleanup && session.isolated) {
+			await this.cleanUpMerged(session);
+		}
+		return merged;
+	}
+
+	/** The Merge dialog's cleanup box, remembered from one merge to the next. */
+	readonly cleanupAfterMerge = signal(readCleanupSetting());
+
+	setCleanupAfterMerge(on: boolean): void {
+		this.cleanupAfterMerge.set(on);
+		try {
+			localStorage.setItem(CLEANUP_KEY, on ? 'on' : 'off');
+		} catch {
+			/* private mode: it holds for this run */
+		}
+	}
+
+	/**
+	 * After a merge: the agent's worktree and branch go, but only while the worktree has nothing that
+	 * was not merged (only committed work is). The branch is deleted with `-D`, since its commits were
+	 * just merged into a branch that `git branch -d` may not see from the main checkout. The session stays.
+	 */
+	private async cleanUpMerged(session: AgentSession): Promise<void> {
+		const tree = this.worktrees().find((w) => !w.isMain && samePath(w.path, session.cwd));
+		if (!tree) {
+			return;
+		}
+		if (tree.changes > 0) {
+			this.toast.warning('Worktree kept', `It has ${tree.changes} uncommitted ${tree.changes === 1 ? 'change' : 'changes'}, which the merge did not take. Remove it from the Worktrees list once they are dealt with.`);
+			return;
+		}
+		if (await this.removeWorktree(session.cwd, true, session.repoId)) {
+			this.toast.success('Cleaned up', `Removed the worktree and the branch ${session.branch ?? ''}.`);
 		}
 	}
 

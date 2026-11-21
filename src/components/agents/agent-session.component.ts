@@ -78,6 +78,14 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 					: uncommitted
 						? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent's worktree has ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Only committed work is merged: review and commit first.</span></p>`
 						: ''}
+				${s.isolated
+					? html`<ml-checkbox
+							label=${`Then delete its worktree and the branch ${s.branch ?? ''}`}
+							hint=${uncommitted && !fix ? 'Not while the worktree has uncommitted changes: it is kept and you are told.' : 'The session and its conversation stay.'}
+							.checked=${self.agents.cleanupAfterMerge()}
+							@ml:change=${(e: CustomEvent) => self.agents.setCleanupAfterMerge(e.detail.checked)}
+						></ml-checkbox>`
+					: ''}
 				${pr ? html`<p class="hint">Branch protected? Push ${s.branch} and open a ${pr} instead.</p>` : ''}
 			</div>
 			<div slot="dialog-footer" class="foot">
@@ -1048,7 +1056,7 @@ export class AgentSessionComponent {
 				return;
 			}
 		}
-		if (await this.agents.merge(s, into, creating ? this.newFrom : null)) {
+		if (await this.agents.merge(s, into, creating ? this.newFrom : null, this.agents.cleanupAfterMerge())) {
 			this.closeMerge();
 		}
 	}
