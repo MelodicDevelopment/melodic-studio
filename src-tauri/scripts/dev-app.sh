@@ -3,7 +3,8 @@
 #
 # A bare executable shows in the Dock under its file name ("melodic-studio"). Wrapping the app binary
 # in a minimal .app bundle next to it gives dev builds the product's name and icon, as a release
-# bundle has. Anything else cargo runs (unit tests, other binaries) is executed untouched.
+# bundle has, and what ../Info.plist adds to one (it opens folders, so the Dock lists recent repositories).
+# Anything else cargo runs (unit tests, other binaries) is executed untouched.
 BIN="$1"
 shift
 if [ "$(basename "$BIN")" != "melodic-studio" ]; then
@@ -28,6 +29,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleIconFile</key><string>icon</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>NSHighResolutionCapable</key><true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>Folder</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key><array><string>public.folder</string></array>
+		</dict>
+	</array>
 </dict>
 </plist>
 PLIST

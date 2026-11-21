@@ -17,6 +17,7 @@ mod lsp;
 mod menu;
 mod paths;
 mod proc;
+mod recent;
 mod run;
 mod scan;
 mod sessions;
@@ -45,15 +46,19 @@ pub fn run() {
     if proc::relaunch_helper() {
         return;
     }
-    paths::fix_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .manage(recent::Opened::default())
         .menu(menu::build)
         .on_menu_event(menu::on_event)
         .setup(|app| {
+            // Not before the builder: on macOS a login shell started before the app has finished launching
+            // made the system drop the folder the app was launched to open (a recent repository picked from
+            // the Dock while the app was not running arrived as a plain launch). By now that is handled.
+            paths::fix_path();
             // Debug builds can keep their settings somewhere else, so a test instance never touches the real ones.
             let config_dir = match std::env::var("STUDIO_CONFIG_DIR") {
                 Ok(dir) if cfg!(debug_assertions) && !dir.is_empty() => PathBuf::from(dir),
@@ -91,6 +96,7 @@ pub fn run() {
             commands::repo_clone,
             commands::repo_remove,
             commands::repo_select,
+            recent::opened_take,
             commands::repo_status,
             commands::file_diff,
             commands::commit_changes,
@@ -224,8 +230,12 @@ pub fn run() {
         .expect("error while running Melodic Studio")
         .run(|app, event| {
             // Quitting (Cmd+Q, the Dock) ends the app without a window event, so this is the one place every exit passes.
-            if matches!(event, tauri::RunEvent::Exit) {
-                dev::stop(app);
+            match event {
+                tauri::RunEvent::Exit => dev::stop(app),
+                // A repository picked from the Dock icon's recent list, or a folder dropped on the icon.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => recent::opened(app, &urls),
+                _ => {}
             }
         });
 }

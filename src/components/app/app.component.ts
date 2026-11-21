@@ -6,6 +6,7 @@ import { AgentsStore } from '../../services/agents.store';
 import { HostStore } from '../../services/host.store';
 import { WorkspaceStore } from '../../services/workspace.store';
 import { MenuService } from '../../services/menu.service';
+import { OpenedService } from '../../services/opened.service';
 import { SearchStore } from '../../services/search.store';
 import { appTemplate } from './app.template';
 import { appStyles } from './app.styles';
@@ -36,6 +37,7 @@ export class AppComponent {
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 	@Service(ToastService) private readonly _toast!: ToastService;
 	@Service(MenuService) private readonly _menu!: MenuService;
+	@Service(OpenedService) private readonly _opened!: OpenedService;
 	@Service(SearchStore) private readonly _search!: SearchStore;
 
 	elementRef!: HTMLElement;
@@ -56,7 +58,8 @@ export class AppComponent {
 
 	onCreate(): void {
 		this._toast.setPosition('bottom-right');
-		void this.store.init();
+		// A repository picked from the Dock can only be found once the list of repositories is there.
+		void this.store.init().then(() => this._opened.start());
 		this._menu.start();
 		window.addEventListener('keydown', this.onKey, true);
 	}

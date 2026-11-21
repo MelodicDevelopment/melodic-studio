@@ -28,6 +28,10 @@ toml = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+# The Dock icon's recent repositories (recent.rs). The versions Tauri itself brings.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSDocumentController"] }
 
 # Build scripts and proc macros are loaded by the compiler, not shipped. Stripping them (as `strip = true`
 # below would) breaks the build on recent Xcode once the macOS deployment target is 13 or newer: `strip`

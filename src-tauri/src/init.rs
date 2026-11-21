@@ -164,14 +164,14 @@ pub async fn folder_inspect(path: String) -> Result<FolderInfo> {
 }
 
 #[tauri::command]
-pub async fn repo_init(state: State<'_, AppState>, path: String, options: InitOptions) -> Result<RepoSummary> {
+pub async fn repo_init(app: tauri::AppHandle, state: State<'_, AppState>, path: String, options: InitOptions) -> Result<RepoSummary> {
     let path = PathBuf::from(path.trim());
     if !path.is_absolute() {
         return Err(AppError::msg("Give the full path to the folder"));
     }
     let git = init(&path, &options)?;
     let top = Git::toplevel(&git.dir)?;
-    register(&state, &top)
+    register(&app, &state, &top)
 }
 
 /// Open a web page (the "create a repository" page of a host). Only https links.

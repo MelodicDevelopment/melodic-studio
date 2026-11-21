@@ -94,7 +94,8 @@ fn insert(config: &mut crate::config::AppConfig, path: &Path) -> String {
     id
 }
 
-pub(crate) fn register(state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
+pub(crate) fn register(app: &tauri::AppHandle, state: &State<'_, AppState>, path: &Path) -> Result<RepoSummary> {
+    crate::recent::note(app, path);
     let r = {
         let mut config = state.config.lock().unwrap();
         let id = insert(&mut config, path);
@@ -138,9 +139,9 @@ pub async fn app_status(app: tauri::AppHandle, state: State<'_, AppState>) -> Re
 // ---- repositories -----------------------------------------------------------
 
 #[tauri::command]
-pub async fn repo_add(state: State<'_, AppState>, path: String) -> Result<RepoSummary> {
+pub async fn repo_add(app: tauri::AppHandle, state: State<'_, AppState>, path: String) -> Result<RepoSummary> {
     let top = Git::toplevel(&crate::paths::typed(&path))?;
-    register(&state, &top)
+    register(&app, &state, &top)
 }
 
 /// A repository found by `repo_scan`.
@@ -210,7 +211,7 @@ pub async fn repo_add_many(state: State<'_, AppState>, paths: Vec<String>) -> Re
 }
 
 #[tauri::command]
-pub async fn repo_create(state: State<'_, AppState>, parent: String, name: String, readme: bool) -> Result<RepoSummary> {
+pub async fn repo_create(app: tauri::AppHandle, state: State<'_, AppState>, parent: String, name: String, readme: bool) -> Result<RepoSummary> {
     let name = name.trim();
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         return Err(AppError::msg("Give the repository a simple folder name"));
@@ -226,11 +227,11 @@ pub async fn repo_create(state: State<'_, AppState>, parent: String, name: Strin
         let _ = g.commit(&["README.md".into()], "Initial commit", "", false);
     }
     let top = Git::toplevel(&dir)?;
-    register(&state, &top)
+    register(&app, &state, &top)
 }
 
 #[tauri::command]
-pub async fn repo_clone(state: State<'_, AppState>, url: String, parent: String) -> Result<RepoSummary> {
+pub async fn repo_clone(app: tauri::AppHandle, state: State<'_, AppState>, url: String, parent: String) -> Result<RepoSummary> {
     let url = url.trim();
     if url.is_empty() {
         return Err(AppError::msg("Enter a repository URL"));
@@ -241,12 +242,15 @@ pub async fn repo_clone(state: State<'_, AppState>, url: String, parent: String)
     }
     Git::clone(url, &dest)?;
     let top = Git::toplevel(&dest)?;
-    register(&state, &top)
+    register(&app, &state, &top)
 }
 
 #[tauri::command]
-pub async fn repo_remove(state: State<'_, AppState>, id: String) -> Result<()> {
+pub async fn repo_remove(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
     let mut config = state.config.lock().unwrap();
+    if let Some(r) = config.find(&id) {
+        crate::recent::forget(&app, &r.path);
+    }
     config.repos.retain(|r| r.id != id);
     if config.current.as_deref() == Some(id.as_str()) {
         config.current = config.repos.first().map(|r| r.id.clone());
@@ -255,11 +259,12 @@ pub async fn repo_remove(state: State<'_, AppState>, id: String) -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn repo_select(state: State<'_, AppState>, id: String) -> Result<()> {
+pub async fn repo_select(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> Result<()> {
     let mut config = state.config.lock().unwrap();
-    if config.find(&id).is_none() {
+    let Some(r) = config.find(&id) else {
         return Err(AppError::msg("That repository is no longer in Melodic Studio"));
-    }
+    };
+    crate::recent::note(&app, &r.path);
     config.current = Some(id);
     config.save(&state.config_path)
 }
