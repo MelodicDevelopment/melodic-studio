@@ -60,6 +60,8 @@ export interface AgentSession {
 	/** True when it has a worktree of its own (rather than working in the main checkout). */
 	isolated: boolean;
 	mode: AgentMode;
+	/** The model its turns run on (`--model`): an alias such as `opus`. Missing or empty is Claude Code's own default. */
+	model?: string | null;
 	/** Claude Code's session id, which carries the conversation into the next turn. */
 	sessionId: string | null;
 	status: 'idle' | 'running' | 'failed';
@@ -1053,6 +1055,7 @@ export class AgentsStore {
 		}
 		await this.listen();
 		const names = images.map((a) => a.name);
+		const model = session.model ? { model: session.model } : {};
 		const sent: AgentItem = { kind: 'user', text: options.shown ?? text, ...(names.length ? { images: names } : {}) };
 		// What the language servers said is about the files as they were; the turn changes them.
 		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, items: [...s.items, sent] }));
@@ -1069,14 +1072,14 @@ export class AgentsStore {
 				// Claude may run and record again, so the report it gave before does not stand until it answers.
 				this.patch(id, { ended: null, approval: null });
 				const wire = options.raw || !session.sessionId ? text : investigateFollowUp(text);
-				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'acceptEdits', session.sessionId, { tools: INVESTIGATE_RULES, builtin: INVESTIGATE_BUILTIN, investigate: { target: i?.targetId ?? null }, images: names });
+				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'acceptEdits', session.sessionId, { tools: INVESTIGATE_RULES, builtin: INVESTIGATE_BUILTIN, investigate: { target: i?.targetId ?? null }, images: names, ...model });
 			} else if (session.kind === 'ask') {
 				const rules = session.tools ?? ASK_TOOLS.code;
 				// The rules of the session go in once; after that Claude Code's own session remembers them.
 				const wire = session.sessionId ? text : askPrompt(scopeOf(session), text);
-				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true, images: names });
+				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true, images: names, ...model });
 			} else {
-				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, names.length ? { images: names } : null);
+				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, names.length || session.model ? { images: names, ...model } : null);
 			}
 		} catch (e) {
 			this.update(id, (s) => ({ ...s, status: 'failed', items: [...s.items, { kind: 'error', text: asAppError(e).message }] }));
@@ -1092,6 +1095,11 @@ export class AgentsStore {
 
 	setMode(id: string, mode: AgentMode): void {
 		this.update(id, (s) => ({ ...s, mode }), false);
+	}
+
+	/** The model for the session's next turns; the conversation carries over (`--resume` with another `--model`). */
+	setModel(id: string, model: string | null): void {
+		this.update(id, (s) => ({ ...s, model: model || null }), false);
 	}
 
 	/** Point the whole app at a checkout (null for the main one) and open a tab on it. */

@@ -21,6 +21,15 @@ export const AGENT_MODES = [
 	{ value: 'bypassPermissions', label: 'Full auto (runs any command without asking)' },
 ];
 
+/** Models a session can switch to between turns. '' leaves it to Claude Code (the user's own default). */
+export const AGENT_MODELS = [
+	{ value: '', label: 'Default model' },
+	{ value: 'fable', label: 'Fable' },
+	{ value: 'opus', label: 'Opus' },
+	{ value: 'sonnet', label: 'Sonnet' },
+	{ value: 'haiku', label: 'Haiku' },
+];
+
 /** Sessions in list order, with the attempts of one group kept together where the newest of them falls. */
 function grouped(sessions: AgentSession[]): { group: string | null; sessions: AgentSession[] }[] {
 	const out: { group: string | null; sessions: AgentSession[] }[] = [];

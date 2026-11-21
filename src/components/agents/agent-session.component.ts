@@ -11,7 +11,7 @@ import { isDesktop, type AgentMode } from '../../services/backend.service';
 import { imagesIn } from '../../services/agent-images';
 import { IMAGE_TYPES } from '../../shared/images';
 import { samePath } from '../../services/agent-paths';
-import { AGENT_MODES } from './agents.component';
+import { AGENT_MODELS, AGENT_MODES } from './agents.component';
 import { richText, richTextStyles, type RichOptions } from './rich-text';
 import { stateChip, stateStyles } from './agent-state';
 
@@ -323,6 +323,7 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 					${ask
 						? html`<span class="note"><ml-icon icon="lock-simple" size="sm"></ml-icon>Read-only: it can search and read${scopeOf(s) === 'history' ? ' the files and the git history' : ' the files'}, and change nothing.</span>`
 						: html`<ml-select size="sm" .options=${AGENT_MODES} .value=${s.mode} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setMode(s.id, e.detail.value as AgentMode)}></ml-select>`}
+					<ml-select class="model" size="sm" title="The model for the next message. The conversation carries over." .options=${AGENT_MODELS} .value=${s.model ?? ''} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setModel(s.id, e.detail.value)}></ml-select>
 					<span class="grow"></span>
 					<input class="pick" type="file" accept=${Object.keys(IMAGE_TYPES).join(',')} multiple hidden @change=${self.picked} />
 					<ml-button variant="ghost" size="sm" title="Attach an image. You can also paste one, or drop it here." @ml:click=${() => self.pick()}><ml-icon slot="icon-start" icon="paperclip" size="sm"></ml-icon>Image</ml-button>
@@ -717,6 +718,9 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 		}
 		.row ml-select {
 			width: 320px;
+		}
+		.row ml-select.model {
+			width: 150px;
 		}
 		.note {
 			display: inline-flex;
