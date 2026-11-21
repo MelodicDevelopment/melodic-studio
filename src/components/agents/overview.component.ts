@@ -14,9 +14,9 @@ import { convAgentState, stateStyles } from './agent-state';
 /** One card or row: an agent session or a Claude conversation, with where it stands. */
 type Entry = { bucket: Bucket; at: number; key: string; repoId: string } & ({ session: AgentSession; conv?: undefined } | { conv: Conversation; session?: undefined });
 
-/** Every session and conversation of the repositories in the app, newest first. */
+/** Every session and conversation of the repositories in the app (or of `repoId` alone), newest first. */
 function entries(self: AgentsOverviewComponent): Entry[] {
-	const known = new Set((self.repos.app()?.repos ?? []).map((r) => r.id));
+	const known = new Set((self.repos.app()?.repos ?? []).map((r) => r.id).filter((id) => !self.repoId || id === self.repoId));
 	const out: Entry[] = [];
 	for (const s of self.agents.sessions()) {
 		if (known.has(s.repoId)) {
@@ -38,6 +38,10 @@ function startOfToday(): number {
 }
 
 function repoChip(self: AgentsOverviewComponent, repoId: string) {
+	// The desk shows one repository: naming it on every card says nothing.
+	if (self.repoId) {
+		return '';
+	}
 	const repo = self.repos.app()?.repos.find((r) => r.id === repoId);
 	return html`<span class="repo" title=${repo?.path ?? repoId}>${repo?.name ?? baseName(repoId)}</span>`;
 }
@@ -142,6 +146,7 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
  * common answers (a suggested choice, a reply, Mark done, Stop) are given from the card itself; only
  * Open and Review changes go to the repository. Shown by RepoStore.overview in place of the sidebar and
  * panes: the toolbar list's last row, the sidebar's "All repositories", the pinned tab, Cmd/Ctrl+Shift+A.
+ * With `repoId` set it is the desk instead: the same cards for one repository, in the Agents tab's main pane.
  */
 @MelodicComponent({
 	selector: 'ms-agents-overview',
@@ -157,9 +162,10 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
 		const repo = self.repos.repo();
 		const card = (e: Entry) => (e.session ? sessionCard(self, e as Entry & { session: AgentSession }) : convCard(self, e as Entry & { conv: Conversation }));
 		const cards = (list: Entry[]) => html`<div class="grid">${repeat(list, (e) => e.key, card)}</div>`;
+		const desk = !!self.repoId;
 		return html`
-			<div class="page">
-				<div class="top">
+			<div class="page ${desk ? 'desk' : ''}">
+				${desk ? '' : html`<div class="top">
 					<div class="titles">
 						<h1>Agents</h1>
 						<p>Every repository in Melodic Studio. Answer from a card, or open it to see the whole conversation.</p>
@@ -167,15 +173,17 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
 					${repo
 						? html`<ml-button variant="outline" size="sm" title=${`Back to ${repo.name} (${isMac() ? '⌘' : 'Ctrl+'}Shift+A)`} @ml:click=${() => self.repos.showOverview(false)}><ml-icon slot="icon-start" icon="arrow-left"></ml-icon>Back to ${repo.name}</ml-button>`
 						: ''}
-				</div>
-				${needs.length + working.length === 0 ? html`<div class="calm"><h2>Nothing is waiting on you</h2><p>No agent is working either. Start one from the Agents tab of a repository.</p></div>` : ''}
+				</div>`}
+				${needs.length + working.length === 0
+					? html`<div class="calm"><h2>Nothing is waiting on you</h2><p>No agent is working either. ${desk ? html`<b>New</b> in the sidebar starts one.` : 'Start one from the Agents tab of a repository.'}</p></div>`
+					: ''}
 				${section('Needs you', 'needs', needs, cards(needs))}
 				${section('Working', 'working', working, cards(working))}
 				${done.length
 					? html`
-						<h2 class="group done">${self.showEarlier ? `Done · ${shownDone.length}` : shownDone.length ? `Done today · ${shownDone.length}` : 'Done'}</h2>
+						${shownDone.length ? html`<h2 class="group done">${self.showEarlier ? `Done · ${shownDone.length}` : `Done today · ${shownDone.length}`}</h2>` : ''}
 						<div class="rows">${repeat(shownDone, (e) => e.key, (e) => doneRow(self, e))}</div>
-						${earlier ? html`<button class="more" @click=${() => (self.showEarlier = !self.showEarlier)}>${self.showEarlier ? 'Show today only' : `Show ${earlier} earlier`}</button>` : ''}
+						${earlier ? html`<button class="more" @click=${() => (self.showEarlier = !self.showEarlier)}>${self.showEarlier ? 'Show today only' : shownDone.length ? `Show ${earlier} earlier` : `Show ${earlier} finished earlier`}</button>` : ''}
 					`
 					: ''}
 			</div>
@@ -201,6 +209,15 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
 			display: flex;
 			flex-direction: column;
 			gap: 10px;
+		}
+		.page.desk {
+			max-width: none;
+			margin: 0;
+			padding: 14px 20px 28px;
+			gap: 6px;
+		}
+		.page.desk .calm {
+			padding-top: 8px;
 		}
 		.top {
 			display: flex;
@@ -452,6 +469,11 @@ export class AgentsOverviewComponent {
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 
+	/**
+	 * Set: the desk, the Agents tab's main pane while no session is open, listing this repository only,
+	 * with no page title or repository chips. Unset: the Agents page, every repository.
+	 */
+	repoId: string | null = null;
 	/** Finished ones from before today too. Memory only. */
 	showEarlier = false;
 	/** The session whose card shows the reply box, and what is typed in it. */

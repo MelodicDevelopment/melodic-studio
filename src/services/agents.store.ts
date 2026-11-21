@@ -867,6 +867,13 @@ export class AgentsStore {
 	}
 
 	/** Go to a session wherever it lives: switch to its repository, open the Agents tab, select it. */
+	/** The Agents tab's main pane back to the desk: no session, question or comparison open. */
+	showDesk(): void {
+		this.selectedId.set(null);
+		this.comparing.set(null);
+		this.asking.set(null);
+	}
+
 	async open(id: string): Promise<boolean> {
 		const s = this.find(id);
 		if (!s || !(await this.showRepo(s))) {

@@ -5,6 +5,7 @@ import { AgentsStore, nameOf, scopeOf, summary, type AgentItem, type AgentSessio
 import { wordCount } from '../../shared/brief';
 import { AiFeaturesStore } from '../../services/ai-features.store';
 import { RepoStore } from '../../services/repo.store';
+import { WorkspaceStore } from '../../services/workspace.store';
 import { LspService } from '../../services/lsp.service';
 import { HostStore } from '../../services/host.store';
 import { DialogService } from '@melodicdev/components/dialog';
@@ -303,6 +304,11 @@ function transcript(self: AgentSessionComponent, s: AgentSession, from: number, 
 			return html`<ms-attempts></ms-attempts>`;
 		}
 		const s = agents.selected();
+		const repoId = self.repos.repo()?.id;
+		if (!s && repoId && (agents.current().length || self.workspace.conversations().some((c) => c.kind === 'claude' && c.repoId === repoId))) {
+			// The desk: where every agent of this repository stands, as cards, until one is opened.
+			return html`<ms-agents-overview .repoId=${repoId}></ms-agents-overview>`;
+		}
 		if (!s) {
 			return html`
 				<div class="empty">
@@ -345,6 +351,7 @@ function transcript(self: AgentSessionComponent, s: AgentSession, from: number, 
 		const links = linking(self, s);
 		return html`
 			<div class="head">
+				<ml-button variant="ghost" size="sm" class="desk" title="Every agent of this repository, as cards" aria-label="Back to all agents" @ml:click=${() => agents.showDesk()}><ml-icon icon="squares-four"></ml-icon></ml-button>
 				<h2 class="grow" title=${s.title}>${nameOf(s)}</h2>
 				${s.group ? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.compare(s.group!)}><ml-icon slot="icon-start" icon="columns"></ml-icon>Compare attempts</ml-button>` : ''}
 				${ask
@@ -915,6 +922,7 @@ export class AgentSessionComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(AiFeaturesStore) readonly ai!: AiFeaturesStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
+	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(LspService) readonly lsp!: LspService;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
