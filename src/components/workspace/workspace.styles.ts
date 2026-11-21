@@ -54,8 +54,6 @@ export const paneStyles = () => css`
 		height: 32px;
 		background: var(--ms-sidebar-bg);
 		border-bottom: 1px solid var(--ml-color-border);
-		/* A wide pane spells "New conversation" out; a narrow one keeps the plus. */
-		container-type: inline-size;
 	}
 	/* The tabs take what they need and shrink first; the buttons after them stay whole. */
 	.tabs {
@@ -69,31 +67,16 @@ export const paneStyles = () => css`
 		flex: 1;
 		min-width: 4px;
 	}
-	/* New conversation: the pane's one main action, so it is the magenta one. A wide pane spells it out. */
+	/* New conversation: the pane's one main action, so it is the magenta one. The plus alone; the title says what it does. */
 	.tool.add {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 5px;
-		min-width: 28px;
-		width: auto;
+		width: 28px;
 		color: var(--ml-color-primary);
-		font-size: 12px;
-		font-weight: 600;
 	}
 	.tool.add:hover {
 		color: var(--ml-color-primary);
-	}
-	.add .text {
-		display: none;
-	}
-	@container (min-width: 640px) {
-		.tool.add {
-			padding: 0 10px 0 8px;
-		}
-		.add .text {
-			display: inline;
-		}
 	}
 	.tool.more {
 		width: 16px;
