@@ -2,7 +2,14 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
+<<<<<<< HEAD
 import { AgentsStore, DRAFT_IMAGES, MAX_ATTEMPTS, attemptBranch, branchFor, nameOf, scopeOf, stateLabel, stateOf, summary, type AgentSession } from '../../services/agents.store';
+=======
+import { AgentsStore, MAX_ATTEMPTS, attemptBranch, scopeOf, stateLabel, stateOf, type AgentSession } from '../../services/agents.store';
+import { AiService, type Ask } from '../../services/ai.service';
+import { MODELS, branchNamePrompt } from '../../services/ai-prompts';
+import { branchFor, namedBranch, wantsNaming } from '../../shared/branch-name';
+>>>>>>> agent/dynamic-branch-naming
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
 import { isMac, type AgentMode, type ClaudeSession, type Worktree } from '../../services/backend.service';
@@ -13,6 +20,9 @@ import { CONV_STATE_LABELS } from '../workspace/conversation-state';
 import { convAgentState, stateStyles } from './agent-state';
 
 type DialogId = Parameters<DialogService['close']>[0];
+
+/** How long the task box must be quiet before Claude is asked to name the branch. */
+const NAME_AFTER_MS = 800;
 
 export const AGENT_MODES = [
 	{ value: 'acceptEdits', label: 'Edit files (asks nothing, cannot run commands it is not allowed)' },
@@ -281,10 +291,14 @@ function newMenu(self: AgentsComponent) {
 				<h3 slot="dialog-header">New agent task</h3>
 				<div class="dlg">
 					<ml-textarea label="Task" rows="5" placeholder="Describe what you want done. Be as specific as you would be with a colleague." .value=${self.task} @ml:input=${(e: CustomEvent) => self.setTask(e.detail.value)}></ml-textarea>
+<<<<<<< HEAD
 					<ms-attach .box=${DRAFT_IMAGES.task} .pick=${true}></ms-attach>
 					<ml-checkbox label="Work in a separate worktree on a new branch" hint="Recommended: the agent cannot disturb your checkout, and several can run at once." .checked=${self.isolate} @ml:change=${(e: CustomEvent) => (self.isolate = e.detail.checked)}></ml-checkbox>
+=======
+					<ml-checkbox label="Work in a separate worktree on a new branch" hint="Recommended: the agent cannot disturb your checkout, and several can run at once." .checked=${self.isolate} @ml:change=${(e: CustomEvent) => self.setIsolate(e.detail.checked)}></ml-checkbox>
+>>>>>>> agent/dynamic-branch-naming
 					${self.isolate
-						? html`<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
+						? html`<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}${self.naming ? ' · Claude is naming it…' : ''}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
 						: html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent will edit the checkout you are looking at, alongside your own uncommitted changes.</span></p>`}
 					${self.isolate
 						? html`
@@ -805,6 +819,7 @@ export class AgentsComponent {
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
+	@Service(AiService) private readonly _ai!: AiService;
 
 	task = '';
 	branch = '';
@@ -817,6 +832,12 @@ export class AgentsComponent {
 	alsoTree = false;
 	/** The branch field follows the task text until it is edited by hand. */
 	private _branchTouched = false;
+	/** Claude is being asked what to call the branch. */
+	naming = false;
+	/** The task Claude last named, and what it called it: kept while the task is still being typed. */
+	private _named: { task: string; branch: string } | null = null;
+	private _nameTimer: ReturnType<typeof setTimeout> | null = null;
+	private _nameAsk: Ask | null = null;
 
 	elementRef!: HTMLElement;
 
@@ -849,34 +870,103 @@ export class AgentsComponent {
 			clearInterval(this._poll);
 		}
 		window.removeEventListener('focus', this._refresh);
+		this.stopNaming();
 	}
 
 	close(id: string): void {
+		if (id === 'new-agent') {
+			this.stopNaming();
+		}
 		this._dialogs.close(id as DialogId);
 	}
 
 	openNew(): void {
+		this.stopNaming();
 		this.task = '';
 		this.branch = '';
 		this.attempts = 1;
 		this._branchTouched = false;
+<<<<<<< HEAD
 		this.agents.takeAttached(DRAFT_IMAGES.task);
+=======
+		this._named = null;
+>>>>>>> agent/dynamic-branch-naming
 		this._dialogs.open('new-agent' as DialogId);
 	}
 
 	setTask(value: string): void {
 		this.task = value;
 		if (!this._branchTouched) {
-			this.branch = branchFor(value);
+			// Claude's name for an earlier wording stays while this one is typed: the field does not jump back and forth.
+			this.branch = value.trim() ? (this._named?.branch ?? branchFor(value)) : '';
+			this.nameSoon();
 		}
 	}
 
 	setBranch(value: string): void {
 		this._branchTouched = true;
+		this.stopNaming();
 		this.branch = value.replace(/\s+/g, '-');
 	}
 
+	setIsolate(on: boolean): void {
+		this.isolate = on;
+		if (on && !this._branchTouched) {
+			this.nameSoon();
+		} else {
+			this.stopNaming();
+		}
+	}
+
+	/**
+	 * Ask Claude what to call the branch once the typing pauses. Only for a task whose own words do not
+	 * fit in a name (`wantsNaming`), and never for a branch field the user has typed in.
+	 */
+	private nameSoon(): void {
+		this.stopNaming();
+		const task = this.task.trim();
+		if (!this.isolate || !wantsNaming(task)) {
+			this._named = null;
+			this.branch = branchFor(task);
+			return;
+		}
+		if (this._named?.task === task) {
+			return;
+		}
+		this._nameTimer = setTimeout(() => {
+			this._nameTimer = null;
+			const ask = this._ai.ask({ prompt: branchNamePrompt(task), model: MODELS.branchName });
+			this._nameAsk = ask;
+			this.naming = true;
+			ask.result
+				.then(namedBranch, () => null)
+				.then((branch) => {
+					// Stopped, or the task has changed since: that answer is for something else.
+					if (this._nameAsk !== ask) {
+						return;
+					}
+					this._nameAsk = null;
+					this.naming = false;
+					// No Claude, or no name in its answer: the task's own words stand.
+					this._named = branch ? { task, branch } : null;
+					this.branch = branch ?? branchFor(task);
+				});
+		}, NAME_AFTER_MS);
+	}
+
+	private stopNaming(): void {
+		if (this._nameTimer) {
+			clearTimeout(this._nameTimer);
+			this._nameTimer = null;
+		}
+		const ask = this._nameAsk;
+		this._nameAsk = null;
+		this.naming = false;
+		ask?.cancel();
+	}
+
 	async start(): Promise<void> {
+<<<<<<< HEAD
 		const agents = this.agents;
 		// Not while an image is still being made ready: the task would go without it.
 		if (agents.attaching()[DRAFT_IMAGES.task]) {
@@ -886,6 +976,11 @@ export class AgentsComponent {
 		const images = agents.attached()[DRAFT_IMAGES.task] ?? [];
 		if (await agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1, images })) {
 			agents.takeAttached(DRAFT_IMAGES.task);
+=======
+		// What the field shows is what is started: a name still on its way is not waited for.
+		this.stopNaming();
+		if (await this.agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1 })) {
+>>>>>>> agent/dynamic-branch-naming
 			this.close('new-agent');
 		}
 	}

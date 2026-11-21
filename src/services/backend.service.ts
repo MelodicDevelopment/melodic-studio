@@ -936,6 +936,8 @@ function demoAnswer(prompt: string): string {
 				summary: 'Wrap the queue when repeat is on',
 				description: '- next() takes a repeat flag and starts over at the end of the queue\n- Add nextRepeatMode() to cycle off, all, one\n- Expose the queue length and drop the old notes',
 			});
+		case 'branch-name':
+			return 'repeat-wraps-queue';
 		case 'explain-diff':
 		case 'explain-commit':
 			return [

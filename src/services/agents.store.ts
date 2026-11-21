@@ -374,18 +374,6 @@ function revive(saved: unknown[]): AgentSession[] {
 	}
 }
 
-/** A branch name from the first words of a task: "Fix the seek bug!" -> agent/fix-the-seek-bug. */
-export function branchFor(task: string): string {
-	const words = task
-		.toLowerCase()
-		.replace(/[^a-z0-9\s-]/g, '')
-		.trim()
-		.split(/\s+/)
-		.filter(Boolean)
-		.slice(0, 5);
-	return words.length ? `agent/${words.join('-')}` : '';
-}
-
 /** The branch each attempt works on: `agent/x`, `agent/x-2`, `agent/x-3`. */
 export function attemptBranch(branch: string, attempt: number): string {
 	return attempt <= 1 ? branch : `${branch}-${attempt}`;
