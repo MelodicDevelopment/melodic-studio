@@ -132,6 +132,11 @@ export class RepoStore {
 	});
 	/** The tab strip only appears once a second repository is open. */
 	readonly showRepoTabs = computed(() => this.repoTabList().length > 1);
+	/**
+	 * The Agents page (`ms-agents-overview`): every repository's agents and Claude conversations on one
+	 * page, in place of the open repository's sidebar and panes. Any tab or repository switch leaves it.
+	 */
+	readonly overview = signal(false);
 
 	readonly repo = computed<RepoSummary | null>(() => {
 		const app = this.app();
@@ -389,6 +394,7 @@ export class RepoStore {
 
 	/** Switch repository: in the current tab, or (`newTab`) in a tab of its own. A repository already open in a tab is just switched to. */
 	async selectRepo(id: string, newTab = false): Promise<void> {
+		this.overview.set(false);
 		const from = this.id;
 		if (id === from) {
 			return;
@@ -407,6 +413,11 @@ export class RepoStore {
 	}
 
 	// ---- repository tabs ----------------------------------------------------
+
+	/** Show the Agents page; again (or `false`) goes back to the repository. */
+	showOverview(show = !this.overview()): void {
+		this.overview.set(show);
+	}
 
 	openRepoTab(id: string): Promise<void> {
 		return this.selectRepo(id, true);
@@ -514,6 +525,7 @@ export class RepoStore {
 		this._nextInNewTab = false;
 		try {
 			const opened = await how();
+			this.overview.set(false);
 			this.keepView(from);
 			this.placeRepoTab(from, opened.id, newTab);
 			this.resetRepoState();
@@ -636,6 +648,7 @@ export class RepoStore {
 	// ---- changes ------------------------------------------------------------
 
 	setTab(tab: Tab): void {
+		this.overview.set(false);
 		this.tab.set(tab);
 		if (tab === 'history' && !this.historyLoaded()) {
 			void this.loadHistory(true);

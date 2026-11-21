@@ -34,6 +34,9 @@ import { LspService, type Impact, type Problem } from './lsp.service';
 import { changesSince, languageOf } from './lsp/protocol';
 import { leftoverRecording } from '../shared/replay';
 import type { SpottedError } from '../shared/error-spotting';
+import { parseBrief, plainSummary, summaryOf, type Brief, type Summary } from '../shared/brief';
+
+export { plainSummary };
 
 export interface AgentItem {
 	kind: 'user' | 'text' | 'tool' | 'error';
@@ -42,6 +45,10 @@ export interface AgentItem {
 	detail?: string;
 	/** For a message of the user's: the images sent with it, by their names in the session's folder. */
 	images?: string[];
+	/** For a Bash call: Claude's own words for what the command does. */
+	about?: string;
+	/** For a reply that ended a task's turn: the brief taken out of it (`shared/brief.ts`). */
+	brief?: Brief;
 }
 
 export type AgentKind = 'task' | 'ask' | 'investigate';
@@ -88,6 +95,10 @@ export interface AgentSession {
 	investigation: Investigation | null;
 	/** What the language servers made of the files a task changed, as of its last turn. Null: not looked at. */
 	check: WorkCheck | null;
+	/** The brief of its last turn, when that turn ended with one. Cleared when a turn starts. */
+	brief: Brief | null;
+	/** A short name for the task, from its first brief. Null until then: `title` (the first words of the prompt) stands in. */
+	name: string | null;
 }
 
 /** The language servers' verdict on what a task changed; see `CheckResult`. `problems` hold compiler output: text only. */
@@ -206,7 +217,13 @@ export function stateOf(s: AgentSession): AgentState {
 	if (s.stopped) {
 		return 'stopped';
 	}
-	return s.review ? 'review' : 'finished';
+	// A question in its brief waits on the user just as work to review does, until answered or marked done.
+	return s.review || s.brief?.needs ? 'review' : 'finished';
+}
+
+/** Nothing more is needed from the user: no work to review, and its brief's question is no longer open. */
+function settledOf(s: AgentSession): AgentSession {
+	return { ...s, review: false, brief: s.brief?.needs ? { ...s.brief, needs: null, choices: [] } : s.brief };
 }
 
 /** A session's state in words. Investigations have their own: they wait for an OK and end in a cause, not a diff to review. */
@@ -214,7 +231,7 @@ export function stateLabel(s: AgentSession): string {
 	const state = stateOf(s);
 	const i = s.investigation;
 	if (s.kind !== 'investigate' || !i) {
-		return STATE_LABELS[state];
+		return state === 'review' && !s.review ? 'Needs you' : STATE_LABELS[state];
 	}
 	switch (state) {
 		case 'working':
@@ -254,16 +271,34 @@ export function scopeOf(s: AgentSession): AskScope {
 	return s.tools?.some((t) => t.startsWith('Bash(git')) ? 'history' : 'code';
 }
 
-/** A message as one line of plain text, for previews. */
-export function plainSummary(text: string, max = 220): string {
-	const flat = text
-		.replace(/```[\s\S]*?(```|$)/g, ' ')
-		.replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, '')
-		.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-		.replace(/[*_~`]+/g, '')
-		.replace(/\s+/g, ' ')
-		.trim();
-	return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+/** What lists call a session: the short name from its brief, else the first words of what it was asked. */
+export function nameOf(s: AgentSession): string {
+	return s.name || s.title;
+}
+
+/** Where a session stands in three lines (asked, did or doing now, needs), for lists that show many at once. */
+export function summary(s: AgentSession): Summary {
+	const approval = s.investigation?.approval;
+	return summaryOf({
+		kind: s.kind,
+		running: s.status === 'running',
+		failed: s.status === 'failed',
+		stopped: s.stopped,
+		review: s.review,
+		unread: s.unread,
+		isolated: s.isolated,
+		approval: approval ? approvalWords(approval) : null,
+		brief: s.brief,
+		items: s.items,
+	});
+}
+
+/** What an investigation is waiting to run, in a few words: "the app", "the tests", "GET /orders/7". */
+function approvalWords(a: InvestigateApproval): string {
+	if (a.tool === 'http_request') {
+		return `${a.method ?? 'a request'}${a.path ? ` ${a.path}` : ''}`;
+	}
+	return a.tool === 'run_tests' ? 'the tests' : a.project || a.target ? `${a.project ?? a.target}` : 'the app';
 }
 
 /** The last thing a session said (or what went wrong), as one line. */
@@ -313,6 +348,8 @@ function revive(saved: unknown[]): AgentSession[] {
 				unread: false,
 				review: false,
 				stopped: false,
+				brief: null,
+				name: null,
 				...s,
 				// A check does not outlive the app either. One saved before it knew what was new is not shown as if it did.
 				check: s.check?.state === 'done' && Array.isArray(s.check.impact) ? s.check : null,
@@ -396,8 +433,6 @@ export class AgentsStore {
 	readonly busy = signal(false);
 	/** Set while the main pane shows the box for a new question instead of a session. */
 	readonly asking = signal<{ scope: AskScope; seed: string } | null>(null);
-	/** What the Agents tab lists: the open repository's sessions and conversations, or every repository's. Kept here because the tab is rebuilt on every switch. */
-	readonly listScope = signal<'repo' | 'all'>('repo');
 	/** Whether the Agents tab's Worktrees section is unfolded. */
 	readonly treesShown = signal(false);
 	/** The group whose attempts the main pane is comparing, if any. */
@@ -532,6 +567,7 @@ export class AgentsStore {
 			const tree = trees.find((w) => samePath(w.path, s.cwd));
 			return !tree || (tree.changes === 0 && (tree.head === s.base || tree.landed));
 		});
+		// Its work is dealt with; a question it asked is still open (one that changed nothing lands here at once).
 		for (const s of settled) {
 			this.update(s.id, (x) => ({ ...x, review: false }), false);
 		}
@@ -539,7 +575,7 @@ export class AgentsStore {
 
 	/** The user says a session needs nothing more from them. Its worktree and branch stay as they are. */
 	markDone(id: string): void {
-		this.update(id, (s) => ({ ...s, review: false, unread: false }), false);
+		this.update(id, (s) => ({ ...settledOf(s), unread: false }), false);
 	}
 
 	/**
@@ -709,18 +745,28 @@ export class AgentsStore {
 		}
 		if (type === 'assistant') {
 			const blocks = ((event.message as { content?: Record<string, unknown>[] })?.content ?? []) as Record<string, unknown>[];
+			// Only a task is asked for a brief; an investigation's last message is its report.
+			const briefed = this.find(key)?.kind === 'task';
 			const items: AgentItem[] = [];
+			let brief: Brief | null = null;
 			for (const b of blocks) {
 				if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-					items.push({ kind: 'text', text: b.text });
+					const parsed = briefed ? parseBrief(b.text) : { brief: null, rest: b.text };
+					if (parsed.brief) {
+						brief = parsed.brief;
+						items.push({ kind: 'text', text: parsed.rest, brief: parsed.brief });
+					} else {
+						items.push({ kind: 'text', text: b.text });
+					}
 				} else if (b.type === 'tool_use') {
 					const input = (b.input ?? {}) as Record<string, unknown>;
 					const found = DETAIL_KEYS.find((k) => typeof input[k] === 'string');
-					items.push({ kind: 'tool', text: String(b.name), detail: found ? String(input[found]).split('\n')[0].slice(0, 200) : undefined });
+					const about = b.name === 'Bash' && typeof input.description === 'string' ? input.description.split('\n')[0].slice(0, 120) : undefined;
+					items.push({ kind: 'tool', text: String(b.name), detail: found ? String(input[found]).split('\n')[0].slice(0, 200) : undefined, ...(about ? { about } : {}) });
 				}
 			}
 			if (items.length) {
-				this.update(key, (s) => ({ ...s, items: [...s.items, ...items] }));
+				this.update(key, (s) => ({ ...s, items: [...s.items, ...items], ...(brief ? { brief, name: s.name || brief.title || null } : {}) }));
 			}
 			return;
 		}
@@ -771,7 +817,7 @@ export class AgentsStore {
 	private announce(s: AgentSession, ok: boolean): void {
 		const repo = this.repos.app()?.repos.find((r) => r.id === s.repoId);
 		const where = repo && repo.id !== this.repos.repo()?.id ? ` · ${repo.name}` : '';
-		const what = s.group ? `${s.title} (attempt ${s.attempt})` : s.title;
+		const what = s.group ? `${nameOf(s)} (attempt ${s.attempt})` : nameOf(s);
 		this.toast.show({
 			variant: ok ? 'success' : 'error',
 			title: ok ? (s.kind === 'ask' ? 'Answer ready' : s.kind === 'investigate' ? (s.investigation?.report?.found ? 'Cause found' : 'Investigation finished') : 'Agent finished') + where : `${s.kind === 'investigate' ? 'Investigation' : 'Agent'} failed${where}`,
@@ -855,6 +901,8 @@ export class AgentsStore {
 			stopped: false,
 			investigation: null,
 			check: null,
+			brief: null,
+			name: null,
 			...extra,
 		};
 	}
@@ -1058,7 +1106,7 @@ export class AgentsStore {
 		const model = session.model ? { model: session.model } : {};
 		const sent: AgentItem = { kind: 'user', text: options.shown ?? text, ...(names.length ? { images: names } : {}) };
 		// What the language servers said is about the files as they were; the turn changes them.
-		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, items: [...s.items, sent] }));
+		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, brief: null, items: [...s.items, sent] }));
 		this._live.add(id);
 		try {
 			for (const image of images) {
@@ -1079,7 +1127,8 @@ export class AgentsStore {
 				const wire = session.sessionId ? text : askPrompt(scopeOf(session), text);
 				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true, images: names, ...model });
 			} else {
-				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, names.length || session.model ? { images: names, ...model } : null);
+				// A task ends each turn with a brief (BRIEF_RULES in agent.rs), which lists show instead of the reply.
+				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, { brief: true, images: names, ...model });
 			}
 		} catch (e) {
 			this.update(id, (s) => ({ ...s, status: 'failed', items: [...s.items, { kind: 'error', text: asAppError(e).message }] }));
@@ -1164,7 +1213,7 @@ export class AgentsStore {
 			}
 			const ok = await this.repos.merge(session.branch);
 			if (ok) {
-				this.update(session.id, (s) => ({ ...s, review: false }), false);
+				this.update(session.id, settledOf, false);
 			}
 			return ok;
 		} catch (e) {

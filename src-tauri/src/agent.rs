@@ -55,7 +55,21 @@ pub struct RunOptions {
     pub investigate: Option<Investigate>,
     /// Images the user attached to this message, by their names in the session's folder (`history.rs`).
     pub images: Vec<String>,
+    /// A task's turn: Claude ends it with a brief (`BRIEF_RULES`), which the window takes out of the reply.
+    pub brief: bool,
 }
+
+/// What a task is told about its replies, appended to Claude Code's own system prompt every turn
+/// (`--append-system-prompt`; a resumed session does not keep it). The window parses the block in
+/// `src/shared/brief.ts`; change both together. One line with no quotes, `%` or `|`, because on
+/// Windows `claude` is a `.cmd` shim and this is an argument to it.
+pub const BRIEF_RULES: &str = "You are running inside Melodic Studio, a desktop app where one person follows several coding agents at once and often reads only a short brief of each turn. \
+Keep every reply short: lead with the outcome in a sentence or two, then only what the person needs to act on or decide; no recap of each step, no restating the task. \
+End the last message of every turn with a fenced code block that opens with exactly ```brief (the word brief, not text) and holds these lines and nothing else: \
+`title:` a name for the whole task in at most six words, the same every turn unless the task itself changed; \
+`did:` what this turn did or found, one plain sentence of at most 25 words; \
+`needs:` what the person must do or decide next, one sentence, or the single word nothing; \
+and only when needs is a question with two or three obvious short answers, one `choice:` line per answer, each at most five words, worded so it can be sent back to you as the reply.";
 
 /// More than this in one message is refused.
 const MAX_IMAGES: usize = 10;
@@ -97,6 +111,9 @@ fn turn_args(mode: &str, resume: Option<&str>, options: &RunOptions, mcp: Option
     }
     if let Some(model) = options.model.as_deref().filter(|m| plain(m, "-._[]")) {
         args.extend(["--model".to_string(), model.to_string()]);
+    }
+    if options.brief {
+        args.extend(["--append-system-prompt".to_string(), BRIEF_RULES.to_string()]);
     }
     match (options.builtin.as_deref(), options.tools.as_deref()) {
         (Some(names), _) => {
@@ -317,6 +334,12 @@ mod tests {
         assert_eq!(seen[6..], ["--resume", "s3", "--input-format", "stream-json", "--allowedTools", "Read"]);
 
         assert!(turn_args("default", None, &RunOptions { tools: Some(vec!["--dangerously-skip-permissions".into()]), ..Default::default() }, None).is_err());
+        let briefed = args("acceptEdits", Some("s4"), RunOptions { brief: true, tools: Some(vec!["Read".into()]), ..Default::default() });
+        let at = briefed.iter().position(|a| a == "--append-system-prompt").expect("a task turn asks for a brief");
+        assert_eq!(briefed[at + 1], BRIEF_RULES);
+        assert_eq!(briefed[briefed.len() - 2..], ["--allowedTools", "Read"], "the allow-list stays last");
+        assert!(!args("acceptEdits", None, RunOptions::default()).contains(&"--append-system-prompt".to_string()));
+        assert!(!BRIEF_RULES.contains(['\n', '"', '%', '|']), "the rules must pass through a .cmd shim");
         assert!(turn_args("default", None, &RunOptions { builtin: Some(vec!["Read,Edit".into()]), ..Default::default() }, None).is_err());
     }
 

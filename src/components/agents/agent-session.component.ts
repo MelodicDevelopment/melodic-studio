@@ -1,7 +1,8 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
-import { AgentsStore, scopeOf, type AgentSession, type WorkCheck } from '../../services/agents.store';
+import { AgentsStore, nameOf, scopeOf, summary, type AgentItem, type AgentSession, type WorkCheck } from '../../services/agents.store';
+import { wordCount } from '../../shared/brief';
 import { AiFeaturesStore } from '../../services/ai-features.store';
 import { RepoStore } from '../../services/repo.store';
 import { LspService } from '../../services/lsp.service';
@@ -204,6 +205,93 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 	return html`<span class="shot ${big ? 'big' : ''}"><img src=${url} alt="Image sent with this message" title=${big ? 'Show it small again' : 'Show it large'} @click=${() => (self.bigShot = big ? null : key)} /></span>`;
 }
 
+/**
+ * Where a task stands, above its transcript: what it was asked, what it did (or is doing now), and what
+ * it needs from the user, with Claude's suggested answers as buttons. From its brief (`shared/brief.ts`),
+ * else from the transcript. Claude's words: text bindings only.
+ */
+function briefBlock(self: AgentSessionComponent, s: AgentSession) {
+	if (s.kind !== 'task') {
+		return '';
+	}
+	const sum = summary(s);
+	const running = s.status === 'running';
+	return html`
+		<dl class="brief">
+			${sum.asked ? html`<div class="br"><dt>Asked</dt><dd>${sum.asked}</dd></div>` : ''}
+			${running
+				? html`<div class="br now"><dt>Now</dt><dd><span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>${sum.now}</dd></div>`
+				: sum.did
+					? html`<div class="br"><dt>Did</dt><dd>${sum.did}</dd></div>`
+					: ''}
+			${running
+				? ''
+				: html`
+					<div class="br ${sum.needs ? 'you' : 'quiet'}">
+						<dt>Needs you</dt>
+						<dd>
+							<span>${sum.needs ?? 'Nothing. It is finished.'}</span>
+							${sum.choices.length
+								? html`<span class="choices">${sum.choices.map((c) => html`<ml-button variant="primary" size="sm" title="Send this as your reply" @ml:click=${() => self.answer(s, c)}>${c}</ml-button>`)}</span>`
+								: ''}
+						</dd>
+					</div>
+				`}
+		</dl>
+	`;
+}
+
+/** One item of the transcript. A reply that held only its brief has nothing left to show. */
+function itemView(self: AgentSessionComponent, s: AgentSession, item: AgentItem, links: RichOptions) {
+	if (item.kind === 'tool') {
+		return html`<div class="tool"><ml-icon icon=${TOOL_ICONS[item.text] ?? 'wrench'} size="sm"></ml-icon><b>${item.text}</b><span>${item.about ?? item.detail ?? ''}</span></div>`;
+	}
+	if (item.kind === 'text') {
+		return item.text.trim() ? html`<div class="msg text">${richText(item.text, links, self.follow)}</div>` : '';
+	}
+	return html`<div class="msg ${item.kind}">${item.text}${item.images?.length ? html`<div class="shots">${item.images.map((name) => sentShot(self, s.id, name))}</div>` : ''}</div>`;
+}
+
+/**
+ * The transcript, a turn at a time. A finished turn that ended with a brief is folded to that brief
+ * ("Full reply · 420 words · 12 steps" unfolds it); the newest one's brief is the block above, so
+ * there it is only the fold. A turn without one (questions, older sessions) shows as it always did.
+ */
+function transcript(self: AgentSessionComponent, s: AgentSession, from: number, links: RichOptions) {
+	const turns: { at: number; items: AgentItem[] }[] = [];
+	s.items.slice(from).forEach((item, i) => {
+		if (item.kind === 'user' || !turns.length) {
+			turns.push({ at: from + i, items: [] });
+		}
+		turns[turns.length - 1].items.push(item);
+	});
+	const running = s.status === 'running';
+	return turns.map((turn, n) => {
+		const last = n === turns.length - 1;
+		const [first, ...rest] = turn.items;
+		const lead = first.kind === 'user' ? first : null;
+		const body = lead ? rest : turn.items;
+		const brief = body.find((i) => i.brief)?.brief;
+		if (!brief || (last && running)) {
+			return html`${turn.items.map((item) => itemView(self, s, item, links))}`;
+		}
+		const key = `${s.id}:${turn.at}`;
+		const open = self.unfolded.has(key);
+		const words = wordCount(body.filter((i) => i.kind === 'text').map((i) => i.text));
+		const steps = body.filter((i) => i.kind === 'tool').length;
+		return html`
+			${lead ? itemView(self, s, lead, links) : ''}
+			${last
+				? ''
+				: html`<div class="tbrief"><span>${brief.did}</span>${brief.needs ? html`<span class="q">${brief.needs}</span>` : ''}</div>`}
+			<button class="fold" aria-expanded=${open ? 'true' : 'false'} @click=${() => self.toggleTurn(key)}>
+				<ml-icon icon=${open ? 'caret-down' : 'caret-right'} size="xs"></ml-icon>Full reply · ${words.toLocaleString('en-US')} ${words === 1 ? 'word' : 'words'}${steps ? ` · ${steps} ${steps === 1 ? 'step' : 'steps'}` : ''}
+			</button>
+			${open ? body.map((item) => itemView(self, s, item, links)) : ''}
+		`;
+	});
+}
+
 @MelodicComponent({
 	selector: 'ms-agent-session',
 	template: (self: AgentSessionComponent) => {
@@ -257,10 +345,9 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 		const hidden = Math.max(0, s.items.length - SHOWN_ITEMS - self.earlier);
 		const mainBranch = agents.worktrees().find((w) => w.isMain)?.branch;
 		const links = linking(self, s);
-		const follow = self.follow;
 		return html`
 			<div class="head">
-				<h2 class="grow" title=${s.title}>${s.title}</h2>
+				<h2 class="grow" title=${s.title}>${nameOf(s)}</h2>
 				${s.group ? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.compare(s.group!)}><ml-icon slot="icon-start" icon="columns"></ml-icon>Compare attempts</ml-button>` : ''}
 				${ask
 					? html`<ml-button variant="outline" size="sm" @ml:click=${() => agents.openAsk(scopeOf(s))}><ml-icon slot="icon-start" icon="plus"></ml-icon>New question</ml-button>`
@@ -269,7 +356,7 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 				${!ask && s.isolated && s.branch && s.branch !== mainBranch
 					? html`<ml-button variant="outline" size="sm" ?disabled=${running || !!self.repos.busy()} title=${`Merge ${s.branch} into a branch you choose, or open a pull request. Commit the agent's work first.`} @ml:click=${() => self.openMerge(s)}><ml-icon slot="icon-start" icon="git-merge"></ml-icon>Merge…</ml-button>`
 					: ''}
-				${s.review && !running
+				${(s.review || s.brief?.needs) && !running
 					? html`<ml-button variant="ghost" size="sm" title="It needs nothing more from you: say so when its work was merged somewhere this app cannot see (a squashed pull request), or is not wanted. Its worktree and branch stay." @ml:click=${() => agents.markDone(s.id)}><ml-icon slot="icon-start" icon="check"></ml-icon>Mark done</ml-button>`
 					: ''}
 			</div>
@@ -289,16 +376,11 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 			</div>
 			${mergeDialog(self, s, tree?.changes ?? 0)}
 			${checkDetail(self, s)}
+			${briefBlock(self, s)}
 
 			<div class="log">
 				${hidden ? html`<button class="earlier" @click=${() => self.showEarlier()}>Show earlier (${hidden.toLocaleString('en-US')} more)</button>` : ''}
-				${s.items.slice(hidden).map((item) =>
-					item.kind === 'tool'
-						? html`<div class="tool"><ml-icon icon=${TOOL_ICONS[item.text] ?? 'wrench'} size="sm"></ml-icon><b>${item.text}</b><span>${item.detail ?? ''}</span></div>`
-						: item.kind === 'text'
-							? html`<div class="msg text">${richText(item.text, links, follow)}</div>`
-							: html`<div class="msg ${item.kind}">${item.text}${item.images?.length ? html`<div class="shots">${item.images.map((name) => sentShot(self, s.id, name))}</div>` : ''}</div>`
-				)}
+				${transcript(self, s, hidden, links)}
 				${running ? html`<div class="working"><ml-spinner size="sm"></ml-spinner>${ask ? 'Reading…' : 'Working…'}</div>` : ''}
 			</div>
 
@@ -625,6 +707,104 @@ function sentShot(self: AgentSessionComponent, id: string, name: string) {
 			overflow: hidden;
 			text-overflow: ellipsis;
 		}
+		/* Where a task stands, between the status line and the transcript. */
+		.brief {
+			flex: none;
+			margin: 0;
+			border-bottom: 1px solid var(--ml-color-border);
+			font-size: 13px;
+		}
+		.br {
+			display: grid;
+			grid-template-columns: 76px minmax(0, 1fr);
+			gap: 10px;
+			padding: 7px 16px;
+		}
+		.br + .br {
+			border-top: 1px solid var(--ml-color-border-muted);
+		}
+		.br dt {
+			padding-top: 2px;
+			font-size: 10.5px;
+			font-weight: 600;
+			letter-spacing: 0.06em;
+			text-transform: uppercase;
+			color: var(--ml-color-text-subtle);
+		}
+		.br dd {
+			margin: 0;
+			min-width: 0;
+			color: var(--ml-color-text-secondary);
+			overflow-wrap: anywhere;
+		}
+		.br.now dt,
+		.br.now dd {
+			color: var(--ms-run-text);
+		}
+		.br.now dd {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+		.br.now .eq {
+			flex: none;
+		}
+		/* Waiting on the user: magenta, like everything else that is. */
+		.br.you {
+			background: color-mix(in srgb, var(--ms-you) 9%, transparent);
+		}
+		.br.you dt {
+			color: var(--ml-color-text-link);
+		}
+		.br.you dd {
+			color: var(--ml-color-text);
+			font-weight: 500;
+		}
+		.br.quiet dd {
+			color: var(--ml-color-text-subtle);
+		}
+		.br dd {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 6px 10px;
+		}
+		.choices {
+			display: inline-flex;
+			flex-wrap: wrap;
+			gap: 6px;
+		}
+		/* An earlier turn, folded to its brief. */
+		.tbrief {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+			max-width: 760px;
+			padding: 2px 0 0 2px;
+			color: var(--ml-color-text-secondary);
+		}
+		.tbrief .q {
+			color: var(--ml-color-text-link);
+		}
+		.fold {
+			all: unset;
+			align-self: flex-start;
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			padding: 2px 6px 2px 2px;
+			border-radius: 5px;
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+			cursor: pointer;
+		}
+		.fold:hover {
+			color: var(--ml-color-text);
+			background: var(--ms-hover);
+		}
+		.fold:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+		}
 		.working {
 			display: flex;
 			align-items: center;
@@ -795,6 +975,21 @@ export class AgentSessionComponent {
 	accepting = false;
 	/** How many more items than the last `SHOWN_ITEMS` the transcript shows ("Show earlier"). */
 	earlier = 0;
+	/** Turns whose full reply is unfolded, as `session:index of its first item`. Memory only. */
+	unfolded: ReadonlySet<string> = new Set();
+
+	toggleTurn(key: string): void {
+		const next = new Set(this.unfolded);
+		if (!next.delete(key)) {
+			next.add(key);
+		}
+		this.unfolded = next;
+	}
+
+	/** One of Claude's suggested answers, sent as the user's reply. */
+	answer(s: AgentSession, choice: string): void {
+		void this.agents.send(s.id, choice);
+	}
 	private _seen = 0;
 	private _shown: string | null = null;
 	/** Set by "Show earlier": how far the view was from the end, to put it back there once the older items are in. */

@@ -61,8 +61,17 @@ export class AppComponent {
 		window.addEventListener('keydown', this.onKey, true);
 	}
 
-	/** Cmd/Ctrl+Shift+F: find in files, from anywhere. Caught first, so the editor or a terminal does not get it. */
+	/**
+	 * Cmd/Ctrl+Shift+F: find in files, from anywhere. Cmd/Ctrl+Shift+A: the Agents page and back.
+	 * Caught first, so the editor or a terminal does not get them.
+	 */
 	private readonly onKey = (e: KeyboardEvent): void => {
+		if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.code === 'KeyA' && this.store.ready() && (this.store.overview() || this.store.repo())) {
+			e.preventDefault();
+			e.stopPropagation();
+			this.store.showOverview();
+			return;
+		}
 		if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.code === 'KeyF' && this.store.repo() && this.store.status()) {
 			e.preventDefault();
 			e.stopPropagation();
