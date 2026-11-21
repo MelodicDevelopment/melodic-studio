@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dirName, fileName, isWindowsPath, joinPath, relativeTo, samePath } from './paths.ts';
+import { dirName, fileName, isWindowsPath, joinPath, relativeTo, samePath, shellPath } from './paths.ts';
 
 test('recognises Windows paths', () => {
 	assert.equal(isWindowsPath('C:\\Users\\me\\repo'), true);
@@ -66,4 +66,14 @@ test('joining a repository-relative path to its root', () => {
 	// And back again.
 	assert.equal(relativeTo('C:\\Users\\me\\repo', joinPath('C:\\Users\\me\\repo', 'src/app/main.ts')), 'src/app/main.ts');
 	assert.equal(relativeTo('/Users/me/repo', joinPath('/Users/me/repo', 'src/app/main.ts')), 'src/app/main.ts');
+});
+
+test('a dropped file as one word for a terminal', () => {
+	assert.equal(shellPath('/Users/me/repo/shot.png'), '/Users/me/repo/shot.png');
+	assert.equal(shellPath('/Users/me/Desktop/Screenshot 2026-11-20 at 1.41.35 PM.png'), '/Users/me/Desktop/Screenshot\\ 2026-11-20\\ at\\ 1.41.35\\ PM.png');
+	assert.equal(shellPath("/tmp/it's (1) $HOME & `x`.png"), "/tmp/it\\'s\\ \\(1\\)\\ \\$HOME\\ \\&\\ \\`x\\`.png");
+	// macOS puts a narrow no-break space before "PM"; no shell splits on it.
+	assert.equal(shellPath('/tmp/1.41\u202fPM é.png'), '/tmp/1.41\u202fPM\\ é.png');
+	assert.equal(shellPath('C:\\Users\\me\\shot.png'), 'C:\\Users\\me\\shot.png');
+	assert.equal(shellPath('C:\\Users\\me\\My Pictures\\shot (1).png'), '"C:\\Users\\me\\My Pictures\\shot (1).png"');
 });

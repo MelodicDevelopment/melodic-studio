@@ -815,6 +815,7 @@ export class WorkspaceStore {
 		try {
 			const screen = await this.pool.create({
 				exit: (code, ranFor) => this.exited(id, code, ranFor),
+				claude: this.get(id)?.kind === 'claude',
 				input: () => {
 					const c = this.get(id);
 					// Answering a permission question (or anything typed while asked) means Claude is on its way again.

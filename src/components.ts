@@ -64,6 +64,7 @@ import './components/host/host-work.component';
 import './components/host/cli-notice.component';
 import './components/settings/accounts.component';
 import './components/agents/ask.component';
+import './components/agents/attach.component';
 import './components/agents/attempts.component';
 import './components/dialogs/dialogs.component';
 import './components/dialogs/git-ops.component';

@@ -3,6 +3,7 @@ import type { HostDialogsComponent } from './host-dialogs.component';
 import type { AgentMode, HostCliStatus, HostIssue } from '../../services/backend.service';
 import { AGENT_MODES } from '../agents/agents.component';
 import { issueBranch } from '../../services/host.store';
+import { DRAFT_IMAGES } from '../../services/agents.store';
 import { plural, relativeTime } from '../../shared/format';
 
 /** Azure DevOps cuts a pull request description off here. */
@@ -102,6 +103,7 @@ function taskForm(self: HostDialogsComponent) {
 		<div class="detail form">
 			<p class="dim">The agent works in its own worktree on a new branch. Read the task first: the description below was written on ${where} and becomes part of what the agent is told.</p>
 			<ml-textarea label="Task" rows="11" .value=${task.task} @ml:input=${(e: CustomEvent) => host.editTask({ task: e.detail.value })}></ml-textarea>
+			<ms-attach .box=${DRAFT_IMAGES.issue} .pick=${true}></ms-attach>
 			<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}`} .value=${task.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>
 			<ml-select label="Permissions" .options=${AGENT_MODES} .value=${task.mode} @ml:change=${(e: CustomEvent) => host.editTask({ mode: e.detail.value as AgentMode })}></ml-select>
 			${task.mode === 'bypassPermissions' ? html`<p class="note warn"><ml-icon icon="warning" size="sm"></ml-icon><span>Full auto lets the agent run any shell command on this computer. With a task that quotes text from ${where}, prefer one of the other modes.</span></p>` : ''}
@@ -161,7 +163,7 @@ function issuesDialog(self: HostDialogsComponent) {
 					: task
 					? html`
 						<ml-button variant="outline" @ml:click=${() => host.task.set(null)}>Back</ml-button>
-						<ml-button variant="primary" ?disabled=${!task.task.trim() || !task.branch.trim() || self.agents.cli() === null} ?loading=${self.agents.busy()} @ml:click=${() => host.startAgent()}><ml-icon slot="icon-start" icon="robot"></ml-icon>Start agent</ml-button>
+						<ml-button variant="primary" ?disabled=${!task.task.trim() || !task.branch.trim() || self.agents.cli() === null || !!self.agents.attaching()[DRAFT_IMAGES.issue]} ?loading=${self.agents.busy()} @ml:click=${() => host.startAgent()}><ml-icon slot="icon-start" icon="robot"></ml-icon>Start agent</ml-button>
 					`
 					: html`
 						<ml-button variant="outline" @ml:click=${() => host.close('host-issues')}>Close</ml-button>

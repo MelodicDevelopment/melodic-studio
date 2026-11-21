@@ -81,3 +81,16 @@ export function joinPath(root: string, relative: string): string {
 	const base = root.endsWith('/') || root.endsWith('\\') ? root.slice(0, -1) : root;
 	return `${base}${separator}${windows ? relative.replace(/\//g, '\\') : relative}`;
 }
+
+/**
+ * A path as it is typed into a terminal when its file is dropped there: one word for the shell (and for
+ * Claude Code, which reads a dropped image's path this way). Unix shells get a backslash before every
+ * character that means something to them, as Terminal and iTerm do; on Windows the path is put in double
+ * quotes when it needs them, which PowerShell and cmd both read (a Windows file name cannot hold a quote).
+ */
+export function shellPath(path: string, windows = isWindowsPath(path)): string {
+	if (windows) {
+		return /^[\w\-.:\\/]+$/.test(path) ? path : `"${path}"`;
+	}
+	return path.replace(/[^\w\-./:@%+=,]/gu, (c) => (c === '\n' ? "'\n'" : c.codePointAt(0)! > 127 ? c : `\\${c}`));
+}

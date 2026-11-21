@@ -2,7 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { effect, untracked } from '@melodicdev/core/signals';
 import { html, css } from '@melodicdev/core/template';
-import { AgentsStore, type AskScope } from '../../services/agents.store';
+import { AgentsStore, DRAFT_IMAGES, type AskScope } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { isMac } from '../../services/backend.service';
 
@@ -33,11 +33,13 @@ const EXAMPLES: Record<AskScope, string[]> = {
 				<div class="seg">
 					${SCOPES.map((s) => html`<button class=${s.scope === scope ? 'on' : ''} @click=${() => self.setScope(s.scope)}><ml-icon icon=${s.icon} size="sm"></ml-icon>${s.label}</button>`)}
 				</div>
+				<ms-attach .box=${DRAFT_IMAGES.ask}></ms-attach>
 				<ml-textarea rows="4" placeholder=${scope === 'history' ? 'When did this behaviour change, and why?' : 'Where is authentication handled?'} .value=${self.question} @ml:input=${(e: CustomEvent) => (self.question = e.detail.value)}></ml-textarea>
 				<div class="row">
 					<span class="note"><ml-icon icon="lock-simple" size="sm"></ml-icon>${about.about}</span>
+					<ms-attach-button .box=${DRAFT_IMAGES.ask}></ms-attach-button>
 					<ml-button variant="outline" size="sm" @ml:click=${() => agents.select(agents.selectedId())}>Cancel</ml-button>
-					<ml-button variant="primary" size="sm" ?disabled=${!self.question.trim() || cli === null} ?loading=${self.sending} title=${isMac() ? '⌘ Enter' : 'Ctrl+Enter'} @ml:click=${() => self.submit()}>Ask</ml-button>
+					<ml-button variant="primary" size="sm" ?disabled=${!self.question.trim() || cli === null || !!agents.attaching()[DRAFT_IMAGES.ask]} ?loading=${self.sending} title=${isMac() ? '⌘ Enter' : 'Ctrl+Enter'} @ml:click=${() => self.submit()}>Ask</ml-button>
 				</div>
 				${cli === null ? html`<p class="bad">The <b>claude</b> command was not found. Install Claude Code, then restart Melodic Studio.</p>` : ''}
 				<div class="examples">
@@ -82,7 +84,8 @@ const EXAMPLES: Record<AskScope, string[]> = {
 		.bad {
 			color: var(--ml-color-danger);
 		}
-		ml-textarea {
+		ml-textarea,
+		ms-attach {
 			align-self: stretch;
 			text-align: left;
 		}
@@ -183,12 +186,13 @@ export class AskComponent {
 
 	async submit(): Promise<void> {
 		const scope = this.agents.asking()?.scope ?? 'code';
-		if (!this.question.trim() || this.sending) {
+		// Not while an image is still being made ready: the question would go without it.
+		if (!this.question.trim() || this.sending || this.agents.attaching()[DRAFT_IMAGES.ask]) {
 			return;
 		}
 		this.sending = true;
 		try {
-			await this.agents.ask(this.question, scope);
+			await this.agents.ask(this.question, scope, this.agents.takeAttached(DRAFT_IMAGES.ask));
 		} finally {
 			this.sending = false;
 		}

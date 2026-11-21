@@ -12,7 +12,10 @@
 import { Injectable, Injector } from '@melodicdev/core/injection';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import { BackendService, isMac } from './backend.service';
+import { BackendService, isDesktop, isMac } from './backend.service';
+import { imagesIn } from './agent-images';
+import { hits } from '../shared/hit';
+import { shellPath } from '../shared/paths';
 import { adoptXtermStyles, loadXterm, xtermTheme } from '../shared/xterm';
 import { effect } from '@melodicdev/core/signals';
 import { EditorSettingsStore } from './editor-settings.store';
@@ -34,6 +37,11 @@ export interface ScreenEvents {
 	input?(data: string): void;
 	/** What the program printed, as text (escape sequences and all), in the order it arrived. */
 	output?(text: string): void;
+	/**
+	 * The program is Claude Code, which takes an image from the clipboard itself when it gets its
+	 * paste-image key. So a paste that holds an image and no text sends that key instead of nothing.
+	 */
+	claude?: boolean;
 }
 
 interface Screen {
@@ -177,8 +185,50 @@ export class ScreenPool {
 			// Not handled here: the browser pastes into xterm's input, and xterm takes it from there.
 			return !(key === 'v' && (e.shiftKey || isWindows()));
 		});
+		// A screenshot on the clipboard has no text for xterm to paste. Claude Code reads the clipboard itself
+		// when it gets Ctrl+V (Alt+V on Windows, where Ctrl+V is the terminal's paste), so that is what it gets.
+		host.addEventListener(
+			'paste',
+			(e) => {
+				if (!screen.events.claude || screen.ended || !screen.key || e.clipboardData?.getData('text/plain') || !imagesIn(e.clipboardData).length) {
+					return;
+				}
+				e.preventDefault();
+				e.stopPropagation();
+				term.input(isWindows() ? '\x1bv' : '\x16');
+			},
+			true,
+		);
 		this._screens.set(id, screen);
 		return id;
+	}
+
+	/**
+	 * Files dropped on a terminal from outside the app are typed into it as their paths, as terminals do.
+	 * That is also how a file reaches a Claude conversation: Claude Code attaches an image dropped this
+	 * way and reads any other file it is pointed at. The drop arrives from the window as a position.
+	 */
+	private async listenForDrops(): Promise<void> {
+		if (!isDesktop()) {
+			return;
+		}
+		const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+		await getCurrentWebview().onDragDropEvent((event) => {
+			const p = event.payload;
+			if (p.type !== 'drop' || !p.paths.length) {
+				return;
+			}
+			// Positions arrive in physical pixels.
+			const x = p.position.x / window.devicePixelRatio;
+			const y = p.position.y / window.devicePixelRatio;
+			for (const screen of this._screens.values()) {
+				if (screen.opened && screen.key && !screen.ended && hits(screen.host, x, y)) {
+					screen.term.paste(`${p.paths.map((path) => shellPath(path)).join(' ')} `);
+					screen.term.focus();
+					return;
+				}
+			}
+		});
 	}
 
 	/**
@@ -349,6 +399,7 @@ export class ScreenPool {
 	}
 
 	private async listen(): Promise<void> {
+		void this.listenForDrops().catch(() => undefined);
 		await this.backend.listen<TermData>('term-data', (e) =>
 			this.receive(e.key, (screen) => {
 				const bytes = decode(e.data);

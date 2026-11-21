@@ -14,7 +14,7 @@ import { ToastService } from '@melodicdev/components/toast';
 import { DialogService } from '@melodicdev/components/dialog';
 import { BackendService, asAppError, type AgentMode, type Host, type HostCliStatus, type HostIssue, type PrChanges, type PrContext, type PullRequestRef, type RepoStatus } from './backend.service';
 import { RepoStore, type Busy } from './repo.store';
-import { AgentsStore } from './agents.store';
+import { AgentsStore, DRAFT_IMAGES } from './agents.store';
 import { AiService, parseJson, type Ask } from './ai.service';
 
 type DialogId = Parameters<DialogService['close']>[0];
@@ -362,6 +362,7 @@ export class HostStore {
 		if (!issue || !host) {
 			return;
 		}
+		this.agents.takeAttached(DRAFT_IMAGES.issue); // images left from another issue's task do not belong to this one
 		this.task.set({ issue, task: issueTask(issue, host.provider, host.name), branch: issueBranch(issue), mode: 'acceptEdits' });
 		// The Agents tab may never have been opened; its store learns here whether Claude Code is installed.
 		void this.agents.init();
@@ -377,11 +378,14 @@ export class HostStore {
 	/** Start an agent on the issue, in a worktree on the issue's branch. */
 	async startAgent(): Promise<void> {
 		const task = this.task();
-		if (!task || !task.task.trim() || !task.branch.trim()) {
+		if (!task || !task.task.trim() || !task.branch.trim() || this.agents.attaching()[DRAFT_IMAGES.issue]) {
 			return;
 		}
 		await this.agents.init();
-		if (await this.agents.start({ task: task.task, branch: task.branch.trim(), mode: task.mode })) {
+		// Images added under the task go with it; they stay in the form until the agent has started.
+		const images = this.agents.attached()[DRAFT_IMAGES.issue] ?? [];
+		if (await this.agents.start({ task: task.task, branch: task.branch.trim(), mode: task.mode, images })) {
+			this.agents.takeAttached(DRAFT_IMAGES.issue);
 			this.task.set(null);
 			this.close('host-issues');
 			this.repos.setTab('agents');

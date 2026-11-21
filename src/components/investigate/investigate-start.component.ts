@@ -2,7 +2,7 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
 import { DialogService } from '@melodicdev/components/dialog';
-import { AgentsStore } from '../../services/agents.store';
+import { AgentsStore, DRAFT_IMAGES } from '../../services/agents.store';
 import { RunStore, targetTitle } from '../../services/run.store';
 
 type DialogId = Parameters<DialogService['close']>[0];
@@ -26,12 +26,13 @@ const NONE = '\u0000none';
 				<div class="dlg">
 					<p>Claude reproduces it in a worktree of its own, records what happens on the way to the failure, and comes back with the cause, the evidence and a fix. It asks before it runs anything, and your files are not touched.</p>
 					<ml-textarea label="What goes wrong?" rows="4" placeholder=${output ? 'Optional: anything the output below does not say' : 'What you did, what you expected, and what happened instead'} .value=${self.description} @ml:input=${(e: CustomEvent) => (self.description = e.detail.value)}></ml-textarea>
+					<ms-attach .box=${DRAFT_IMAGES.investigate} .pick=${true}></ms-attach>
 					${output ? html`<div class="out"><span class="lbl">From the terminal</span><pre>${output}</pre></div>` : ''}
 					${targets.length ? html`<ml-select label="What it happens in" .options=${options} .value=${self.target} @ml:change=${(e: CustomEvent) => (self.target = e.detail.value)}></ml-select>` : ''}
 				</div>
 				<div slot="dialog-footer" class="foot">
 					<ml-button variant="outline" @ml:click=${() => self.close()}>Cancel</ml-button>
-					<ml-button variant="primary" ?disabled=${!self.description.trim() && !output} ?loading=${self.agents.busy()} @ml:click=${() => self.start()}><ml-icon slot="icon-start" icon="sparkle"></ml-icon>Investigate</ml-button>
+					<ml-button variant="primary" ?disabled=${(!self.description.trim() && !output) || !!self.agents.attaching()[DRAFT_IMAGES.investigate]} ?loading=${self.agents.busy()} @ml:click=${() => self.start()}><ml-icon slot="icon-start" icon="sparkle"></ml-icon>Investigate</ml-button>
 				</div>
 			</ml-dialog>
 		`;
@@ -101,13 +102,15 @@ export class InvestigateStartComponent {
 	reset(): void {
 		this.description = '';
 		this.target = NONE;
+		this.agents.takeAttached(DRAFT_IMAGES.investigate);
 		this.agents.investigateDraft.set(null);
 	}
 
 	async start(): Promise<void> {
 		const output = this.agents.investigateDraft()?.output ?? '';
 		const target = (this.run.targets() ?? []).find((t) => t.id === this.target) ?? null;
-		const request = { description: this.description, error: output ? { text: output } : null, target, command: null, exitCode: null };
+		// Taken before the dialog closes: closing it empties the box.
+		const request = { description: this.description, error: output ? { text: output } : null, target, command: null, exitCode: null, images: this.agents.takeAttached(DRAFT_IMAGES.investigate) };
 		this.close();
 		await this.agents.investigate(request);
 	}

@@ -152,7 +152,15 @@ export interface InvestigateRequest {
 	/** The command Studio ran and how it ended, when the failure came from a run. */
 	command: string | null;
 	exitCode: number | null;
+	/** Images that show it (a screenshot of the wrong screen), sent with the first message. */
+	images?: Attachment[];
 }
+
+/**
+ * Where images wait while a first message is being written and there is no session yet: keys of
+ * `AgentsStore.attached`, beside the session ids. Each box hands them over when it starts its session.
+ */
+export const DRAFT_IMAGES = { task: 'draft:task', ask: 'draft:ask', investigate: 'draft:investigate', issue: 'draft:issue' } as const;
 
 export interface NewTask {
 	task: string;
@@ -161,6 +169,8 @@ export interface NewTask {
 	mode: AgentMode;
 	/** Run the task this many times in parallel (1 to 3), each in its own worktree: `branch`, `branch-2`, `branch-3`. */
 	attempts?: number;
+	/** Images that go with the task (every attempt gets them). */
+	images?: Attachment[];
 }
 
 /** A link in an agent's answer: a place in a file, a commit, or a web address. */
@@ -437,9 +447,12 @@ export class AgentsStore {
 	readonly unread = computed<number>(() => this.sessions().filter((s) => s.unread).length);
 
 	private _listening: Promise<void> | null = null;
-	/** Images waiting in a session's composer, by session. In memory only, like the text beside them, but they outlive the pane (rebuilt on a tab switch). */
+	/**
+	 * Images waiting in a composer: by session, and by `DRAFT_IMAGES` for the boxes that start one.
+	 * In memory only, like the text beside them, but they outlive the pane (rebuilt on a tab switch).
+	 */
 	readonly attached = signal<Record<string, Attachment[]>>({});
-	/** Images being made ready, by session. */
+	/** Images being made ready, by the same keys. */
 	readonly attaching = signal<Record<string, number>>({});
 	/** The images of the transcript on screen as `data:` addresses ('' for one whose file is gone). One session's at a time. */
 	private readonly _shots = new Map<string, string>();
@@ -904,7 +917,7 @@ export class AgentsStore {
 			this.save([...this.sessions(), ...sessions]);
 			this.select(sessions[0].id);
 			this.comparing.set(group);
-			await Promise.all(sessions.map((s) => this.send(s.id, prompt)));
+			await Promise.all(sessions.map((s) => this.send(s.id, prompt, { images: task.images })));
 			if (branch) {
 				await this.loadWorktrees();
 				await this.repos.loadBranches(); // the new branches belong in the toolbar's list
@@ -935,7 +948,7 @@ export class AgentsStore {
 	 * Ask a question about the code (`code`) or about how it came to be (`history`). The answer
 	 * arrives in a new read-only session in the checkout the app is looking at; no worktree is made.
 	 */
-	async ask(question: string, scope: AskScope = 'code'): Promise<boolean> {
+	async ask(question: string, scope: AskScope = 'code', images: Attachment[] = []): Promise<boolean> {
 		const repo = this.repos.repo();
 		const text = question.trim();
 		if (!repo || !text) {
@@ -948,13 +961,13 @@ export class AgentsStore {
 		if (scope === 'history' && this.historyChat()?.open) {
 			this.historyChat.set({ id: session.id, open: true });
 		}
-		await this.send(session.id, text);
+		await this.send(session.id, text, { images });
 		return this.find(session.id)?.status !== 'failed';
 	}
 
 	// ---- images with a message ---------------------------------------------
 
-	/** Put images in a session's composer: pasted, dropped or picked. Each is made ready (smaller, if it must be) first. */
+	/** Put images in a composer (a session's, or a `DRAFT_IMAGES` box): pasted, dropped or picked. Each is made ready (smaller, if it must be) first. */
 	async attach(id: string, files: Blob[]): Promise<void> {
 		const room = MAX_IMAGES - (this.attached()[id]?.length ?? 0) - (this.attaching()[id] ?? 0);
 		if (files.length > room) {
@@ -995,7 +1008,7 @@ export class AgentsStore {
 		this.attached.set({ ...this.attached(), [id]: (this.attached()[id] ?? []).filter((a) => a.name !== name) });
 	}
 
-	/** Hand over what is in a session's composer, which is then empty. */
+	/** Hand over what is in a composer, which is then empty. */
 	takeAttached(id: string): Attachment[] {
 		const images = this.attached()[id] ?? [];
 		if (images.length) {
@@ -1327,8 +1340,9 @@ export class AgentsStore {
 				targets: targets.map((t) => ({ id: t.id, kind: t.kind, command: t.argv.join(' '), cwd: t.cwd })),
 				runtime: target?.runtime ?? (error?.runtime && error.runtime !== 'unknown' ? error.runtime : null),
 				branch,
+				images: request.images?.length ?? 0,
 			});
-			await this.send(session.id, prompt, { shown: `Investigate: ${request.description.trim() || summary}`, raw: true });
+			await this.send(session.id, prompt, { shown: `Investigate: ${request.description.trim() || summary}`, raw: true, images: request.images });
 			await this.loadWorktrees();
 			await this.repos.loadBranches();
 			return this.find(session.id)?.status !== 'failed';
