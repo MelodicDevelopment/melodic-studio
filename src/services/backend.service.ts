@@ -574,6 +574,8 @@ export class BackendService {
 	cloneRepo(url: string, parent: string) { return this.call<RepoSummary>('repo_clone', { url, parent }); }
 	removeRepo(id: string) { return this.call<void>('repo_remove', { id }); }
 	selectRepo(id: string) { return this.call<void>('repo_select', { id }); }
+	/** Folders the system asked the app to open (the Dock's recent list, a folder dropped on the icon), each handed over once. */
+	takeOpened() { return this.call<string[]>('opened_take'); }
 	status(id: string) { return this.call<RepoStatus>('repo_status', { id }); }
 	fileDiff(id: string, file: FileChange) { return this.call<DiffResult>('file_diff', { id, path: file.path, oldPath: file.oldPath, status: file.status }); }
 	commit(id: string, paths: string[], summary: string, description: string, amend: boolean) { return this.call<void>('commit_changes', { id, paths, summary, description, amend }); }
