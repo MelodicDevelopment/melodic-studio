@@ -170,6 +170,19 @@ export class ScreenPool {
 				}
 				return false;
 			}
+			// On the Mac, Cmd+Left / Cmd+Right / Cmd+Backspace are start of line, end of line and delete to the start
+			// everywhere else, and xterm sends nothing for them. Ctrl+A / Ctrl+E / Ctrl+U are what VS Code's terminal
+			// and iTerm's "natural text editing" send: Claude Code and the shells read them that way.
+			if (isMac() && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+				const line = e.key === 'ArrowLeft' ? '\x01' : e.key === 'ArrowRight' ? '\x05' : e.key === 'Backspace' ? '\x15' : '';
+				if (line) {
+					if (e.type === 'keydown') {
+						e.preventDefault();
+						term.input(line);
+					}
+					return false;
+				}
+			}
 			// Off the Mac, Ctrl+C and Ctrl+V belong to the program, so copy and paste are Ctrl+Shift+C / Ctrl+Shift+V
 			// as in other terminals. Windows also gets its own habits: Ctrl+V pastes, Ctrl+C copies when text is selected.
 			if (e.type !== 'keydown' || isMac() || !e.ctrlKey || e.altKey || e.metaKey) {

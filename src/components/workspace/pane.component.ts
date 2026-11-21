@@ -135,7 +135,7 @@ function body(self: PaneComponent, pane: Pane, conv: Conversation | null) {
 						)}
 					</div>
 					<button class="tool add" title=${`New Claude conversation in ${store.checkoutName()}`} aria-label="New Claude conversation" @click=${() => store.newClaude({ pane: pane.id })}>
-						<ml-icon icon="plus" size="sm"></ml-icon><span class="text">New conversation</span>
+						<ml-icon icon="plus" size="sm"></ml-icon>
 					</button>
 					<ml-popover placement="bottom-end" offset="2" @ml:open=${() => self.menuOpened()}>
 						<button slot="trigger" class="tool more" title="New conversation in a new worktree, or a terminal" aria-label="More ways to start"><ml-icon icon="caret-down" size="xs"></ml-icon></button>

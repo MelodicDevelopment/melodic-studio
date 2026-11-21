@@ -216,7 +216,9 @@ export function appTemplate(self: AppComponent) {
 		<ms-toolbar></ms-toolbar>
 		${!store.ready()
 			? html`<div class="center"><ml-spinner size="lg"></ml-spinner></div>`
-			: !repo
+			: store.overview()
+				? html`<ms-agents-overview></ms-agents-overview>`
+				: !repo
 				? welcome(self)
 				: error
 					? html`

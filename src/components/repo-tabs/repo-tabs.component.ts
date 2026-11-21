@@ -2,7 +2,8 @@ import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
 import { RepoStore } from '../../services/repo.store';
-import { AgentsStore } from '../../services/agents.store';
+import { AgentsStore, stateOf } from '../../services/agents.store';
+import { bucketOf } from '../../shared/attention';
 import { isDesktop, isMac } from '../../services/backend.service';
 
 /**
@@ -18,7 +19,10 @@ import { isDesktop, isMac } from '../../services/backend.service';
 			// Not a bare html``: Melodic cannot switch a component away from a completely empty first template.
 			return html`<span hidden></span>`;
 		}
-		const current = store.repo()?.id;
+		const overview = store.overview();
+		const current = overview ? null : store.repo()?.id;
+		// What waits on the user in every repository: the Agents tab's badge.
+		const needs = self.agents.sessions().filter((s) => bucketOf(stateOf(s), s.unread) === 'needs').length;
 		const working = new Set(
 			self.agents
 				.sessions()
@@ -27,6 +31,11 @@ import { isDesktop, isMac } from '../../services/backend.service';
 		);
 		return html`
 			<div class="strip drag ${self.mac ? 'mac' : ''}" @mousedown=${self.drag}>
+				<div class="tab pinned ${overview ? 'on' : ''}" title=${`Every repository's agents on one page (${isMac() ? '⌘' : 'Ctrl+'}Shift+A)`} @click=${() => store.showOverview(true)}>
+					<ml-icon icon="sparkle" size="sm"></ml-icon>
+					<span class="name">Agents</span>
+					${needs ? html`<span class="n" aria-label=${`${needs} waiting for you`}>${needs}</span>` : ''}
+				</div>
 				${store.repoTabList().map(
 					(r) => html`
 						<div
@@ -107,6 +116,32 @@ import { isDesktop, isMac } from '../../services/backend.service';
 		.tab > ml-spinner {
 			flex: none;
 		}
+		/* The Agents page: always first, not dragged or closed, a little apart from the repositories. */
+		.tab.pinned {
+			flex: 0 0 auto;
+			min-width: 0;
+			padding-right: 10px;
+			margin-right: 6px;
+		}
+		.tab.pinned > ml-icon {
+			color: var(--ms-ai);
+		}
+		.tab.pinned .name {
+			flex: none;
+		}
+		.tab .n {
+			flex: none;
+			min-width: 16px;
+			padding: 0 5px;
+			box-sizing: border-box;
+			border-radius: 999px;
+			background: var(--ms-you);
+			color: #fff;
+			font-size: 10.5px;
+			font-weight: 600;
+			line-height: 16px;
+			text-align: center;
+		}
 		.name {
 			flex: 1;
 			min-width: 0;
@@ -163,7 +198,7 @@ export class RepoTabsComponent {
 			return;
 		}
 		const el = e.currentTarget as HTMLElement;
-		const tabs = [...(el.parentElement?.querySelectorAll<HTMLElement>('.tab') ?? [])];
+		const tabs = [...(el.parentElement?.querySelectorAll<HTMLElement>('.tab:not(.pinned)') ?? [])];
 		const from = tabs.indexOf(el);
 		if (from < 0 || tabs.length < 2) {
 			return;

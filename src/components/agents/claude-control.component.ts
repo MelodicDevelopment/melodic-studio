@@ -1,7 +1,7 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
-import { AgentsStore, lastSaid, plainSummary, scopeOf, stateOf, type AgentSession } from '../../services/agents.store';
+import { AgentsStore, nameOf, plainSummary, scopeOf, stateOf, summary, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { WorkspaceStore, type Conversation } from '../../services/workspace.store';
 import { isMac } from '../../services/backend.service';
@@ -37,13 +37,14 @@ function repoName(self: ClaudeControlComponent, repoId: string): string {
 function sessionCard(self: ClaudeControlComponent, s: AgentSession) {
 	const ask = s.kind === 'ask';
 	const investigation = s.kind === 'investigate';
-	// An investigation's last message is its report as JSON: what it found says more.
-	const said = investigation ? plainSummary(s.investigation?.report?.summary || s.investigation?.thinking || '') : lastSaid(s);
+	// An investigation's last message is its report as JSON: what it found says more. Anything else: its brief.
+	const sum = investigation ? null : summary(s);
+	const said = investigation ? plainSummary(s.investigation?.report?.summary || s.investigation?.thinking || '') : (sum?.needs ?? sum?.now ?? sum?.did ?? '');
 	return html`
 		<div class="card ${s.unread ? 'unread' : ''}" title="Go to this agent" @click=${() => self.go(s)}>
 			<div class="line">
 				${stateChip(s)}
-				<span class="title">${s.title}</span>
+				<span class="title" title=${s.title}>${nameOf(s)}</span>
 				<span class="when">${relativeTime(s.updated)}</span>
 			</div>
 			<div class="line meta">
@@ -51,7 +52,7 @@ function sessionCard(self: ClaudeControlComponent, s: AgentSession) {
 				<span class="where"><ml-icon icon=${ask ? 'chat-circle-dots' : investigation ? 'sparkle' : 'git-branch'} size="xs"></ml-icon><span>${ask ? (scopeOf(s) === 'history' ? 'Question about history' : 'Question about the code') : (s.branch ?? 'detached')}</span></span>
 				${s.cost ? html`<span>$${s.cost.toFixed(2)}</span>` : ''}
 			</div>
-			${said ? html`<div class="said">${said}</div>` : ''}
+			${said ? html`<div class="said ${sum?.needs ? 'ask' : ''}">${said}</div>` : ''}
 		</div>
 	`;
 }
@@ -122,8 +123,8 @@ function group(self: ClaudeControlComponent, label: string, key: Bucket, list: E
 							${needs.length + working.length === 0 ? html`<div class="none">Nothing is waiting for you, and nothing is running.</div>` : ''}
 						</div>
 						<div class="foot">
-							<button class="item" ?disabled=${!self.repos.repo()} title="The Agents tab, listing every repository" @click=${() => self.everything()}>
-								<ml-icon icon="list-checks" size="sm"></ml-icon><span class="grow">Everything, in every repository</span><small>Agents tab</small>
+							<button class="item" ?disabled=${!self.repos.repo()} title=${`Every repository's agents and conversations on one page (${isMac() ? '⌘' : 'Ctrl+'}Shift+A)`} @click=${() => self.everything()}>
+								<ml-icon icon="list-checks" size="sm"></ml-icon><span class="grow">Everything, in every repository</span><small>Agents page</small>
 							</button>
 						</div>
 					</div>
@@ -387,14 +388,9 @@ export class ClaudeControlComponent {
 		void this.store.open(c.id);
 	}
 
-	/** The whole list: the Agents tab, with every repository's sessions and conversations. */
+	/** The whole list: the Agents page, every repository's sessions and conversations. */
 	everything(): void {
 		this.close();
-		this.agents.listScope.set('all');
-		for (const r of this.repos.app()?.repos ?? []) {
-			void this.store.loadElsewhere(r.id);
-		}
-		this.repos.setTab('agents');
-		this.store.revealMain();
+		this.repos.showOverview(true);
 	}
 }

@@ -73,6 +73,8 @@ export interface AgentRunOptions {
 	lean?: boolean;
 	/** The only built-in tools Claude can see (`Read`, `Grep`); leave out for the usual set. */
 	builtin?: string[];
+	/** A task's turn: Claude ends it with a brief (BRIEF_RULES in agent.rs; parsed by shared/brief.ts). */
+	brief?: boolean;
 	/** The turn belongs to an investigation: it gets Studio's own tools for running the app and none of the user's settings. */
 	investigate?: { target: string | null };
 	/** Images that go with the message, by the names they were saved under for this session (`agentImageSave`). */
@@ -1551,9 +1553,14 @@ class DemoBackend {
 				say({ type: 'assistant', message: { content: [{ type: 'text', text: 'I will look at how the queue advances, then make the change.' }] } }, 700);
 				say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/player/queue.ts' } }] } }, 1300);
 				say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/player/queue.ts' } }] } }, 2100);
-				say({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done. The queue now wraps when repeat is on; review the diff in Changes.' }] } }, 2800);
-				say({ type: 'result', subtype: 'success', is_error: false, session_id: 'demo-session', total_cost_usd: 0.04 }, 2900);
-				this.emit('agent-done', { key, ok: true, error: '' }, 3000);
+				say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'npm test -- queue', description: 'Run the queue tests' } }] } }, 4200);
+				// A task ends its turn with a brief (BRIEF_RULES in agent.rs); the first turn asks something, a later one does not.
+				const brief = args.resume
+					? '```brief\ntitle: Queue wraps on repeat\ndid: Repeat-one now restarts the same track; the queue tests pass.\nneeds: nothing\n```'
+					: '```brief\ntitle: Queue wraps on repeat\ndid: The queue wraps to the first track when repeat is on; the queue tests pass.\nneeds: Should repeat-one restart the same track instead of wrapping?\nchoice: Yes, restart it\nchoice: No, wrap as well\n```';
+				say({ type: 'assistant', message: { content: [{ type: 'text', text: `Done. The queue now wraps when repeat is on, in \`src/player/queue.ts\`.\n\nI looked at how \`next()\` picks the following track: it returned \`null\` at the end of the list whatever the repeat setting was, so playback stopped. It now goes back to the first track when repeat is on. I left shuffle alone: it already draws from the whole queue.\n\n${brief}` }] } }, 6800);
+				say({ type: 'result', subtype: 'success', is_error: false, session_id: 'demo-session', total_cost_usd: 0.04 }, 6900);
+				this.emit('agent-done', { key, ok: true, error: '' }, 7000);
 				return;
 			}
 			case 'agent_stop': {
