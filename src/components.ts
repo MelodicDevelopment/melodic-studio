@@ -47,6 +47,7 @@ import './components/agents/agents.component';
 import './components/workspace/workspace.component';
 import './components/agents/claude-control.component';
 import './components/agents/overview.component';
+import './components/agents/pipeline.component';
 import './components/agents/agent-session.component';
 import './components/investigate/investigation.component';
 import './components/investigate/replay.component';

@@ -8,6 +8,7 @@ import { RepoStore } from '../../services/repo.store';
 import { WorkspaceStore } from '../../services/workspace.store';
 import { LspService } from '../../services/lsp.service';
 import { HostStore } from '../../services/host.store';
+import { PipelineStore } from '../../services/pipeline.store';
 import { DialogService } from '@melodicdev/components/dialog';
 import type { AgentMode } from '../../services/backend.service';
 import { samePath } from '../../services/agent-paths';
@@ -78,7 +79,9 @@ function mergeDialog(self: AgentSessionComponent, s: AgentSession, uncommitted: 
 					: uncommitted
 						? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>The agent's worktree has ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Only committed work is merged: review and commit first.</span></p>`
 						: ''}
-				${s.isolated
+				${s.pipeline
+					? html`<p class="hint">Afterwards its worktree and the branch ${s.branch ?? ''} are deleted, here and on the remote. The session stays as a record.</p>`
+					: s.isolated
 					? html`<ml-checkbox
 							label=${`Then delete its worktree and the branch ${s.branch ?? ''}`}
 							hint=${uncommitted && !fix ? 'Not while the worktree has uncommitted changes: it is kept and you are told.' : 'The session and its conversation stay.'}
@@ -389,7 +392,7 @@ function transcript(self: AgentSessionComponent, s: AgentSession, from: number, 
 			</div>
 			${mergeDialog(self, s, tree?.changes ?? 0)}
 			${checkDetail(self, s)}
-			${briefBlock(self, s)}
+			${s.pipeline ? html`<ms-pipeline .sessionId=${s.id} @merge=${() => self.openMerge(s)} @pr=${() => void self.openPr(s)}></ms-pipeline>` : briefBlock(self, s)}
 
 			<div class="log">
 				${hidden ? html`<button class="earlier" @click=${() => self.showEarlier()}>Show earlier (${hidden.toLocaleString('en-US')} more)</button>` : ''}
@@ -399,12 +402,14 @@ function transcript(self: AgentSessionComponent, s: AgentSession, from: number, 
 
 			<div class="composer" @keydown=${self.keydown}>
 				<ms-attach .box=${s.id} .zone=${self.elementRef}></ms-attach>
-				<ml-textarea rows="3" placeholder=${running ? (ask ? 'Looking for the answer…' : 'The agent is working…') : ask ? 'Ask a follow-up question' : 'Ask for a change, a fix, or an explanation'} .value=${self.draft} @ml:input=${(e: CustomEvent) => (self.draft = e.detail.value)}></ml-textarea>
+				<ml-textarea rows="3" placeholder=${running ? (ask ? 'Looking for the answer…' : 'The agent is working…') : ask ? 'Ask a follow-up question' : s.pipeline?.step === 'plan' ? 'Ask for changes to the plan' : 'Ask for a change, a fix, or an explanation'} .value=${self.draft} @ml:input=${(e: CustomEvent) => (self.draft = e.detail.value)}></ml-textarea>
 				<div class="row">
 					${ask
 						? html`<span class="note"><ml-icon icon="lock-simple" size="sm"></ml-icon>Read-only: it can search and read${scopeOf(s) === 'history' ? ' the files and the git history' : ' the files'}, and change nothing.</span>`
-						: html`<ml-select size="sm" .options=${AGENT_MODES} .value=${s.mode} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setMode(s.id, e.detail.value as AgentMode)}></ml-select>`}
-					<ml-select class="model" size="sm" title="The model for the next message. The conversation carries over." .options=${AGENT_MODELS} .value=${s.model ?? ''} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setModel(s.id, e.detail.value)}></ml-select>
+						: s.pipeline
+							? html`<span class="note">${s.pipeline.step === 'plan' ? 'Changes the plan before you approve it.' : 'More work: committed, reviewed and tested like the rest.'}</span>`
+							: html`<ml-select size="sm" .options=${AGENT_MODES} .value=${s.mode} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setMode(s.id, e.detail.value as AgentMode)}></ml-select>`}
+					${s.pipeline ? '' : html`<ml-select class="model" size="sm" title="The model for the next message. The conversation carries over." .options=${AGENT_MODELS} .value=${s.model ?? ''} ?disabled=${running} @ml:change=${(e: CustomEvent) => agents.setModel(s.id, e.detail.value)}></ml-select>`}
 					<span class="grow"></span>
 					<ms-attach-button .box=${s.id}></ms-attach-button>
 					${running
@@ -932,6 +937,7 @@ export class AgentSessionComponent {
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
 	@Service(HostStore) readonly host!: HostStore;
+	@Service(PipelineStore) readonly pipelines!: PipelineStore;
 	@Service(LspService) readonly lsp!: LspService;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
 	elementRef!: HTMLElement;
@@ -1076,7 +1082,8 @@ export class AgentSessionComponent {
 		}
 		const images = this.agents.attached()[s.id] ?? [];
 		if (this.draft.trim() || images.length) {
-			void this.agents.send(s.id, this.draft, { images: this.agents.takeAttached(s.id) });
+			// A task's pipeline takes the message as a change to its plan, or as more work to commit and check.
+			void (s.pipeline ? this.pipelines.message(s.id, this.draft, this.agents.takeAttached(s.id)) : this.agents.send(s.id, this.draft, { images: this.agents.takeAttached(s.id) }));
 			this.draft = '';
 		}
 	}

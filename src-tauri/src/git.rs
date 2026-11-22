@@ -280,7 +280,7 @@ fn rebase_todo(steps: &[RebaseStep], dir: &Path) -> Result<String> {
 }
 
 /// Branch and ref names go on the command line; refuse anything that could be read as an option.
-fn check_ref(name: &str) -> Result<()> {
+pub(crate) fn check_ref(name: &str) -> Result<()> {
     if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) || name.contains("..") {
         return Err(AppError::msg(format!("\"{name}\" is not a valid name")));
     }

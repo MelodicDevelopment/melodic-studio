@@ -26,6 +26,10 @@ export interface AskOptions {
 	model?: string;
 	/** Called as text arrives (whole messages, not characters) with everything so far. */
 	onText?: (soFar: string) => void;
+	/** Where to ask, when not the checkout on screen: a repository and one of its checkouts (an agent's worktree). */
+	where?: { repoId: string; cwd: string };
+	/** Called with what the question cost, in dollars, when Claude Code reports it. */
+	onCost?: (usd: number) => void;
 }
 
 export interface Ask {
@@ -39,6 +43,7 @@ interface Pending {
 	final: string | null;
 	error: string | null;
 	onText?: (soFar: string) => void;
+	onCost?: (usd: number) => void;
 	resolve(text: string): void;
 	reject(error: Error): void;
 }
@@ -73,6 +78,9 @@ export class AiService {
 						p.onText?.(p.text);
 					}
 				} else if (event.type === 'result') {
+					if (Number(event.total_cost_usd)) {
+						p.onCost?.(Number(event.total_cost_usd));
+					}
 					if (event.is_error) {
 						p.error = String(event.result ?? 'Claude Code reported an error.');
 					} else if (typeof event.result === 'string' && event.result) {
@@ -96,9 +104,10 @@ export class AiService {
 		})());
 	}
 
-	/** Ask in the checkout the app is looking at. */
+	/** Ask in the checkout the app is looking at, or in `options.where`. */
 	ask(options: AskOptions): Ask {
-		const repo = this.repos.repo();
+		const shown = this.repos.repo();
+		const repo = options.where ? { id: options.where.repoId, path: options.where.cwd, worktree: null } : shown;
 		const key = `ai:${crypto.randomUUID()}`;
 		let cancelled = false;
 		const result = new Promise<string>((resolve, reject) => {
@@ -111,7 +120,7 @@ export class AiService {
 					if (cancelled) {
 						throw new Error('Stopped.');
 					}
-					this._pending.set(key, { text: '', final: null, error: null, onText: options.onText, resolve, reject });
+					this._pending.set(key, { text: '', final: null, error: null, onText: options.onText, onCost: options.onCost, resolve, reject });
 					const tools = options.tools ?? [];
 					// With tools named, `default` mode lets exactly those run and refuses the rest.
 					return this.backend.agentStart(repo.id, repo.worktree || repo.path, key, options.prompt, 'default', null, { tools, model: options.model ?? 'haiku', quick: true });

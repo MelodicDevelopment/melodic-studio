@@ -1,6 +1,7 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
+import { PipelineStore } from '../../services/pipeline.store';
 import { AgentsStore, nameOf, plainSummary, scopeOf, stateOf, summary, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
 import { WorkspaceStore, type Conversation } from '../../services/workspace.store';
@@ -353,9 +354,13 @@ export class ClaudeControlComponent {
 	/** The list is open. Its rows are only built while it is, and "how long ago" is fresh each time. */
 	shown = false;
 
+	@Service(PipelineStore) private readonly _pipelines!: PipelineStore;
+
 	onCreate(): void {
 		// Agents report back as events; someone has to be listening from the start, whichever tab is open.
 		void this.agents.init();
+		// Tasks run their steps whether or not anything shows them.
+		this._pipelines.init();
 		window.addEventListener('keydown', this.onKey, true);
 	}
 

@@ -8,6 +8,8 @@ import { MODELS, branchNamePrompt } from '../../services/ai-prompts';
 import { branchFor, namedBranch, wantsNaming } from '../../shared/branch-name';
 import { RepoStore } from '../../services/repo.store';
 import { HostStore } from '../../services/host.store';
+import { PipelineStore } from '../../services/pipeline.store';
+import { KINDS, kindOf, type WorkKind } from '../../shared/pipeline';
 import { isMac, type AgentMode, type ClaudeSession, type Worktree } from '../../services/backend.service';
 import { fileName, relativeTime } from '../../shared/format';
 import { workspace, type Conversation } from '../../services/workspace.store';
@@ -288,6 +290,17 @@ function newMenu(self: AgentsComponent) {
 				<div class="dlg">
 					<ml-textarea label="Task" rows="5" placeholder="Describe what you want done. Be as specific as you would be with a colleague." .value=${self.task} @ml:input=${(e: CustomEvent) => self.setTask(e.detail.value)}></ml-textarea>
 					<ms-attach .box=${DRAFT_IMAGES.task} .pick=${true}></ms-attach>
+					<div class="pick">
+						<span class="lbl">Kind of work</span>
+						<div class="seg" role="group" aria-label="Kind of work">
+							${KINDS.map((k) => html`<button class=${self.work === k.id ? 'on' : ''} aria-pressed=${self.work === k.id ? 'true' : 'false'} @click=${() => self.setWork(k.id)}>${k.name}</button>`)}
+							<button class=${self.work === 'open' ? 'on' : ''} aria-pressed=${self.work === 'open' ? 'true' : 'false'} title="An agent session with no steps: you review, commit and merge yourself" @click=${() => self.setWork('open')}>Open-ended</button>
+						</div>
+						<span class="hint">${self.work === 'open' ? 'No steps: a conversation with an agent. You review, commit and merge its work yourself.' : `${kindOf(self.work).about} Studio commits and pushes its work on its branch, reviews it and runs the tests; you are asked to ${kindOf(self.work).planGate ? 'approve the plan and ' : ''}ship.`}</span>
+					</div>
+					${self.work !== 'open'
+						? html`<ml-input label="Branch" hint=${`Its own worktree, from ${self.repos.status()?.branch ?? 'the current commit'}${self.naming ? ' · Claude is naming it…' : ''}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
+						: html`
 					<ml-checkbox label="Work in a separate worktree on a new branch" hint="Recommended: the agent cannot disturb your checkout, and several can run at once." .checked=${self.isolate} @ml:change=${(e: CustomEvent) => self.setIsolate(e.detail.checked)}></ml-checkbox>
 					${self.isolate
 						? html`<ml-input label="Branch" hint=${`Starts from ${self.repos.status()?.branch ?? 'the current commit'}${self.naming ? ' · Claude is naming it…' : ''}`} .value=${self.branch} @ml:input=${(e: CustomEvent) => self.setBranch(e.detail.value)}></ml-input>`
@@ -309,10 +322,11 @@ function newMenu(self: AgentsComponent) {
 						: ''}
 					<ml-select label="Permissions" .options=${AGENT_MODES} .value=${self.mode} @ml:change=${(e: CustomEvent) => (self.mode = e.detail.value as AgentMode)}></ml-select>
 					${self.mode === 'bypassPermissions' ? html`<p class="warn"><ml-icon icon="warning" size="sm"></ml-icon><span>Full auto lets the agent run any shell command on this computer, not just inside its worktree.</span></p>` : ''}
+					`}
 				</div>
 				<div slot="dialog-footer" class="foot">
 					<ml-button variant="outline" @ml:click=${() => self.close('new-agent')}>Cancel</ml-button>
-					<ml-button variant="primary" ?disabled=${!self.task.trim() || (self.isolate && !self.branch) || !!agents.attaching()[DRAFT_IMAGES.task]} ?loading=${agents.busy()} @ml:click=${() => self.start()}>${self.isolate && self.attempts > 1 ? `Start ${self.attempts} agents` : 'Start agent'}</ml-button>
+					<ml-button variant="primary" ?disabled=${!self.task.trim() || ((self.isolate || self.work !== 'open') && !self.branch) || !!agents.attaching()[DRAFT_IMAGES.task]} ?loading=${agents.busy()} @ml:click=${() => self.start()}>${self.work !== 'open' ? (kindOf(self.work).skips.includes('plan') ? 'Start' : 'Start planning') : self.isolate && self.attempts > 1 ? `Start ${self.attempts} agents` : 'Start agent'}</ml-button>
 				</div>
 			</ml-dialog>
 
@@ -323,7 +337,7 @@ function newMenu(self: AgentsComponent) {
 						? html`
 							<p>Remove <b>${doomed.session.title}</b> and its conversation?</p>
 							${doomed.session.isolated
-								? html`<ml-checkbox label=${`Also delete its worktree and the branch ${doomed.session.branch ?? ''}`} hint="Uncommitted and unmerged work on that branch is lost." .checked=${self.alsoTree} @ml:change=${(e: CustomEvent) => (self.alsoTree = e.detail.checked)}></ml-checkbox>`
+								? html`<ml-checkbox label=${`Also delete its worktree and the branch ${doomed.session.branch ?? ''}${doomed.session.pipeline ? ', here and on the remote' : ''}`} hint="Uncommitted and unmerged work on that branch is lost." .checked=${self.alsoTree} @ml:change=${(e: CustomEvent) => (self.alsoTree = e.detail.checked)}></ml-checkbox>`
 								: ''}
 						`
 						: html`<p>Delete the worktree for <b>${doomed?.tree?.branch ?? ''}</b> and the branch itself? Uncommitted and unmerged work on it is lost.</p>`}
@@ -606,7 +620,8 @@ function newMenu(self: AgentsComponent) {
 		.seg button {
 			all: unset;
 			min-width: 34px;
-			padding: 4px 0;
+			padding: 4px 10px;
+			box-sizing: border-box;
 			text-align: center;
 			color: var(--ml-color-text-secondary);
 		}
@@ -812,8 +827,11 @@ export class AgentsComponent {
 	@Service(HostStore) readonly host!: HostStore;
 	@Service(DialogService) private readonly _dialogs!: DialogService;
 	@Service(AiService) private readonly _ai!: AiService;
+	@Service(PipelineStore) private readonly _pipelines!: PipelineStore;
 
 	task = '';
+	/** The kind of work, which sets the pipeline's steps; 'open' is an agent session with none. */
+	work: WorkKind | 'open' = 'feature';
 	branch = '';
 	isolate = true;
 	mode: AgentMode = 'acceptEdits';
@@ -898,6 +916,12 @@ export class AgentsComponent {
 		this.branch = value.replace(/\s+/g, '-');
 	}
 
+	setWork(work: WorkKind | 'open'): void {
+		this.work = work;
+		// A pipeline always has a worktree of its own: the branch is named as if the box were ticked.
+		this.setIsolate(work === 'open' ? this.isolate : true);
+	}
+
 	setIsolate(on: boolean): void {
 		this.isolate = on;
 		if (on && !this._branchTouched) {
@@ -964,6 +988,13 @@ export class AgentsComponent {
 		this.stopNaming();
 		// They stay in the dialog until the task has started, so a failed start loses nothing.
 		const images = agents.attached()[DRAFT_IMAGES.task] ?? [];
+		if (this.work !== 'open') {
+			if (await this._pipelines.start({ task: this.task, kind: this.work, branch: this.branch, images })) {
+				agents.takeAttached(DRAFT_IMAGES.task);
+				this.close('new-agent');
+			}
+			return;
+		}
 		if (await agents.start({ task: this.task, branch: this.isolate ? this.branch : '', mode: this.mode, attempts: this.isolate ? this.attempts : 1, images })) {
 			agents.takeAttached(DRAFT_IMAGES.task);
 			this.close('new-agent');
@@ -972,7 +1003,8 @@ export class AgentsComponent {
 
 	askRemove(session: AgentSession): void {
 		this.doomed = { session };
-		this.alsoTree = false;
+		// A task's worktree and branch are its own: they go with it unless the box is unticked.
+		this.alsoTree = !!session.pipeline && session.pipeline.step !== 'done';
 		this._dialogs.open('remove-agent' as DialogId);
 	}
 
@@ -984,7 +1016,11 @@ export class AgentsComponent {
 	async confirmRemove(): Promise<void> {
 		const doomed = this.doomed;
 		this.close('remove-agent');
-		if (doomed?.session) {
+		if (doomed?.session?.pipeline && this.alsoTree) {
+			// Worktree, branch and its pushed copy, then the session.
+			await this._pipelines.discard(doomed.session.id);
+			await this.agents.remove(doomed.session, false);
+		} else if (doomed?.session) {
 			await this.agents.remove(doomed.session, this.alsoTree);
 		} else if (doomed?.tree) {
 			await this.agents.removeWorktree(doomed.tree.path, true);

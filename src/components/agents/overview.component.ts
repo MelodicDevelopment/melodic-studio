@@ -3,6 +3,8 @@ import { Service } from '@melodicdev/core/injection';
 import { html, css, repeat } from '@melodicdev/core/template';
 import { AgentsStore, nameOf, stateLabel, stateOf, summary, type AgentSession } from '../../services/agents.store';
 import { RepoStore } from '../../services/repo.store';
+import { PipelineStore } from '../../services/pipeline.store';
+import { COLUMNS, STEPS, STEP_LABELS, columnOf, kindOf, spentOf, statusOf, type Pipeline } from '../../shared/pipeline';
 import { WorkspaceStore, type Conversation } from '../../services/workspace.store';
 import { isMac } from '../../services/backend.service';
 import { baseName } from '../../services/agent-paths';
@@ -50,6 +52,77 @@ function mark(bucket: Bucket) {
 	return bucket === 'working' ? html`<span class="eq" aria-label="Working"><b></b><b></b><b></b></span>` : html`<span class="dot ${bucket}" aria-hidden="true"></span>`;
 }
 
+/** A task's six steps as a row of small pads. */
+function miniTrack(p: Pipeline) {
+	return html`<div class="mini" aria-hidden="true">${STEPS.map((name) => html`<span class="mp ${p.steps[name].state}">${p.steps[name].state === 'run' ? html`<span class="eq"><b></b><b></b><b></b></span>` : ''}${STEP_LABELS[name]}</span>`)}</div>`;
+}
+
+/** What a task's card offers for what its pipeline waits on. Shipping opens it: the Merge dialog lives in its pane. */
+function pipelineActs(self: AgentsOverviewComponent, s: AgentSession, p: Pipeline) {
+	const pipes = self.pipelines;
+	const running = s.status === 'running' || (!p.waiting && p.step !== 'done');
+	if (running) {
+		return html`<ml-button variant="outline" size="sm" @ml:click=${() => void pipes.stop(s.id)}>Stop</ml-button>`;
+	}
+	if (!p.waiting) {
+		return '';
+	}
+	switch (p.reason) {
+		case 'approve':
+			return html`${(s.brief?.choices ?? []).map((c) => html`<ml-button variant="outline" size="sm" title="Approve the plan with this answer" @ml:click=${() => void pipes.approve(s.id, c)}>${c}</ml-button>`)}
+				<ml-button variant="primary" size="sm" @ml:click=${() => void pipes.approve(s.id)}>Approve plan</ml-button>`;
+		case 'ship':
+			return html`<ml-button variant="primary" size="sm" title="Open it to merge or open a pull request" @ml:click=${() => self.open(s)}>Ship…</ml-button>`;
+		case 'limit':
+			return html`<ml-button variant="primary" size="sm" @ml:click=${() => void pipes.oneMoreRound(s.id)}>One more round</ml-button>`;
+		default:
+			return html`<ml-button variant="primary" size="sm" @ml:click=${() => void pipes.carryOn(s.id)}>Carry on</ml-button>`;
+	}
+}
+
+/** A task on the board: compact, in the column of the step it is at. */
+function boardCard(self: AgentsOverviewComponent, s: AgentSession, p: Pipeline) {
+	const running = s.status === 'running' || (!p.waiting && p.step !== 'done');
+	const tone = p.waiting ? 'needs' : running ? 'working' : 'done';
+	return html`
+		<button class="bcard ${tone}" title=${`${s.task ?? s.title}\n\nOpen this task`} @click=${() => self.open(s)}>
+			<span class="btop"><span class="bkind">${kindOf(p.kind).name}</span>${repoChip(self, s.repoId)}<span class="grow"></span><span class="bcost">$${spentOf(p, s.cost).toFixed(2)}</span></span>
+			<span class="bname">${nameOf(s)}</span>
+			<span class="bstat ${tone}">${running ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : ''}${statusOf(p, s.status === 'running')}</span>
+		</button>
+	`;
+}
+
+/** Every task with a pipeline, in the column of its step: Plan, Code, Review, Test, Fix, Ship, Done. */
+function board(self: AgentsOverviewComponent, all: Entry[]) {
+	const tasks = all.filter((e): e is Entry & { session: AgentSession } => !!e.session?.pipeline);
+	const today = startOfToday();
+	const others = all.length - tasks.length;
+	return html`
+		<div class="boardwrap">
+			<div class="board">
+				<div class="loopband"><span class="words"><ml-icon icon="arrows-clockwise" size="xs"></ml-icon>The loop: Code → Review → Test → Fix, until every test passes. After 3 fixes it asks you.</span><span class="bracket"></span></div>
+				${COLUMNS.map((name, i) => {
+					// Done shows today's; older ones are in the list.
+					const cards = tasks.filter((e) => columnOf(e.session.pipeline!) === i && (i < 6 || e.at >= today));
+					return html`
+						<section class="col" aria-label=${name}>
+							<h2 class="colh">${name} <span>${cards.length}</span></h2>
+							${repeat(
+								cards,
+								(e) => e.key,
+								(e) => boardCard(self, e.session, e.session.pipeline!)
+							)}
+							${cards.length ? '' : html`<span class="empty">Nothing here</span>`}
+						</section>
+					`;
+				})}
+			</div>
+			${others ? html`<p class="others">${others} open-ended ${others === 1 ? 'session or conversation is' : 'sessions and conversations are'} in the list.</p>` : ''}
+		</div>
+	`;
+}
+
 /** The box for answering a session from its card, without going to it. */
 function replyBox(self: AgentsOverviewComponent, s: AgentSession) {
 	return html`
@@ -77,13 +150,16 @@ function sessionCard(self: AgentsOverviewComponent, e: Entry & { session: AgentS
 				<button class="name" title=${`${s.title}\n\nOpen this agent`} @click=${() => self.open(s)}>${nameOf(s)}${s.group ? html`<small> · attempt ${s.attempt}</small>` : ''}</button>
 				<span class="when">${relativeTime(s.updated)}</span>
 			</header>
+			${s.pipeline ? miniTrack(s.pipeline) : ''}
 			<div class="where">${repoChip(self, s.repoId)}${s.kind === 'task' && s.branch ? html`<span class="branch" title=${s.branch}>${s.branch}</span>` : s.kind === 'ask' ? html`<span class="branch">Question</span>` : ''}${s.cost ? html`<span>$${s.cost.toFixed(2)}</span>` : ''}</div>
 			${lead ? html`<p class="lead ${sum.needs ? 'needs' : running ? 'now' : ''}">${running && !sum.needs ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : ''}<span>${lead}</span></p>` : ''}
 			${sum.needs && sum.did ? html`<p class="did"><b>Did</b> ${sum.did}</p>` : ''}
 			${sum.asked ? html`<p class="asked"><b>Asked</b> ${sum.asked}</p>` : ''}
 			${replying
 				? replyBox(self, s)
-				: html`
+				: s.pipeline
+					? html`<div class="acts">${pipelineActs(self, s, s.pipeline)}${canReply ? html`<ml-button variant="outline" size="sm" title="Answer it from here" @ml:click=${() => self.startReply(s)}>Reply…</ml-button>` : ''}<span class="grow"></span><ml-button variant="ghost" size="sm" @ml:click=${() => self.open(s)}>Open<ml-icon slot="icon-end" icon="arrow-right" size="xs"></ml-icon></ml-button></div>`
+					: html`
 					<div class="acts">
 						${sum.choices.map((c) => html`<ml-button variant="primary" size="sm" title="Send this as your reply" @ml:click=${() => void self.agents.send(s.id, c)}>${c}</ml-button>`)}
 						${s.review && !running && !sum.choices.length ? html`<ml-button variant="primary" size="sm" title="Go to its checkout, on the Changes tab" @ml:click=${() => self.review(s)}>Review changes</ml-button>` : ''}
@@ -163,16 +239,37 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
 		const card = (e: Entry) => (e.session ? sessionCard(self, e as Entry & { session: AgentSession }) : convCard(self, e as Entry & { conv: Conversation }));
 		const cards = (list: Entry[]) => html`<div class="grid">${repeat(list, (e) => e.key, card)}</div>`;
 		const desk = !!self.repoId;
+		const toggle = html`
+			<div class="views" role="group" aria-label="View">
+				<button class=${self.view === 'list' ? 'on' : ''} aria-pressed=${self.view === 'list' ? 'true' : 'false'} @click=${() => self.setView('list')}><ml-icon icon="rows" size="xs"></ml-icon>List</button>
+				<button class=${self.view === 'board' ? 'on' : ''} aria-pressed=${self.view === 'board' ? 'true' : 'false'} @click=${() => self.setView('board')}><ml-icon icon="kanban" size="xs"></ml-icon>Board</button>
+			</div>
+		`;
+		if (self.view === 'board') {
+			return html`
+				<div class="page wide ${desk ? 'desk' : ''}">
+					<div class="top">
+						${desk ? html`<span></span>` : html`<div class="titles"><h1>Agents</h1><p>Every repository's tasks, by the step they are at.</p></div>`}
+						<div class="topacts">${toggle}${!desk && repo ? html`<ml-button variant="outline" size="sm" @ml:click=${() => self.repos.showOverview(false)}><ml-icon slot="icon-start" icon="arrow-left"></ml-icon>Back to ${repo.name}</ml-button>` : ''}</div>
+					</div>
+					${board(self, all)}
+				</div>
+			`;
+		}
 		return html`
 			<div class="page ${desk ? 'desk' : ''}">
+				${desk ? html`<div class="top"><span></span><div class="topacts">${toggle}</div></div>` : ''}
 				${desk ? '' : html`<div class="top">
 					<div class="titles">
 						<h1>Agents</h1>
 						<p>Every repository in Melodic Studio. Answer from a card, or open it to see the whole conversation.</p>
 					</div>
-					${repo
-						? html`<ml-button variant="outline" size="sm" title=${`Back to ${repo.name} (${isMac() ? '⌘' : 'Ctrl+'}Shift+A)`} @ml:click=${() => self.repos.showOverview(false)}><ml-icon slot="icon-start" icon="arrow-left"></ml-icon>Back to ${repo.name}</ml-button>`
-						: ''}
+					<div class="topacts">
+						${toggle}
+						${repo
+							? html`<ml-button variant="outline" size="sm" title=${`Back to ${repo.name} (${isMac() ? '⌘' : 'Ctrl+'}Shift+A)`} @ml:click=${() => self.repos.showOverview(false)}><ml-icon slot="icon-start" icon="arrow-left"></ml-icon>Back to ${repo.name}</ml-button>`
+							: ''}
+					</div>
 				</div>`}
 				${needs.length + working.length === 0
 					? html`<div class="calm"><h2>Nothing is waiting on you</h2><p>No agent is working either. ${desk ? html`<b>New</b> in the sidebar starts one.` : 'Start one from the Agents tab of a repository.'}</p></div>`
@@ -462,12 +559,245 @@ function section(label: string, key: Bucket, list: Entry[], body: unknown) {
 		.more:hover {
 			color: var(--ml-color-text);
 		}
+		.page.wide {
+			max-width: none;
+		}
+		.topacts {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+		}
+		.views {
+			display: flex;
+			gap: 2px;
+			padding: 2px;
+			border: 1px solid var(--ml-color-border);
+			border-radius: 8px;
+		}
+		.views button {
+			all: unset;
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			height: 24px;
+			padding: 0 10px;
+			border-radius: 6px;
+			font-size: 12px;
+			font-weight: 600;
+			color: var(--ml-color-text-muted);
+			cursor: pointer;
+		}
+		.views button.on {
+			background: var(--ms-seg-on);
+			box-shadow: var(--ms-seg-shadow);
+			color: var(--ml-color-text);
+		}
+		.views button:focus-visible,
+		.bcard:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: 2px;
+		}
+		/* A task's steps on its card. */
+		.mini {
+			display: grid;
+			grid-template-columns: repeat(6, minmax(0, 1fr));
+			gap: 3px;
+		}
+		.mp {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 4px;
+			height: 20px;
+			border-radius: 5px;
+			font-size: 10.5px;
+			font-weight: 600;
+			border: 1px dashed var(--ml-color-border-strong);
+			color: var(--ml-color-text-subtle);
+			overflow: hidden;
+		}
+		.mp.done {
+			border: 1px solid var(--ml-color-border);
+			background: var(--ml-color-surface);
+			color: var(--ml-color-text-secondary);
+		}
+		.mp.run {
+			border: 1px solid color-mix(in srgb, var(--ms-run) 55%, transparent);
+			background: color-mix(in srgb, var(--ms-run) 12%, transparent);
+			color: var(--ms-run-text);
+		}
+		.mp.you {
+			border: 1px solid var(--ms-you);
+			background: color-mix(in srgb, var(--ms-you) 13%, transparent);
+			color: var(--ml-color-text-link);
+		}
+		.mp.warn {
+			border: 1px solid color-mix(in srgb, var(--ml-color-warning) 50%, transparent);
+			color: var(--ml-color-warning);
+		}
+		.mp.skip {
+			opacity: 0.5;
+			text-decoration: line-through;
+		}
+		/* ---- the board ---- */
+		.boardwrap {
+			overflow-x: auto;
+			padding-bottom: 6px;
+		}
+		.board {
+			display: grid;
+			grid-template-columns: repeat(7, minmax(180px, 1fr));
+			gap: 10px;
+		}
+		.loopband {
+			grid-row: 1;
+			grid-column: 2 / span 4;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 3px;
+		}
+		.loopband .words {
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			font-size: 11.5px;
+			font-weight: 600;
+			color: var(--ms-run-text);
+			text-align: center;
+		}
+		.loopband .bracket {
+			align-self: stretch;
+			height: 8px;
+			border: 2px solid color-mix(in srgb, var(--ms-run) 50%, transparent);
+			border-bottom: 0;
+			border-radius: 7px 7px 0 0;
+		}
+		.col {
+			grid-row: 2;
+			min-width: 0;
+			min-height: 260px;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			padding: 10px;
+			border: 1px solid var(--ml-color-border-muted);
+			border-radius: 12px;
+			background: var(--ml-color-surface);
+		}
+		.colh {
+			margin: 0 2px 2px;
+			font-family: var(--ms-font-display);
+			font-size: 14px;
+			font-weight: 600;
+		}
+		.colh span {
+			font-family: var(--ml-font-sans);
+			font-size: 12px;
+			font-weight: 500;
+			color: var(--ml-color-text-muted);
+		}
+		.empty {
+			padding: 12px 6px;
+			border: 1px dashed var(--ml-color-border);
+			border-radius: 8px;
+			font-size: 12px;
+			text-align: center;
+			color: var(--ml-color-text-subtle);
+		}
+		.bcard {
+			all: unset;
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			padding: 10px;
+			border-radius: 9px;
+			border: 1px solid var(--ml-color-border);
+			background: var(--ml-color-surface-raised);
+			cursor: pointer;
+		}
+		.bcard.needs {
+			border-color: var(--ms-you);
+		}
+		.bcard.working {
+			border-color: color-mix(in srgb, var(--ms-run) 45%, var(--ml-color-border));
+		}
+		.bcard.done {
+			opacity: 0.8;
+		}
+		.bcard:hover {
+			background: var(--ms-hover);
+		}
+		.btop {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			min-width: 0;
+		}
+		.bkind {
+			flex: none;
+			padding: 0 7px;
+			border-radius: 999px;
+			background: var(--ms-hover);
+			font-size: 11px;
+			font-weight: 600;
+			color: var(--ml-color-text-secondary);
+		}
+		.bcost {
+			flex: none;
+			font-family: var(--ml-font-mono);
+			font-size: 11px;
+			color: var(--ml-color-text-muted);
+		}
+		.bname {
+			font-weight: 600;
+			line-height: 1.35;
+			overflow-wrap: anywhere;
+		}
+		.bstat {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			font-size: 12px;
+			line-height: 1.35;
+			color: var(--ml-color-text-muted);
+		}
+		.bstat.needs {
+			color: var(--ml-color-text-link);
+		}
+		.bstat.working {
+			color: var(--ms-run-text);
+		}
+		.others {
+			margin-top: 10px;
+			font-size: 12.5px;
+			color: var(--ml-color-text-muted);
+		}
 	`,
 })
 export class AgentsOverviewComponent {
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 	@Service(RepoStore) readonly repos!: RepoStore;
 	@Service(WorkspaceStore) readonly workspace!: WorkspaceStore;
+	@Service(PipelineStore) readonly pipelines!: PipelineStore;
+
+	/** List or board, remembered (localStorage `studio.agents.view`). */
+	view: 'list' | 'board' = (() => {
+		try {
+			return localStorage.getItem('studio.agents.view') === 'board' ? 'board' : 'list';
+		} catch {
+			return 'list';
+		}
+	})();
+
+	setView(view: 'list' | 'board'): void {
+		this.view = view;
+		try {
+			localStorage.setItem('studio.agents.view', view);
+		} catch {
+			/* it holds for this run */
+		}
+	}
 
 	/**
 	 * Set: the desk, the Agents tab's main pane while no session is open, listing this repository only,
@@ -517,7 +847,7 @@ export class AgentsOverviewComponent {
 			return;
 		}
 		this.cancelReply();
-		void this.agents.send(s.id, text);
+		void (s.pipeline ? this.pipelines.message(s.id, text) : this.agents.send(s.id, text));
 	}
 
 	replyKey(e: KeyboardEvent, s: AgentSession): void {

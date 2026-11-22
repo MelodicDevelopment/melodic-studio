@@ -80,6 +80,31 @@ export interface AgentRunOptions {
 	/** Images that go with the message, by the names they were saved under for this session (`agentImageSave`). */
 	images?: string[];
 }
+/** A test run in an agent's worktree (src-tauri/src/pipeline.rs). `output` is the end of what it printed. */
+export interface PipelineTestRun {
+	ok: boolean;
+	code: number | null;
+	output: string;
+	command: string;
+	millis: number;
+	timedOut: boolean;
+	stopped: boolean;
+}
+/** What cleaning up after a task removed (src-tauri/src/pipeline.rs `clean_up`). */
+export interface PipelineCleaned {
+	removedTree: boolean;
+	deletedBranch: boolean;
+	/** Remote copies deleted, as `origin/agent/x`. */
+	deletedRemote: string[];
+	problems: string[];
+}
+/** An agent's work committed (as the user) and pushed on its branch. */
+export interface PipelineCommitted {
+	committed: boolean;
+	head: string;
+	pushed: boolean;
+	pushError: string | null;
+}
 /** Something a checkout can run, found in its project files (src-tauri/src/targets.rs). */
 export interface RunTarget {
 	id: string;
@@ -759,6 +784,17 @@ export class BackendService {
 	/** One whole commit (message, stat, patch), capped. */
 	aiCommitPatch(id: string, hash: string) { return this.call<AiDiff>('ai_commit_patch', { id, hash }); }
 	/** `base`: the branch to compare with (scope `branch`) or the commit the work started at (scope `work`); null for the default of each. */
+	/** The test targets in an agent's worktree. */
+	pipelineTests(id: string, cwd: string) { return this.call<RunTarget[]>('pipeline_tests', { id, cwd }); }
+	/** Run a test target in an agent's worktree to the end; `key` is what `pipelineTestStop` takes. */
+	pipelineTestRun(id: string, cwd: string, key: string, target: string) { return this.call<PipelineTestRun>('pipeline_test_run', { id, cwd, key, target }); }
+	pipelineTestStop(key: string) { return this.call<void>('pipeline_test_stop', { key }); }
+	/** Commit everything in an agent's worktree as the user, then push its branch. */
+	pipelineCommit(id: string, cwd: string, message: string) { return this.call<PipelineCommitted>('pipeline_commit', { id, cwd, message }); }
+	/** Remove a task's worktree and delete its branch, here and on the remote. */
+	pipelineClean(id: string, cwd: string, branch: string) { return this.call<PipelineCleaned>('pipeline_clean', { id, cwd, branch }); }
+	/** What a task's review covers: its worktree since `base`. */
+	pipelineReviewDiff(id: string, cwd: string, base: string | null) { return this.call<ReviewDiff>('pipeline_review_diff', { id, cwd, base }); }
 	aiReviewDiff(id: string, scope: ReviewScope, base: string | null = null) { return this.call<ReviewDiff>('ai_review_diff', { id, scope, base }); }
 	aiRangeFileDiff(id: string, base: string, head: string, path: string) { return this.call<DiffResult>('ai_range_file_diff', { id, base, head, path }); }
 	aiConflictFile(id: string, path: string) { return this.call<ConflictFile>('ai_conflict_file', { id, path }); }
@@ -1135,6 +1171,8 @@ class DemoBackend {
 	/** The demo investigation's question that is waiting for an answer: its request id and the session it belongs to. */
 	private demoAsk: { request: string; key: string } | null = null;
 	private demoAsks = 0;
+	/** Worktrees whose tests ran once already (the first run fails a test). */
+	private readonly demoTested = new Set<string>();
 
 	/** The rest of the demo investigation, once the user has answered its question. */
 	private demoInvestigate(key: string, allowed: boolean): void {
@@ -1490,6 +1528,30 @@ class DemoBackend {
 			case 'investigate_close':
 			case 'investigate_commit':
 				return;
+			case 'pipeline_tests':
+				return DEMO_TARGETS.filter((t) => t.kind === 'test');
+			case 'pipeline_test_run': {
+				// The first run of each worktree fails one test, so the preview shows a fix; later runs pass.
+				const where = String(args.cwd);
+				const first = !this.demoTested.has(where);
+				this.demoTested.add(where);
+				const result = first
+					? { ok: false, code: 1, output: ' ✓ src/player/queue.test.ts (11)\n × src/player/repeat.test.ts > restarts the track on repeat-one 4ms\n Tests  1 failed | 11 passed (12)\n', command: 'npm test', millis: 1500, timedOut: false, stopped: false }
+					: { ok: true, code: 0, output: ' ✓ src/player/queue.test.ts (11)\n ✓ src/player/repeat.test.ts (1)\n Tests  12 passed (12)\n', command: 'npm test', millis: 1500, timedOut: false, stopped: false };
+				return new Promise((resolve) => setTimeout(() => resolve(result), 1500));
+			}
+			case 'pipeline_test_stop':
+				return;
+			case 'pipeline_clean': {
+				const had = this.worktreeList.some((w) => w.path === args.cwd);
+				this.worktreeList = this.worktreeList.filter((w) => w.path !== args.cwd).map((w) => ({ ...w, active: had && w.active ? w.isMain : w.active }));
+				this.branchList = this.branchList.filter((b) => b.name !== args.branch && b.name !== `origin/${String(args.branch)}`);
+				return { removedTree: had, deletedBranch: true, deletedRemote: [`origin/${String(args.branch)}`], problems: [] };
+			}
+			case 'pipeline_commit':
+				return { committed: true, head: Math.random().toString(16).slice(2).padEnd(40, '0'), pushed: true, pushError: null };
+			case 'pipeline_review_diff':
+				return this.call('ai_review_diff', { id: args.id, scope: 'work', base: args.base });
 			case 'replay_read':
 				return demoReplay(DEMO_ID);
 			case 'plugin:opener|open_url':
@@ -1547,6 +1609,15 @@ class DemoBackend {
 					return;
 				}
 				const rules = (args.options as AgentRunOptions | null)?.tools;
+				if (String(args.prompt).startsWith('[pipeline-plan]')) {
+					// A task's plan: read-only, ends with a question to approve it with.
+					say({ type: 'system', subtype: 'init', session_id: 'demo-session' }, 200);
+					say({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'src/player/queue.ts' } }] } }, 700);
+					say({ type: 'assistant', message: { content: [{ type: 'text', text: 'Wrap the queue when repeat is on, in `src/player/queue.ts`.\n\n1. Make `next()` go back to the first track when repeat is on (`src/player/queue.ts`).\n2. Restart the current track for repeat-one (`src/player/repeat.ts`).\n3. Tests: wrapping, repeat-one, and an empty queue (`src/player/queue.test.ts`).\n\n```brief\ntitle: Queue wraps on repeat\ndid: Planned the change in 3 steps across 2 files.\nneeds: Should repeat-one restart the same track?\nchoice: Yes, restart it\nchoice: No, wrap as well\n```' }] } }, 1800);
+					say({ type: 'result', subtype: 'success', is_error: false, result: '', total_cost_usd: 0.08 }, 1900);
+					this.emit('agent-done', { key, ok: true, error: '' }, 1950);
+					return;
+				}
 				if (rules?.includes('Read')) {
 					// A read-only question (AgentsStore.ask): an answer with file and commit references to click.
 					demoAsk(String(args.prompt), rules.some((r) => r.startsWith('Bash(git')), this.commits).forEach((event, i) => say(event, 300 + i * 600));

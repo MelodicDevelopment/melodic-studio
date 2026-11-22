@@ -16,6 +16,7 @@ mod host_ops;
 mod lsp;
 mod menu;
 mod paths;
+mod pipeline;
 mod proc;
 mod recent;
 mod run;
@@ -83,6 +84,7 @@ pub fn run() {
             conversation::clean(app.handle());
             app.manage(run::Runs::default());
             app.manage(investigate::Investigations::default());
+            app.manage(std::sync::Arc::new(pipeline::Tests::default()));
             investigate::clean(app.handle());
             Ok(())
         })
@@ -179,6 +181,12 @@ pub fn run() {
             investigate::investigate_answer,
             investigate::investigate_close,
             investigate::investigate_commit,
+            pipeline::pipeline_tests,
+            pipeline::pipeline_test_run,
+            pipeline::pipeline_test_stop,
+            pipeline::pipeline_commit,
+            pipeline::pipeline_review_diff,
+            pipeline::pipeline_clean,
             investigate::replay_read,
             sessions::claude_sessions,
             lsp::lsp_servers,

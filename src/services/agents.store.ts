@@ -35,6 +35,7 @@ import { changesSince, languageOf } from './lsp/protocol';
 import { leftoverRecording } from '../shared/replay';
 import type { SpottedError } from '../shared/error-spotting';
 import { parseBrief, plainSummary, summaryOf, type Brief, type Summary } from '../shared/brief';
+import { statusOf, type Pipeline } from '../shared/pipeline';
 
 export { plainSummary };
 
@@ -99,6 +100,10 @@ export interface AgentSession {
 	brief: Brief | null;
 	/** A short name for the task, from its first brief. Null until then: `title` (the first words of the prompt) stands in. */
 	name: string | null;
+	/** A task that runs Plan → Code → Review → Test → Fix → Ship (`shared/pipeline.ts`). Null for an open-ended session. */
+	pipeline?: Pipeline | null;
+	/** The task as the user wrote it, for a pipeline's later steps. */
+	task?: string;
 }
 
 /** The language servers' verdict on what a task changed; see `CheckResult`. `problems` hold compiler output: text only. */
@@ -186,6 +191,8 @@ export interface NewTask {
 	attempts?: number;
 	/** Images that go with the task (every attempt gets them). */
 	images?: Attachment[];
+	/** Run it as a pipeline (one attempt, in its own worktree). The first turn is then the pipeline's, not the task as written. */
+	pipeline?: Pipeline;
 }
 
 /** A link in an agent's answer: a place in a file, a commit, or a web address. */
@@ -219,6 +226,14 @@ export function stateOf(s: AgentSession): AgentState {
 	// An investigation that has asked to run something is waiting on the user, though its turn is still going.
 	if (s.investigation?.approval) {
 		return 'review';
+	}
+	const p = s.pipeline;
+	if (p) {
+		// A pipeline works between Claude's turns too (review, tests), and says itself when it waits on the user.
+		if (s.status === 'running' || (!p.waiting && p.step !== 'done')) {
+			return 'working';
+		}
+		return p.waiting ? 'review' : 'finished';
 	}
 	if (s.status === 'running') {
 		return 'working';
@@ -291,6 +306,13 @@ export function nameOf(s: AgentSession): string {
 /** Where a session stands in three lines (asked, did or doing now, needs), for lists that show many at once. */
 export function summary(s: AgentSession): Summary {
 	const approval = s.investigation?.approval;
+	const p = s.pipeline;
+	if (p) {
+		// A task's pipeline says where it stands; the brief only adds what the last turn did, and the plan's choices.
+		const base = summaryOf({ kind: s.kind, running: s.status === 'running', failed: false, stopped: false, review: false, unread: false, isolated: s.isolated, approval: null, brief: s.brief, items: s.items });
+		const working = stateOf(s) === 'working';
+		return { asked: s.task || base.asked, now: working ? statusOf(p, s.status === 'running') : null, did: base.did, needs: p.waiting ? (p.note ?? 'Needs you') : null, choices: p.reason === 'approve' ? (s.brief?.choices ?? []) : [] };
+	}
 	return summaryOf({
 		kind: s.kind,
 		running: s.status === 'running',
@@ -370,10 +392,21 @@ function revive(saved: unknown[]): AgentSession[] {
 				status: s.status === 'failed' ? 'failed' : 'idle',
 				// Neither does a question Claude was waiting on, or the app it had running.
 				investigation: s.investigation ? { ...s.investigation, approval: null, checking: false, tab: null } : null,
+				// Nor a step of a pipeline: it waits for the user to carry on.
+				pipeline: s.pipeline ? reviveDuring(s.pipeline) : null,
 			}));
 	} catch {
 		return [];
 	}
+}
+
+/** A pipeline read back after a restart: a step that was going when the app closed waits for the user. */
+function reviveDuring(p: Pipeline): Pipeline {
+	if (p.step === 'done' || p.waiting) {
+		return p;
+	}
+	const step = p.steps[p.step];
+	return { ...p, waiting: true, note: 'Melodic Studio closed while this step was going. Carry on to run it again.', steps: { ...p.steps, [p.step]: { ...step, state: 'you' } } };
 }
 
 /** The branch each attempt works on: `agent/x`, `agent/x-2`, `agent/x-3`. */
@@ -482,6 +515,10 @@ export class AgentsStore {
 	readonly unread = computed<number>(() => this.sessions().filter((s) => s.unread).length);
 
 	private _listening: Promise<void> | null = null;
+	/** Called after a turn of any session has ended (`PipelineStore` drives its tasks from here). */
+	readonly turnEnded = new Map<string, (id: string, ok: boolean, stopped: boolean) => void>();
+	/** Called when a task's work has landed: merged from here, or found in the main branch (`PipelineStore` cleans up then). */
+	readonly landed = new Map<string, (id: string) => void>();
 	/**
 	 * Images waiting in a composer: by session, and by `DRAFT_IMAGES` for the boxes that start one.
 	 * In memory only, like the text beside them, but they outlive the pane (rebuilt on a tab switch).
@@ -582,11 +619,36 @@ export class AgentsStore {
 		for (const s of settled) {
 			this.update(s.id, (x) => ({ ...x, review: false }), false);
 		}
+		// A pipeline waiting to ship whose worktree is gone, or whose work is in the main branch already, has shipped.
+		for (const s of this.sessions()) {
+			const p = s.pipeline;
+			if (s.repoId !== repoId || !p || p.step !== 'ship' || !p.waiting || s.status === 'running') {
+				continue;
+			}
+			const tree = trees.find((w) => samePath(w.path, s.cwd));
+			if (!tree || (tree.changes === 0 && tree.landed)) {
+				this.update(s.id, (x) => ({ ...settledOf(x), pipeline: x.pipeline ? { ...x.pipeline, step: 'done', waiting: false, note: null, steps: { ...x.pipeline.steps, ship: { ...x.pipeline.steps.ship, state: 'done', summary: tree ? 'Its work is in the main branch.' : 'Its worktree was removed.' } } } : null }), false);
+				// Its commits are in the main branch (a pull request merged on the host): what is left of it goes.
+				if (tree) {
+					this.landed.forEach((hook) => hook(s.id));
+				}
+			}
+		}
 	}
 
 	/** The user says a session needs nothing more from them. Its worktree and branch stay as they are. */
 	markDone(id: string): void {
-		this.update(id, (s) => ({ ...settledOf(s), unread: false }), false);
+		this.update(id, (s) => ({ ...settledOf(s), unread: false, pipeline: s.pipeline ? { ...s.pipeline, step: 'done', waiting: false, note: null } : s.pipeline }), false);
+	}
+
+	/** Change a session's pipeline. `touch` false leaves "how long ago" alone. */
+	patchPipeline(id: string, change: (p: Pipeline, s: AgentSession) => Pipeline, touch = true): void {
+		this.update(id, (s) => (s.pipeline ? { ...s, pipeline: change(s.pipeline, s) } : s), touch);
+	}
+
+	/** A session by id, in any repository. */
+	get(id: string): AgentSession | null {
+		return this.find(id);
 	}
 
 	/**
@@ -805,13 +867,13 @@ export class AgentsStore {
 			items: !ok && !stopped ? [...s.items, { kind: 'error', text: error || 'Claude Code exited with an error.' }] : s.items,
 			unread: !stopped && !watching,
 			// A plan changes nothing, and neither does a question.
-			review: s.review || (ok && !stopped && s.kind === 'task' && s.mode !== 'plan'),
+			review: s.review || (ok && !stopped && s.kind === 'task' && s.mode !== 'plan' && !s.pipeline),
 		}));
 		this.settle(key);
 		if (session.kind === 'investigate') {
 			// Its answer is read and its worktree checked for leftover recording before anything is announced.
 			void this.conclude(key, ok && !stopped);
-		} else if (!stopped && !watching) {
+		} else if (!stopped && !watching && !session.pipeline) {
 			this.announce(this.find(key) ?? session, ok);
 		}
 		if (ok && !stopped && session.kind === 'task' && session.mode !== 'plan') {
@@ -821,6 +883,9 @@ export class AgentsStore {
 			// Whatever it changed should show up without waiting for the next poll.
 			void this.repos.refresh();
 			void this.loadWorktrees();
+		}
+		for (const hook of this.turnEnded.values()) {
+			hook(key, ok, stopped);
 		}
 	}
 
@@ -942,7 +1007,7 @@ export class AgentsStore {
 			const branch = task.branch.trim();
 			const made: { cwd: string; branch: string | null; base: string | null }[] = [];
 			if (branch) {
-				const wanted = Math.min(MAX_ATTEMPTS, Math.max(1, Math.floor(task.attempts ?? 1)));
+				const wanted = task.pipeline ? 1 : Math.min(MAX_ATTEMPTS, Math.max(1, Math.floor(task.attempts ?? 1)));
 				let failure: unknown = null;
 				for (let n = 1; n <= wanted; n++) {
 					try {
@@ -968,11 +1033,13 @@ export class AgentsStore {
 				made.push({ cwd: repo.worktree ?? repo.path, branch: this.repos.status()?.branch ?? null, base: this.repos.status()?.head ?? null });
 			}
 			const group = made.length > 1 ? crypto.randomUUID() : null;
-			const sessions = made.map((m, i) => this.newSession(repo.id, prompt, m.cwd, m.branch, { isolated: !!branch, mode: task.mode, base: m.base, group, attempt: i + 1 }));
+			const sessions = made.map((m, i) => this.newSession(repo.id, prompt, m.cwd, m.branch, { isolated: !!branch, mode: task.mode, base: m.base, group, attempt: i + 1, pipeline: task.pipeline ?? null, task: prompt }));
 			this.save([...this.sessions(), ...sessions]);
 			this.select(sessions[0].id);
 			this.comparing.set(group);
-			await Promise.all(sessions.map((s) => this.send(s.id, prompt, { images: task.images })));
+			if (!task.pipeline) {
+				await Promise.all(sessions.map((s) => this.send(s.id, prompt, { images: task.images })));
+			}
 			if (branch) {
 				await this.loadWorktrees();
 				await this.repos.loadBranches(); // the new branches belong in the toolbar's list
@@ -1112,7 +1179,7 @@ export class AgentsStore {
 	 * the prompt itself; `raw` sends the prompt as it is (an investigation otherwise wraps a follow-up in its rules).
 	 * `images` go with the message: they are saved in the session's folder first, and the native side reads them there.
 	 */
-	async send(id: string, prompt: string, options: { shown?: string; raw?: boolean; images?: Attachment[] } = {}): Promise<void> {
+	async send(id: string, prompt: string, options: { shown?: string; raw?: boolean; images?: Attachment[]; turn?: { mode?: AgentMode; tools?: string[]; builtin?: string[]; model?: string } } = {}): Promise<void> {
 		const session = this.find(id);
 		const text = prompt.trim();
 		const images = options.images ?? [];
@@ -1121,7 +1188,7 @@ export class AgentsStore {
 		}
 		await this.listen();
 		const names = images.map((a) => a.name);
-		const model = session.model ? { model: session.model } : {};
+		const model = options.turn?.model ? { model: options.turn.model } : session.model ? { model: session.model } : {};
 		const sent: AgentItem = { kind: 'user', text: options.shown ?? text, ...(names.length ? { images: names } : {}) };
 		// What the language servers said is about the files as they were; the turn changes them.
 		this.update(id, (s) => ({ ...s, status: 'running', stopped: false, unread: false, check: null, brief: null, items: [...s.items, sent] }));
@@ -1146,7 +1213,9 @@ export class AgentsStore {
 				await this.backend.agentStart(session.repoId, session.cwd, id, wire, 'default', session.sessionId, { tools: rules, builtin: toolNames(rules), lean: true, images: names, ...model });
 			} else {
 				// A task ends each turn with a brief (BRIEF_RULES in agent.rs), which lists show instead of the reply.
-				await this.backend.agentStart(session.repoId, session.cwd, id, text, session.mode, session.sessionId, { brief: true, images: names, ...model });
+				const turn = options.turn ?? {};
+				const limits = { ...(turn.tools ? { tools: turn.tools } : {}), ...(turn.builtin ? { builtin: turn.builtin } : {}) };
+				await this.backend.agentStart(session.repoId, session.cwd, id, text, turn.mode ?? session.mode, session.sessionId, { brief: true, images: names, ...limits, ...model });
 			}
 		} catch (e) {
 			this.update(id, (s) => ({ ...s, status: 'failed', items: [...s.items, { kind: 'error', text: asAppError(e).message }] }));
@@ -1232,7 +1301,7 @@ export class AgentsStore {
 			}
 			merged = await this.repos.merge(session.branch);
 			if (merged) {
-				this.update(session.id, settledOf, false);
+				this.update(session.id, (x) => ({ ...settledOf(x), pipeline: x.pipeline ? { ...x.pipeline, step: 'done', waiting: false, note: null, steps: { ...x.pipeline.steps, ship: { ...x.pipeline.steps.ship, state: 'done', summary: `Merged into ${into}.` } } } : x.pipeline }), false);
 			}
 		} catch (e) {
 			this.fail(e);
@@ -1240,7 +1309,10 @@ export class AgentsStore {
 			await this.loadWorktrees();
 			await this.repos.loadBranches();
 		}
-		if (merged && cleanup && session.isolated) {
+		if (merged && session.pipeline) {
+			// A task's worktree and branch always go once its work is merged, its pushed copy too.
+			this.landed.forEach((hook) => hook(session.id));
+		} else if (merged && cleanup && session.isolated) {
 			await this.cleanUpMerged(session);
 		}
 		return merged;
