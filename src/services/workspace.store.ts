@@ -336,7 +336,7 @@ export class WorkspaceStore {
 		}
 	}
 
-	/** Dragging the edge. What is kept is what the pane really got, so a drag past the main pane's floor is not remembered. */
+	/** Dragging the edge. What is kept is what the pane really got, so a drag past the main pane's drag floor (`MIN_MAIN_DRAG_W`) is not remembered. */
 	setWidth(width: number): void {
 		const r = this._room();
 		this._dragged.set(r ? sideWidth(Math.round(width), r.room, r.window) : Math.max(MIN_SIDE_W, Math.round(width)));
