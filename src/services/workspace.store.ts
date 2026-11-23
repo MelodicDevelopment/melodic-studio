@@ -206,7 +206,7 @@ export class WorkspaceStore {
 	/** Whether the window is wide enough for the workspace beside the main pane (see shared/pane-room.ts). */
 	readonly fits = computed(() => {
 		const r = this._room();
-		return !r || sideFits(r.room);
+		return !r || sideFits(r.room, this._dragged());
 	});
 	/** What is on screen: `side` gives way to the main pane while the window is too narrow for both. */
 	readonly shown = computed<WorkspaceView>(() => (this.view() === 'side' && !this.fits() ? 'hidden' : this.view()));

@@ -33,13 +33,12 @@ export function maxDragSide(room: number): number {
 }
 
 /**
- * Whether both panes fit side by side at the default width. Deliberately judged by the full
- * `MIN_MAIN_W` floor and not by the drag floor: in a narrower window the Claude pane waits behind
- * its button rather than squeezing the main pane, and the lower drag floor is only for a pane
- * that is on screen.
+ * Whether both panes fit side by side. Without a drag the main pane must keep `MIN_MAIN_W`, so in a
+ * narrow window the Claude pane waits behind its button. Once the user has dragged the edge, the
+ * narrow main pane is their choice, and the pane stays while `MIN_MAIN_DRAG_W` still fits beside it.
  */
-export function sideFits(room: number): boolean {
-	return maxSide(room) >= MIN_SIDE_W;
+export function sideFits(room: number, dragged: number | null = null): boolean {
+	return (dragged === null ? maxSide(room) : maxDragSide(room)) >= MIN_SIDE_W;
 }
 
 /**

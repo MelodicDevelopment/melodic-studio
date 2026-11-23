@@ -42,6 +42,21 @@ test('the drag range is never inverted in a room that barely fits both', () => {
 	assert.equal(sideWidth(5000, 300, 1500), MIN_SIDE_W);
 });
 
+test('after a drag the pane stays in a window too narrow for the default floor', () => {
+	const room = 799; // a 1100 px window with a 300 px sidebar
+	assert.equal(sideFits(room), false);
+	assert.equal(sideFits(room, 400), true);
+	const side = sideWidth(400, room, 1100);
+	assert.equal(side, 400);
+	assert.ok(room - DIVIDER_W - side >= MIN_MAIN_DRAG_W);
+});
+
+test('even after a drag the pane hides when the drag floor no longer fits', () => {
+	const edge = MIN_MAIN_DRAG_W + DIVIDER_W + MIN_SIDE_W;
+	assert.equal(sideFits(edge, 400), true);
+	assert.equal(sideFits(edge - 1, 400), false);
+});
+
 test('the drag floor is lower than the default floor', () => {
 	assert.ok(MIN_MAIN_DRAG_W < MIN_MAIN_W);
 	assert.equal(maxDragSide(1199), 1199 - MIN_MAIN_DRAG_W - DIVIDER_W);
