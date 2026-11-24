@@ -197,6 +197,14 @@ Docker containers, and Envy (his own app: `/Applications/Envy.app`, source in `.
 - Nothing of Envy is copied into Studio. Its proxy, DNS and certificate authority need a privileged daemon, and Studio
   uses Envy when it is installed.
 
+**Built (2026-11-23), the first piece:** each service of a compose file is a run target (`src-tauri/src/compose.rs`).
+In the main checkout it is `docker compose up --build <service>` as the user would type it. A worktree's copy gets its
+own project name and an override file of ours (app cache dir) that moves every published port to a free one, so the
+two never collide. Stop, a closed tab and quitting the app run `docker compose stop`, because a hangup does not stop
+the containers with every compose version. Not built: the Envy host label and URLs, `http_request` through Envy,
+recording from inside a container. PHP projects also got targets the same day (its own server, composer scripts,
+PHPUnit), which is Part 1's list grown by one language.
+
 ## Rules
 
 - Claude never runs the app, sends it a request, or runs tests without Rick's OK, unless he chose "Always allow" for

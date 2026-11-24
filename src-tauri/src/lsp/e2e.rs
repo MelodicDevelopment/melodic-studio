@@ -472,6 +472,10 @@ fn app_client_typescript() {
             { "file": "src/badge.tsx", "language": "typescript", "hover": { "needle": "greet(name)", "contains": "greet(name: string): string" }, "symbols": ["badge"], "diagnostics": null },
             { "file": "src/legacy.js", "language": "javascript", "hover": { "needle": "double(2)", "contains": "double(amount: number): number" } },
             { "file": "src/broken.ts", "language": "typescript", "diagnostics": "not assignable" },
+            // Colours by meaning and the "1 reference" line, asked of a file nothing above has edited.
+            { "file": "src/greeter.ts", "language": "typescript",
+              "tokens": [{ "needle": "greet(name", "type": "function" }, { "needle": "name: string", "type": "parameter" }, { "needle": "Visitor {", "type": "interface" }, { "needle": "visits", "type": "property" }],
+              "lens": { "contains": "reference", "does": "show" } },
         ]),
     );
 }
@@ -517,6 +521,9 @@ fn app_client_rust() {
               "rename": { "needle": "greet(\"world\")", "to": "welcome", "files": ["src/main.rs", "src/greeter.rs"] },
               "symbol": { "query": "gree", "contains": "greet" },
               "definition": { "needle": "greet(\"world\")", "file": "src/greeter.rs", "text": "pub fn greet" } },
+            { "file": "src/greeter.rs", "language": "rust",
+              "tokens": [{ "needle": "greet(name", "type": "function" }, { "needle": "name: &str", "type": "parameter" }, { "needle": "String {", "type": "struct" }],
+              "lens": { "contains": "reference", "does": "show" } },
         ]),
     );
 }
@@ -576,6 +583,8 @@ fn app_client_csharp() {
               "diagnostics": null,
               "edit": { "after": "Greet(\"world\"));", "insert": "\nint wrong = \"text\";", "diagnostics": "Cannot implicitly convert" } },
             { "file": "Greeter.cs", "language": "csharp", "symbols": ["Greeter", "Greet"],
+              "tokens": [{ "needle": "Greeter\n", "type": "class" }, { "needle": "Greet(string", "type": "method" }, { "needle": "name)", "type": "parameter" }],
+              "lens": { "contains": "eference", "does": "references" },
               "edit": { "after": "return $\"Hello, {name}!\";", "insert": "\n        var extra = new Extra();", "diagnostics": "Extra" },
               "disk": { "file": "Extra.cs", "text": "namespace Fixture;\n\npublic class Extra { }\n", "clears": "Extra" } },
             { "file": "Broken.cs", "language": "csharp", "diagnostics": "Cannot implicitly convert" },

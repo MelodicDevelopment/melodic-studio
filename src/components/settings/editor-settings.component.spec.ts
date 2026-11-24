@@ -208,6 +208,8 @@ describe('the switches', () => {
 			['Line numbers', true],
 			['Sticky scroll', false],
 			['Colour matching brackets', true],
+			['Colour names by what they are', true],
+			['Code lens', true],
 			['Font ligatures', false],
 			['Blinking cursor', true],
 			['Format on save', false],

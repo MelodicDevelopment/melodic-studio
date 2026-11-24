@@ -589,6 +589,19 @@ export const INVESTIGATE_STEPS = [
 
 export type InvestigateRuntime = 'dotnet' | 'node' | 'rust' | 'go' | 'python';
 
+/**
+ * The language whose recording helper an investigation is given: the target's, else the one the error was
+ * spotted as. None for a language with no helper (PHP), and none for a compose target whatever its error
+ * reads as: the recording file is on this computer, and the program in a container cannot write to it.
+ */
+export function recordingRuntime(target: string | null | undefined, error: string | null | undefined): InvestigateRuntime | null {
+	if (target === 'docker') {
+		return null;
+	}
+	const known = (name: string | null | undefined): InvestigateRuntime | null => (name && Object.hasOwn(HELPERS, name) ? (name as InvestigateRuntime) : null);
+	return known(target) ?? known(error);
+}
+
 /** What is handed to Claude about the failure. All of it except `description` is program output: untrusted. */
 export interface InvestigateInput {
 	/** The user's own words, if they wrote any. */

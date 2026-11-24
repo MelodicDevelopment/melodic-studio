@@ -276,6 +276,10 @@ export function dialogsTemplate(self: DialogsComponent) {
 							`
 							: ''}
 					</section>
+					<section class="who">
+						<ml-checkbox label="Fetch in the background" .checked=${store.autoFetch()} @ml:change=${(e: CustomEvent) => store.setAutoFetch(e.detail.checked)}></ml-checkbox>
+						<small>Every 5 minutes while the window is showing, so the toolbar knows what there is to pull. It never asks for a password.</small>
+					</section>
 					<dl>
 						<dt>Git</dt>
 						<dd>${app?.gitVersion ?? 'Not found on this computer'}</dd>

@@ -115,7 +115,7 @@ export interface RunTarget {
 	cwd: string;
 	argv: string[];
 	kind: 'run' | 'test';
-	runtime: 'dotnet' | 'node' | 'rust' | 'go' | 'python';
+	runtime: 'dotnet' | 'node' | 'rust' | 'go' | 'python' | 'php' | 'docker';
 	/** The file it was read from, by name. */
 	source: string;
 }
@@ -642,6 +642,8 @@ export class BackendService {
 	/** Everything `from` brings, as one new commit with `message`. */
 	mergeSquash(id: string, from: string, message: string) { return this.call<void>('merge_squash', { id, from, message }); }
 	fetch(id: string) { return this.call<void>('fetch', { id }); }
+	/** The fetch nobody asked for: never asks for a password, given up after a minute. */
+	fetchBackground(id: string) { return this.call<void>('fetch_background', { id }); }
 	pull(id: string) { return this.call<void>('pull', { id }); }
 	push(id: string, force = false) { return this.call<void>('push', { id, force }); }
 	setRemote(id: string, url: string) { return this.call<void>('remote_set', { id, url }); }
@@ -1441,6 +1443,7 @@ class DemoBackend {
 				this.ahead++;
 				return '';
 			case 'fetch':
+			case 'fetch_background':
 				this.lastFetched = Date.now();
 				return;
 			case 'pull':

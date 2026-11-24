@@ -475,6 +475,12 @@ pub async fn fetch(state: State<'_, AppState>, id: String) -> Result<()> {
     repo(&state, &id)?.fetch()
 }
 
+/// The window's own fetch every few minutes: asks for nothing, and is given up after a minute.
+#[tauri::command]
+pub async fn fetch_background(state: State<'_, AppState>, id: String) -> Result<()> {
+    repo(&state, &id)?.fetch_quiet()
+}
+
 #[tauri::command]
 pub async fn pull(state: State<'_, AppState>, id: String) -> Result<()> {
     repo(&state, &id)?.pull()

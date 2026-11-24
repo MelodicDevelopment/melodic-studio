@@ -29,7 +29,7 @@ import { samePath } from './agent-paths';
 import { prepareImage, type Attachment } from './agent-images';
 import { IMAGE_TYPES, MAX_IMAGES } from '../shared/images';
 import { TerminalStore } from './terminal.store';
-import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, type InvestigationReport } from './ai-prompts';
+import { INVESTIGATE_BUILTIN, INVESTIGATE_RULES, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, recordingRuntime, type InvestigationReport } from './ai-prompts';
 import { LspService, type Impact, type Problem } from './lsp.service';
 import { changesSince, languageOf } from './lsp/protocol';
 import { leftoverRecording } from '../shared/replay';
@@ -1525,7 +1525,7 @@ export class AgentsStore {
 				exitCode: request.exitCode,
 				targetId: target?.id ?? null,
 				targets: targets.map((t) => ({ id: t.id, kind: t.kind, command: t.argv.join(' '), cwd: t.cwd })),
-				runtime: target?.runtime ?? (error?.runtime && error.runtime !== 'unknown' ? error.runtime : null),
+				runtime: recordingRuntime(target?.runtime, error?.runtime),
 				branch,
 				images: request.images?.length ?? 0,
 			});

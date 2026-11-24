@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { INVESTIGATE_RULES, INVESTIGATE_STEPS, branchNamePrompt, fixFindingsPrompt, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, reviewPrompt, type InvestigateInput } from './ai-prompts.ts';
+import { INVESTIGATE_RULES, INVESTIGATE_STEPS, branchNamePrompt, fixFindingsPrompt, fixProblemsPrompt, investigateCleanup, investigateFollowUp, investigatePrompt, parseInvestigation, recordingRuntime, reviewPrompt, type InvestigateInput } from './ai-prompts.ts';
 
 const INPUT: InvestigateInput = {
 	description: '',
@@ -201,4 +201,15 @@ test('the branch name prompt carries the task as data, cut when it is long', () 
 	const long = branchNamePrompt('word '.repeat(3000));
 	assert.ok(long.length < 6000);
 	assert.ok(long.includes('[... the rest of the task is not shown]'));
+});
+
+test('the recording helper is the language of the target, else of the error, and none where a recording cannot be made', () => {
+	assert.equal(recordingRuntime('dotnet', 'node'), 'dotnet');
+	assert.equal(recordingRuntime(undefined, 'python'), 'python');
+	assert.equal(recordingRuntime(null, 'unknown'), null);
+	// PHP has no helper.
+	assert.equal(recordingRuntime('php', 'unknown'), null);
+	// A compose target runs in a container, which cannot write the recording file whatever it is written in.
+	assert.equal(recordingRuntime('docker', 'node'), null);
+	assert.equal(recordingRuntime('toString', 'constructor'), null);
 });

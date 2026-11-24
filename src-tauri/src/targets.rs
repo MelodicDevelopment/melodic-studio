@@ -1,6 +1,6 @@
 //! Run targets: what in a checkout can be started, found by reading the project files that are
-//! already there (launchSettings.json, package.json, Cargo.toml, go.mod, pyproject.toml). Nothing
-//! is set up by the user and `launch.json` / `tasks.json` are not read.
+//! already there (launchSettings.json, package.json, Cargo.toml, go.mod, pyproject.toml, composer.json,
+//! a compose file). Nothing is set up by the user and `launch.json` / `tasks.json` are not read.
 //!
 //! A target is a name, a group, a repository-relative working folder and an argv. There is never
 //! a shell line: `run.rs` starts the argv as it is.
@@ -29,6 +29,9 @@ pub enum Runtime {
     Rust,
     Go,
     Python,
+    Php,
+    /// A service of a compose file, run by the user's own `docker compose` (`compose.rs`).
+    Docker,
 }
 
 impl Runtime {
@@ -39,6 +42,8 @@ impl Runtime {
             Runtime::Rust => "rust",
             Runtime::Go => "go",
             Runtime::Python => "python",
+            Runtime::Php => "php",
+            Runtime::Docker => "docker",
         }
     }
 }
@@ -362,6 +367,90 @@ fn python_targets(dir: &Dir, out: &mut Vec<Target>) {
     }
 }
 
+// ---- PHP --------------------------------------------------------------------
+
+/// The address PHP's own web server listens on in the main checkout. A worktree's copy gets its own port (`run::with_port`).
+pub const PHP_SERVER: &str = "127.0.0.1:8000";
+
+/// Composer's own events: scripts under these names run by themselves around install, update and the like.
+const COMPOSER_EVENTS: &[&str] = &[
+    "pre-install-cmd",
+    "post-install-cmd",
+    "pre-update-cmd",
+    "post-update-cmd",
+    "pre-status-cmd",
+    "post-status-cmd",
+    "pre-archive-cmd",
+    "post-archive-cmd",
+    "pre-autoload-dump",
+    "post-autoload-dump",
+    "post-root-package-install",
+    "post-create-project-cmd",
+    "pre-operations-exec",
+    "pre-package-install",
+    "post-package-install",
+    "pre-package-update",
+    "post-package-update",
+    "pre-package-uninstall",
+    "post-package-uninstall",
+    "pre-pool-create",
+    "pre-command-run",
+    "pre-file-download",
+    "post-file-download",
+    "command",
+    "init",
+];
+
+fn php(dir: &Dir, out: &mut Vec<Target>) {
+    let composer = dir.has("composer.json");
+    // Without a composer.json only the checkout itself counts: an index.php in any folder is not a site.
+    if !composer && !dir.rel.is_empty() {
+        return;
+    }
+    let group = if dir.rel.is_empty() { "PHP".to_string() } else { format!("{} · PHP", folder(dir.rel, "")) };
+    // Where the site starts. Laravel has its own command, which also sets the document root.
+    if dir.has("artisan") {
+        out.push(Target::new(Runtime::Php, Kind::Run, dir.rel, "serve", "artisan serve", &group, "artisan", &["php", "artisan", "serve"]));
+    } else if dir.dirs.contains("public") && dir.path.join("public").join("index.php").is_file() {
+        out.push(Target::new(Runtime::Php, Kind::Run, dir.rel, "server", "Built-in server", &group, "public/index.php", &["php", "-S", PHP_SERVER, "-t", "public"]));
+    } else if dir.has("index.php") {
+        out.push(Target::new(Runtime::Php, Kind::Run, dir.rel, "server", "Built-in server", &group, "index.php", &["php", "-S", PHP_SERVER]));
+    }
+    let json = dir.text("composer.json").and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let scripts = json.as_ref().and_then(|j| j.get("scripts")).and_then(|s| s.as_object());
+    for (name, command) in scripts.into_iter().flatten() {
+        if name.is_empty() || name.starts_with('-') || COMPOSER_EVENTS.contains(&name.as_str()) || !(command.is_string() || command.is_array()) {
+            continue;
+        }
+        let test = name == "test" || name.starts_with("test:");
+        // Composer stops a script after five minutes by itself, which a server or a watcher outlives.
+        out.push(Target::new(Runtime::Php, if test { Kind::Test } else { Kind::Run }, dir.rel, &format!("script/{name}"), name, &group, "composer.json", &["composer", "run-script", "--timeout=0", name]));
+    }
+    // PHPUnit's own configuration, unless the project already says how its tests are run.
+    let config = ["phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml"].into_iter().find(|f| dir.has(f));
+    if let (Some(config), false) = (config, scripts.is_some_and(|s| s.contains_key("test"))) {
+        out.push(Target::new(Runtime::Php, Kind::Test, dir.rel, "phpunit", "phpunit", &group, config, &["php", "vendor/bin/phpunit"]));
+    }
+}
+
+// ---- Docker -----------------------------------------------------------------
+
+fn docker(dir: &Dir, out: &mut Vec<Target>) {
+    // The one `docker compose` itself would pick in this folder.
+    let Some(file) = crate::compose::FILES.iter().find(|f| dir.has(f)) else { return };
+    let services = dir.text(file).map(|t| crate::compose::services(&t)).unwrap_or_default();
+    if services.is_empty() {
+        return;
+    }
+    let group = if dir.rel.is_empty() { file.to_string() } else { format!("{} · {file}", folder(dir.rel, "")) };
+    if services.len() > 1 {
+        out.push(Target::new(Runtime::Docker, Kind::Run, dir.rel, "all", "All services", &group, file, &["docker", "compose", "up", "--build"]));
+    }
+    for service in &services {
+        out.push(Target::new(Runtime::Docker, Kind::Run, dir.rel, &format!("service/{service}"), service, &group, file, &["docker", "compose", "up", "--build", service]));
+    }
+}
+
 // ---- the walk ---------------------------------------------------------------
 
 /// A folder still to visit, with what it inherits from above.
@@ -408,6 +497,8 @@ pub fn discover(root: &Path) -> Vec<Target> {
             go(&dir, module, &mut out);
         }
         python_targets(&dir, &mut out);
+        php(&dir, &mut out);
+        docker(&dir, &mut out);
 
         if depth < MAX_DEPTH {
             for name in dirs.iter().filter(|n| !skipped(n)) {
@@ -585,6 +676,68 @@ mod tests {
         assert_eq!(entry_point("pkg.mod:func [extra]"), Some(("pkg.mod", "func")));
         assert_eq!(entry_point("pkg.mod"), None);
         assert_eq!(entry_point("pkg:__import__('os').system('x')"), None);
+    }
+
+    #[test]
+    fn php_server_composer_scripts_and_phpunit() {
+        let f = Fixture::new("php");
+        f.file("composer.json", r#"{ "scripts": { "post-install-cmd": "x", "lint": ["phpcs", "phpstan"], "test": "phpunit", "test:unit": "phpunit --testsuite unit", "weird": 3 } }"#)
+            .file("public/index.php", "<?php")
+            .file("phpunit.xml", "<phpunit/>")
+            .file("shop/composer.json", r#"{ "name": "me/shop" }"#)
+            .file("shop/artisan", "")
+            .file("shop/public/index.php", "<?php")
+            .file("shop/phpunit.xml.dist", "<phpunit/>")
+            .file("old/composer.json", "{}")
+            .file("old/index.php", "<?php")
+            // Not a site: no composer.json, and not the checkout itself.
+            .file("templates/index.php", "<?php")
+            .file("vendor/dep/composer.json", r#"{ "scripts": { "test": "x" } }"#);
+        assert_eq!(
+            f.found(),
+            [
+                "PHP | Built-in server |  | php -S 127.0.0.1:8000 -t public",
+                "PHP | lint |  | composer run-script --timeout=0 lint",
+                // The project's own `test` script stands for its tests: no second target from phpunit.xml.
+                "PHP | test |  | composer run-script --timeout=0 test",
+                "PHP | test:unit |  | composer run-script --timeout=0 test:unit",
+                "old · PHP | Built-in server | old | php -S 127.0.0.1:8000",
+                "shop · PHP | artisan serve | shop | php artisan serve",
+                "shop · PHP | phpunit | shop | php vendor/bin/phpunit",
+            ]
+        );
+        let found = discover(&f.0);
+        assert_eq!(found.iter().map(|t| t.kind).collect::<Vec<_>>(), [Kind::Run, Kind::Run, Kind::Test, Kind::Test, Kind::Run, Kind::Run, Kind::Test]);
+        assert_eq!(found[0].id, "php::server");
+        assert_eq!(found[1].id, "php::script/lint");
+    }
+
+    #[test]
+    fn a_plain_php_site_at_the_root_needs_no_composer() {
+        let f = Fixture::new("php-plain");
+        f.file("index.php", "<?php").file("admin/index.php", "<?php");
+        assert_eq!(f.found(), ["PHP | Built-in server |  | php -S 127.0.0.1:8000"]);
+    }
+
+    #[test]
+    fn compose_services() {
+        let f = Fixture::new("compose");
+        // docker-compose.yml loses to compose.yaml in the same folder, as it does for docker itself.
+        f.file("compose.yaml", "services:\n  web:\n    image: nginx\n  db:\n    image: postgres\n")
+            .file("docker-compose.yml", "services:\n  ignored:\n    image: x\n")
+            .file("site/docker-compose.yml", "services:\n  web:\n    image: php:8.2-apache\n    command: >\n      bash -c \"a2enmod rewrite && apache2-foreground\"\n")
+            .file("broken/compose.yml", "volumes:\n  data:\n");
+        assert_eq!(
+            f.found(),
+            [
+                "compose.yaml | All services |  | docker compose up --build",
+                "compose.yaml | web |  | docker compose up --build web",
+                "compose.yaml | db |  | docker compose up --build db",
+                "site · docker-compose.yml | web | site | docker compose up --build web",
+            ]
+        );
+        let ids: Vec<String> = discover(&f.0).into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, ["docker::all", "docker::service/web", "docker::service/db", "docker:site:service/web"]);
     }
 
     #[test]

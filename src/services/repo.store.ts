@@ -70,6 +70,17 @@ function loadRepoTabs(): string[] {
 	}
 }
 const POLL_MS = 5000;
+const AUTO_FETCH_KEY = 'studio.fetch.auto';
+/** How old the last fetch may get before the window fetches by itself. */
+const FETCH_EVERY_MS = 5 * 60_000;
+
+function readAutoFetch(): boolean {
+	try {
+		return localStorage.getItem(AUTO_FETCH_KEY) !== 'off';
+	} catch {
+		return true;
+	}
+}
 
 @Injectable()
 export class RepoStore {
@@ -173,6 +184,13 @@ export class RepoStore {
 		return { kind: 'fetch', label: `Fetch ${remote}`, detail: fetched, icon: 'arrows-clockwise' };
 	});
 
+	/** Settings > General: fetch by itself every few minutes, so "what is there to pull" is true without a click. */
+	readonly autoFetch = signal(readAutoFetch());
+	/** The fetch of ours that is going. It sets no `busy`: nothing waits on it except a fetch, pull or push the user starts meanwhile. */
+	private _quietFetch: Promise<void> | null = null;
+	/** When a fetch of ours was last started, by repository, so one that fails (offline, a key that wants its passphrase) is not tried again at every poll. */
+	private readonly _fetchTried = new Map<string, number>();
+
 	private _statusToken = 0;
 	private _diffToken = 0;
 	private _historyToken = 0;
@@ -212,12 +230,59 @@ export class RepoStore {
 		this.ready.set(true);
 		await this.refresh();
 		void this.loadBranches();
-		window.addEventListener('focus', () => void this.refresh());
+		window.addEventListener('focus', () => void this.poll());
 		setInterval(() => {
 			if (document.visibilityState === 'visible' && !this.busy()) {
-				void this.refresh();
+				void this.poll();
 			}
 		}, POLL_MS);
+	}
+
+	private async poll(): Promise<void> {
+		await this.refresh();
+		await this.fetchIfDue();
+	}
+
+	setAutoFetch(on: boolean): void {
+		this.autoFetch.set(on);
+		try {
+			localStorage.setItem(AUTO_FETCH_KEY, on ? 'on' : 'off');
+		} catch {
+			/* private mode: it holds for this run */
+		}
+	}
+
+	/**
+	 * Fetch without being asked once the last fetch (ours, the user's, a terminal's) is older than `FETCH_EVERY_MS`.
+	 * It says nothing: no spinner, no toast when it fails. The native side never lets it ask for a password.
+	 */
+	async fetchIfDue(): Promise<void> {
+		const id = this.id;
+		const st = this.status();
+		if (!id || !st?.remote || !this.autoFetch() || this.busy() || this._quietFetch || document.visibilityState !== 'visible') {
+			return;
+		}
+		const now = Date.now();
+		if (now - Math.max(st.lastFetched ?? 0, this._fetchTried.get(id) ?? 0) < FETCH_EVERY_MS) {
+			return;
+		}
+		this._fetchTried.set(id, now);
+		let ok = true;
+		const run = this.backend.fetchBackground(id).then(
+			() => undefined,
+			() => {
+				ok = false;
+			}
+		);
+		this._quietFetch = run;
+		await run;
+		this._quietFetch = null;
+		// An action that waited for this one reads everything again when it is done.
+		if (ok && id === this.id && !this.busy()) {
+			await this.refresh();
+			void this.loadBranches();
+			this.reloadCompare();
+		}
 	}
 
 	private async reloadApp(): Promise<void> {
@@ -363,6 +428,8 @@ export class RepoStore {
 		this.busy.set(busy);
 		let ok = true;
 		try {
+			// Two gits fetching into one repository can trip over each other's ref locks.
+			await this._quietFetch;
 			await fn(id);
 			if (done) {
 				this.toast.success(done);

@@ -122,7 +122,7 @@ describe('which server answers for a file', () => {
 
 		expect(w.sent('lsp_start').map((c) => c.args)).toEqual([{ id: HARMONY, language: 'typescript' }]);
 		const server = native.server('typescript');
-		expect(server.methods()).toEqual(['initialize', 'initialized', 'textDocument/didOpen']);
+		expect(server.methods()).toEqual(['initialize', 'initialized', 'workspace/didChangeConfiguration', 'textDocument/didOpen']);
 		expect(server.sent('initialize')[0]).toMatchObject({ processId: null, rootPath: HARMONY, rootUri: `file://${HARMONY}`, workspaceFolders: [{ uri: `file://${HARMONY}`, name: 'harmony' }] });
 		expect(server.sent('textDocument/didOpen')).toEqual([{ textDocument: { uri: uri('src/main.ts'), languageId: 'typescript', version: 1, text: model.getValue() } }]);
 		expect(lsp.running()).toEqual([server.key]);
@@ -236,7 +236,7 @@ describe('which server answers for a file', () => {
 		expect(old.received).toEqual([]);
 		const server = native.server('typescript');
 		expect(server.key).not.toBe(old.key);
-		expect(server.methods()).toEqual(['initialize', 'initialized', 'textDocument/didOpen']);
+		expect(server.methods()).toEqual(['initialize', 'initialized', 'workspace/didChangeConfiguration', 'textDocument/didOpen']);
 		expect(lsp.failures()).toEqual({});
 	});
 
@@ -1212,6 +1212,101 @@ describe('what a server says it is busy with', () => {
 		server.progress('rustAnalyzer/Indexing', { kind: 'end' });
 		server.progress(7, { kind: 'end' });
 		expect(lsp.working()).toEqual({});
+	});
+
+	test('names are coloured by what the server says they are, in the editor\'s own legend', async () => {
+		const provider = monaco.fake.provider('DocumentSemanticTokens', 'typescript')!;
+		expect((provider.getLegend as () => unknown)()).toEqual({
+			tokenTypes: ['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'event', 'function', 'method', 'macro', 'decorator'].map((t) => `sem.${t}`),
+			tokenModifiers: ['readonly'],
+		});
+		// The server's legend is its own: keyword 0, function 1, variable 2; readonly is its second modifier.
+		native.install('typescript', { ...EVERYTHING, semanticTokensProvider: { full: true, legend: { tokenTypes: ['keyword', 'function', 'variable'], tokenModifiers: ['declaration', 'readonly'] } } });
+		const model = await open('src/main.ts');
+		const server = native.server('typescript');
+		server.reply('textDocument/semanticTokens/full', () => ({ data: [0, 0, 6, 0, 0, 0, 7, 5, 1, 1, 2, 4, 5, 2, 3] }));
+		const tokens = (await ask('DocumentSemanticTokens', 'provideDocumentSemanticTokens', model, null, token())) as { data: Uint32Array };
+		expect([...tokens.data]).toEqual([0, 7, 5, 12, 0, 2, 4, 5, 8, 1]);
+		expect(server.sent('textDocument/semanticTokens/full')).toEqual([{ textDocument: { uri: uri('src/main.ts') } }]);
+
+		// An answer that is no token list leaves the grammar's colours.
+		server.reply('textDocument/semanticTokens/full', () => null);
+		expect(await ask('DocumentSemanticTokens', 'provideDocumentSemanticTokens', model, null, token())).toBeNull();
+	});
+
+	test('a server that colours nothing by meaning is not asked to', async () => {
+		native.install('typescript', EVERYTHING);
+		const model = await open('src/main.ts');
+		expect(await ask('DocumentSemanticTokens', 'provideDocumentSemanticTokens', model, null, token())).toBeNull();
+		expect(await ask('CodeLens', 'provideCodeLenses', model, token())).toBeNull();
+		expect(asked(native.server('typescript'))).toEqual([]);
+	});
+
+	test('a code lens is listed, counted when it comes into view, and a click shows the places it counted', async () => {
+		native.install('typescript', { ...EVERYTHING, codeLensProvider: { resolveProvider: true } });
+		const model = await open('src/main.ts');
+		const server = native.server('typescript');
+		const raw = { range: span(4, 16, 21), data: { uri: uri('src/main.ts') } };
+		server.reply('textDocument/codeLens', () => [raw]);
+		const list = (await ask('CodeLens', 'provideCodeLenses', model, token())) as { lenses: { range: unknown; command?: { id: string; title: string; arguments?: unknown[] } }[] };
+		expect(list.lenses).toEqual([{ range: { startLineNumber: 5, startColumn: 17, endLineNumber: 5, endColumn: 22 }, command: undefined }]);
+
+		const there = { uri: uri('src/player/queue.ts'), range: span(2, 13, 18) };
+		server.reply('codeLens/resolve', (lens: unknown) => ({ ...(lens as object), command: { title: '1 reference', command: 'editor.action.showReferences', arguments: [uri('src/main.ts'), { line: 4, character: 16 }, [there]] } }));
+		const lens = (await ask('CodeLens', 'resolveCodeLens', model, list.lenses[0], token())) as (typeof list.lenses)[number];
+		expect(server.sent('codeLens/resolve')).toEqual([raw]);
+		expect(lens.command).toEqual({
+			id: 'editor.action.showReferences',
+			title: '1 reference',
+			arguments: [monaco.Uri.parse(uri('src/main.ts')), { lineNumber: 5, column: 17 }, [{ uri: monaco.Uri.parse(there.uri), range: { startLineNumber: 3, startColumn: 14, endLineNumber: 3, endColumn: 19 } }]],
+		});
+
+		// Nothing found: words alone. And a lens the server has no words for is not left saying "no commands".
+		server.reply('codeLens/resolve', (l: unknown) => ({ ...(l as object), command: { title: '0 references', command: '' } }));
+		expect(((await ask('CodeLens', 'resolveCodeLens', model, list.lenses[0], token())) as typeof lens).command).toEqual({ id: '', title: '0 references' });
+		server.reply('codeLens/resolve', () => null);
+		expect(((await ask('CodeLens', 'resolveCodeLens', model, list.lenses[0], token())) as typeof lens).command).toEqual({ id: '', title: '' });
+	});
+
+	test('a lens that only names the place asks for its references there, and a command of the server\'s own goes back to the server', async () => {
+		native.install('typescript', { ...EVERYTHING, codeLensProvider: {}, executeCommandProvider: { commands: ['server.tidy'] } });
+		const model = await open('src/main.ts');
+		const server = native.server('typescript');
+		server.reply('textDocument/codeLens', () => [
+			{ range: span(4, 16, 21), command: { title: '2 Reference(s)', command: 'textDocument/references', arguments: [{ textDocument: { uri: uri('src/main.ts') }, position: { line: 4, character: 16 } }] } },
+			{ range: span(0, 0, 6), command: { title: 'Tidy', command: 'server.tidy', arguments: [{ dir: '.' }] } },
+			{ range: span(1, 0, 6), command: { title: 'Run', command: 'client.startSomething', arguments: ['rm', '-rf'] } },
+		]);
+		const { lenses } = (await ask('CodeLens', 'provideCodeLenses', model, token())) as { lenses: { command: { id: string; title: string; arguments?: unknown[] } }[] };
+		expect(lenses.map((l) => [l.command.title, l.command.id])).toEqual([['2 Reference(s)', 'melodic.lsp.lensReferences'], ['Tidy', 'melodic.lsp.lensCommand'], ['Run', '']]);
+
+		const done: unknown[] = [];
+		monaco.editor.editors = [{ getModel: () => model, setPosition: (p) => done.push(['position', p]), revealPositionInCenter: () => undefined, focus: () => done.push('focus'), trigger: (_source, handler) => done.push(handler) }];
+		monaco.fake.run(lenses[0].command.id, ...lenses[0].command.arguments!);
+		expect(done).toEqual([['position', { lineNumber: 5, column: 17 }], 'focus', 'editor.action.referenceSearch.trigger']);
+
+		server.reply('workspace/executeCommand', () => null);
+		monaco.fake.run(lenses[1].command.id, ...lenses[1].command.arguments!);
+		await flush();
+		expect(server.sent('workspace/executeCommand')).toEqual([{ command: 'server.tidy', arguments: [{ dir: '.' }] }]);
+	});
+
+	test('colours and lenses are asked for again when the server says they changed', async () => {
+		let colours = 0;
+		let lenses = 0;
+		(monaco.fake.provider('DocumentSemanticTokens', 'typescript')!.onDidChange as (listener: () => void) => unknown)(() => colours++);
+		const lensProvider = monaco.fake.provider('CodeLens', 'typescript')!;
+		(lensProvider.onDidChange as (listener: (p: unknown) => void) => unknown)((p) => p === lensProvider && lenses++);
+		native.install('typescript', EVERYTHING);
+		await open('src/main.ts');
+		const server = native.server('typescript');
+		await vi.advanceTimersByTimeAsync(400);
+		expect([colours, lenses]).toEqual([1, 1]);
+		const first = server.ask('workspace/semanticTokens/refresh', null);
+		const second = server.ask('workspace/codeLens/refresh', null);
+		await vi.advanceTimersByTimeAsync(400);
+		expect([server.answer(first), server.answer(second)]).toEqual([null, null]);
+		expect([colours, lenses]).toEqual([2, 2]);
 	});
 
 	test('inlay hints are asked for again when a server comes up, finishes work, or says they changed', async () => {

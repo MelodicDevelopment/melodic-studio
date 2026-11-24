@@ -22,6 +22,10 @@ export interface EditorSettings {
 	lineNumbers: boolean;
 	stickyScroll: boolean;
 	bracketColors: boolean;
+	/** Names coloured by what a language server says they are (a parameter, a constant, a type), over the grammar's colours. */
+	semanticColors: boolean;
+	/** The line above a function or type saying how often it is used ("3 references"), where a language server counts. */
+	codeLens: boolean;
 	whitespace: Whitespace;
 	cursorBlink: boolean;
 	terminalFontSize: number;
@@ -47,6 +51,8 @@ export const EDITOR_DEFAULTS: EditorSettings = {
 	lineNumbers: true,
 	stickyScroll: false,
 	bracketColors: true,
+	semanticColors: true,
+	codeLens: true,
 	whitespace: 'selection',
 	cursorBlink: true,
 	terminalFontSize: 12,

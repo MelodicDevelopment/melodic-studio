@@ -150,6 +150,17 @@ const OPTIONS: Record<string, Record<string, unknown>> = {
 	// Renaming a function where it is used renames it everywhere. TypeScript's default instead leaves
 	// the function alone and aliases the import (`import { greet as welcome }`), which is rarely what was meant.
 	typescript: { preferences: { providePrefixAndSuffixTextForRename: false } },
+	// Code lens: "3 references" over types, traits and methods beside the "2 implementations" it shows by itself.
+	// Run and Debug are left out: they hand the client a command line to start, and nothing here starts one.
+	rust: { lens: { run: { enable: false }, debug: { enable: false }, references: { adt: { enable: true }, trait: { enable: true }, method: { enable: true } } } },
+};
+
+/** Code lens in TypeScript and JavaScript is off until the server is told otherwise. Functions that are not exported get none, as in VS Code. */
+const TS_LENS = { referencesCodeLens: { enabled: true }, implementationsCodeLens: { enabled: true } };
+
+/** Settings a server only takes as `workspace/didChangeConfiguration`, sent once after the handshake, by server. */
+const CONFIGURED: Record<string, Record<string, unknown>> = {
+	typescript: { typescript: TS_LENS, javascript: TS_LENS },
 };
 
 /**
@@ -251,6 +262,10 @@ export class Client {
 			this.capabilities = result.capabilities ?? {};
 			this.live = true;
 			this.notify('initialized', {});
+			const settings = CONFIGURED[this.server];
+			if (settings) {
+				this.notify('workspace/didChangeConfiguration', { settings });
+			}
 			return true;
 		});
 		return this.ready;
@@ -784,6 +799,10 @@ export const WATCHED_FILES = 'workspace/didChangeWatchedFiles';
 
 /** capabilities.json, as it is sent to one server. */
 export function clientCapabilities(base: Record<string, unknown>, server: string): Record<string, unknown> {
+	if (server === 'rust') {
+		// Without this rust-analyzer's "3 references" lens is words only: it names a command of the client's to show them.
+		return { ...base, experimental: { commands: { commands: [RUST_SHOW] } } };
+	}
 	if (!TOLD_OF_CHANGES.includes(server)) {
 		return base;
 	}
@@ -1172,4 +1191,166 @@ export function workspaceSymbols(result: unknown): FoundSymbol[] {
 		}
 	}
 	return out;
+}
+
+// ---- semantic tokens: names coloured by what they are ------------------------------
+
+/**
+ * The kinds of name the editor colours by meaning, by their names in the protocol. The editor's
+ * legend is this list in this order (see shared/monaco.ts for the colours), whatever a server's
+ * own legend is: a token is renumbered on its way in. What a grammar already colours well
+ * (keywords, strings, numbers, comments, operators) is left out on purpose, so those tokens of a
+ * server's are dropped and the grammar's colour stays.
+ */
+export const TOKEN_TYPES = ['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'event', 'function', 'method', 'macro', 'decorator'];
+/** The modifiers that change a colour. Only these are kept, in this order (a theme rule matches `type.modifier` from the left). */
+export const TOKEN_MODIFIERS = ['readonly'];
+
+/**
+ * The editor's name for one of those kinds: under a prefix of ours, so the colour the theme gives
+ * it (shared/monaco.ts) is never taken by a grammar's token that happens to be called `function`
+ * or `namespace`.
+ */
+export function semanticName(type: string): string {
+	return `sem.${type}`;
+}
+
+/** Servers' own names for kinds we have. `member` is typescript-language-server's method; the rest are rust-analyzer's. */
+const TYPE_ALIASES: Record<string, string> = { member: 'method', builtinType: 'type', typeAlias: 'type', union: 'struct', constParameter: 'parameter', procMacro: 'macro' };
+/** rust-analyzer says `constant` where the protocol says `readonly`. */
+const MODIFIER_ALIASES: Record<string, string> = { constant: 'readonly' };
+
+/** A server's legend against ours: for each of its token types our number (-1: not coloured), for each of its modifier bits our bits. */
+export interface TokenMap {
+	types: number[];
+	modifiers: number[];
+}
+
+/** Null when the server does not colour whole files by meaning. */
+export function tokenMap(capabilities: Record<string, unknown>): TokenMap | null {
+	const provider = capabilities.semanticTokensProvider as { full?: unknown; legend?: { tokenTypes?: unknown; tokenModifiers?: unknown } } | undefined;
+	const types = provider?.legend?.tokenTypes;
+	if (!provider?.full || !Array.isArray(types)) {
+		return null;
+	}
+	const modifiers = Array.isArray(provider.legend?.tokenModifiers) ? provider.legend.tokenModifiers : [];
+	return {
+		types: types.map((name) => TOKEN_TYPES.indexOf(TYPE_ALIASES[String(name)] ?? String(name))),
+		modifiers: modifiers.map((name) => {
+			const at = TOKEN_MODIFIERS.indexOf(MODIFIER_ALIASES[String(name)] ?? String(name));
+			return at < 0 ? 0 : 1 << at;
+		}),
+	};
+}
+
+/**
+ * A `textDocument/semanticTokens/full` answer in the editor's legend: five numbers per token
+ * (lines after the token before, columns after it or from the line's start, length, type,
+ * modifier bits). Tokens of a kind we do not colour are dropped, which moves the ones after them
+ * relative to a different neighbour, so every position is worked out and written again.
+ * Null when the answer is not a token list.
+ */
+export function semanticTokens(result: unknown, map: TokenMap): Uint32Array | null {
+	const data = (result as { data?: unknown } | null | undefined)?.data;
+	if (!Array.isArray(data) || data.length % 5 !== 0 || data.some((n) => !Number.isInteger(n) || n < 0)) {
+		return null;
+	}
+	const out: number[] = [];
+	let line = 0;
+	let column = 0;
+	let keptLine = 0;
+	let keptColumn = 0;
+	for (let i = 0; i < data.length; i += 5) {
+		line += data[i];
+		column = data[i] === 0 ? column + data[i + 1] : data[i + 1];
+		const type = map.types[data[i + 3]] ?? -1;
+		if (type < 0 || data[i + 2] === 0) {
+			continue;
+		}
+		let modifiers = 0;
+		for (let bit = 0; bit < map.modifiers.length; bit++) {
+			if (data[i + 4] & (1 << bit)) {
+				modifiers |= map.modifiers[bit];
+			}
+		}
+		out.push(line - keptLine, line === keptLine ? column - keptColumn : column, data[i + 2], type, modifiers);
+		keptLine = line;
+		keptColumn = column;
+	}
+	return new Uint32Array(out);
+}
+
+// ---- code lens: the line above a function saying "3 references" -------------------
+
+/** rust-analyzer's name for "show these places", which it only uses with a client that says it knows it. */
+const RUST_SHOW = 'rust-analyzer.showReferences';
+
+/** A lens as the server sent it: kept to be resolved (`codeLens/resolve` takes it back whole). */
+export interface RawLens {
+	range?: LspRange;
+	command?: { title?: string; command?: string; arguments?: unknown[] };
+	data?: unknown;
+}
+
+/** A `textDocument/codeLens` answer. */
+export function codeLenses(result: unknown): { range: EditorRange; raw: RawLens }[] {
+	const out: { range: EditorRange; raw: RawLens }[] = [];
+	for (const lens of Array.isArray(result) ? (result as RawLens[]) : []) {
+		if (lens?.range?.start && lens.range.end) {
+			out.push({ range: editorRange(lens.range), raw: lens });
+		}
+	}
+	return out;
+}
+
+/** What a click on a lens does. */
+export type LensDoes =
+	/** Nothing: the lens is its words ("0 references", or a command nobody here can run). */
+	| { kind: 'none' }
+	/** Shows places the server already found, from a position in a file. */
+	| { kind: 'show'; uri: string; position: { lineNumber: number; column: number }; locations: EditorLocation[] }
+	/** Asks for the references of the name at a position, then shows them (csharp-ls). */
+	| { kind: 'references'; uri: string; position: { lineNumber: number; column: number } }
+	/** A command of the server's own, which it listed in its capabilities. */
+	| { kind: 'run'; command: string; arguments: unknown[] };
+
+/**
+ * A lens's command: its words and what clicking them does. Null while the lens has none yet (it
+ * is resolved when it comes into view). Servers name "show references" three ways:
+ * typescript-language-server uses the editor's own `editor.action.showReferences` and
+ * rust-analyzer its `rust-analyzer.showReferences`, both with (uri, position, locations);
+ * csharp-ls names the request, `textDocument/references`, with its parameters.
+ */
+export function lensCommand(command: RawLens['command'], capabilities: Record<string, unknown>): { title: string; does: LensDoes } | null {
+	if (!command || typeof command.title !== 'string') {
+		return null;
+	}
+	const title = command.title;
+	const name = command.command ?? '';
+	const args = Array.isArray(command.arguments) ? command.arguments : [];
+	const at = (p: unknown) => {
+		const position = p as Partial<LspPosition> | undefined;
+		return Number.isInteger(position?.line) && Number.isInteger(position?.character) ? { lineNumber: position!.line! + 1, column: position!.character! + 1 } : null;
+	};
+	if (name === 'editor.action.showReferences' || name === RUST_SHOW) {
+		const position = at(args[1]);
+		const found = locations(args[2]);
+		if (typeof args[0] === 'string' && position && found.length) {
+			return { title, does: { kind: 'show', uri: args[0], position, locations: found } };
+		}
+		return { title, does: { kind: 'none' } };
+	}
+	if (name === 'textDocument/references') {
+		const asked = args[0] as { textDocument?: { uri?: string }; position?: LspPosition } | undefined;
+		const position = at(asked?.position);
+		if (typeof asked?.textDocument?.uri === 'string' && position) {
+			return { title, does: { kind: 'references', uri: asked.textDocument.uri, position } };
+		}
+		return { title, does: { kind: 'none' } };
+	}
+	const own = (capabilities.executeCommandProvider as { commands?: unknown } | undefined)?.commands;
+	if (name && Array.isArray(own) && own.includes(name)) {
+		return { title, does: { kind: 'run', command: name, arguments: args } };
+	}
+	return { title, does: { kind: 'none' } };
 }

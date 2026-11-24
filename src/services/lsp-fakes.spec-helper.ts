@@ -221,6 +221,7 @@ export interface FakeCodeEditor {
 	setPosition(position: Position): void;
 	revealPositionInCenter(position: Position): void;
 	focus(): void;
+	trigger?(source: string, handler: string, payload: unknown): void;
 }
 
 class FakeEditor {
@@ -239,7 +240,9 @@ class FakeEditor {
 	};
 	getModel = (uri: FakeUri): FakeModel | null => this.models.get(uri.toString()) ?? null;
 	getModels = (): FakeModel[] => [...this.models.values()];
-	getEditors = (): FakeCodeEditor[] => [];
+	/** The editors on screen, which a test fills in when something under test looks for one. */
+	editors: FakeCodeEditor[] = [];
+	getEditors = (): FakeCodeEditor[] => this.editors;
 	onDidCreateModel = (listener: (model: FakeModel) => void): Disposable => this.created.event(listener);
 	onWillDisposeModel = (listener: (model: FakeModel) => void): Disposable => this.disposing.event(listener);
 	setModelMarkers = (model: FakeModel, owner: string, markers: unknown[]): void => void this.markers.set(`${model.uri.toString()}|${owner}`, markers);
@@ -271,6 +274,8 @@ const PROVIDERS = [
 	'Rename',
 	'CodeAction',
 	'InlayHints',
+	'DocumentSemanticTokens',
+	'CodeLens',
 ] as const;
 export type ProviderKind = (typeof PROVIDERS)[number];
 

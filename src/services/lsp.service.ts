@@ -27,6 +27,7 @@ import {
 	Client,
 	clientCapabilities,
 	codeActions,
+	codeLenses,
 	completions,
 	contentChanges,
 	documentSymbols,
@@ -35,6 +36,7 @@ import {
 	hoverContents,
 	inlayHints,
 	languageId,
+	lensCommand,
 	languageOf,
 	lspRange,
 	newSince,
@@ -45,15 +47,22 @@ import {
 	progress,
 	resolved,
 	saveWanted,
+	semanticName,
+	semanticTokens,
 	signatureHelp,
 	statusChanges,
 	syncKind,
+	TOKEN_MODIFIERS,
+	TOKEN_TYPES,
+	tokenMap,
 	touches,
 	triggerCharacters,
 	WATCHED_FILES,
 	workspaceEdit,
 	workspaceSymbols,
 	type EditorAction,
+	type RawLens,
+	type TokenMap,
 	type DiskChange,
 	type EditorChange,
 	type EditorCompletion,
@@ -188,6 +197,9 @@ const IDLE_MS = 10 * 60_000;
 
 /** The editor command a quick fix runs when picked; see `runAction`. */
 const APPLY_ACTION = 'melodic.lsp.applyAction';
+/** What a clicked code lens runs when it is a command of the server's own, and when the references are still to be asked for. */
+const LENS_RUN = 'melodic.lsp.lensCommand';
+const LENS_REFERENCES = 'melodic.lsp.lensReferences';
 
 /** A check gives up after this long without the server reporting work in progress, */
 const CHECK_QUIET_MS = 60_000;
@@ -357,12 +369,34 @@ export class LspService {
 
 		// The editor asks for inlay hints when a file is shown, which is before a server has read the
 		// project: it is told to ask again once a server is up, has finished some work, or says so itself.
+		// The same goes for the colours by meaning and the code lenses.
 		const hintsChanged = new monaco.Emitter<void>();
+		const tokensChanged = new monaco.Emitter<void>();
+		const lensesChanged: (() => void)[] = [];
 		this._hintsStale = () => {
 			window.clearTimeout(this._hintsTimer);
-			this._hintsTimer = window.setTimeout(() => hintsChanged.fire(), 400);
+			this._hintsTimer = window.setTimeout(() => {
+				hintsChanged.fire();
+				tokensChanged.fire();
+				lensesChanged.forEach((fire) => fire());
+			}, 400);
 		};
+		const legend = { tokenTypes: TOKEN_TYPES.map(semanticName), tokenModifiers: TOKEN_MODIFIERS };
 		for (const language of LANGUAGES) {
+			monaco.languages.registerDocumentSemanticTokensProvider(language, {
+				onDidChange: tokensChanged.event,
+				getLegend: () => legend,
+				provideDocumentSemanticTokens: (model, _last, token) => this.tokens(model, token),
+				releaseDocumentSemanticTokens: () => undefined,
+			});
+			const lensChanged = new monaco.Emitter<Monaco.languages.CodeLensProvider>();
+			const lenses: Monaco.languages.CodeLensProvider = {
+				onDidChange: lensChanged.event,
+				provideCodeLenses: (model, token) => this.lenses(model, token),
+				resolveCodeLens: (model, lens, token) => this.resolveLens(model, lens, token),
+			};
+			monaco.languages.registerCodeLensProvider(language, lenses);
+			lensesChanged.push(() => lensChanged.fire(lenses));
 			monaco.languages.registerCompletionItemProvider(language, {
 				triggerCharacters: COMPLETION_TRIGGERS,
 				provideCompletionItems: (model, position, context, token) => this.complete(model, position, context, token),
@@ -394,6 +428,8 @@ export class LspService {
 		}
 		// What a picked quick fix runs: Monaco would apply a fix's edit itself, but only to files it has open.
 		monaco.editor.registerCommand(APPLY_ACTION, (_accessor, key: string, action: EditorAction['raw']) => void this.runAction(key, action));
+		monaco.editor.registerCommand(LENS_RUN, (_accessor, key: string, command: string, args: unknown[]) => void this.runLens(key, command, args));
+		monaco.editor.registerCommand(LENS_REFERENCES, (_accessor, uri: string, position: Monaco.IPosition) => this.peekReferences(uri, position));
 		Injector.get(ExplorerStore).afterSave.push((model) => this.saved(model));
 
 		// Go to definition in another file: Monaco only knows models, the Files tab knows how to open a path.
@@ -553,7 +589,7 @@ export class LspService {
 		}
 		// A refactoring the server works out itself comes back as a request to apply an edit.
 		client.handler = (method, params) => {
-			if (method === 'workspace/inlayHint/refresh') {
+			if (method === 'workspace/inlayHint/refresh' || method === 'workspace/semanticTokens/refresh' || method === 'workspace/codeLens/refresh') {
 				this._hintsStale();
 				return Promise.resolve(null);
 			}
@@ -961,6 +997,97 @@ export class LspService {
 		}
 		const hints = inlayHints(await client.request<unknown>('textDocument/inlayHint', { textDocument: { uri: model.uri.toString() }, range: lspRange(range) }, 10_000, token));
 		return { hints: hints as Monaco.languages.InlayHint[], dispose: () => undefined };
+	}
+
+	// ---- colours by meaning, and code lenses ----------------------------------------
+
+	/** Each server's legend against the editor's, worked out once per server. */
+	private readonly _tokenMaps = new WeakMap<Client, TokenMap | null>();
+
+	/** The file's names as the server classes them (a parameter, a constant, a type, a function), in the editor's own legend. */
+	async tokens(model: Monaco.editor.ITextModel, token?: Monaco.CancellationToken): Promise<Monaco.languages.SemanticTokens | null> {
+		const client = await this.ready(model);
+		if (!client) {
+			return null;
+		}
+		let map = this._tokenMaps.get(client);
+		if (map === undefined) {
+			map = tokenMap(client.capabilities);
+			this._tokenMaps.set(client, map);
+		}
+		if (!map) {
+			return null;
+		}
+		const data = semanticTokens(await client.request<unknown>('textDocument/semanticTokens/full', { textDocument: { uri: model.uri.toString() } }, 15_000, token), map);
+		return data ? { data } : null;
+	}
+
+	/** The lenses as the server sent them, to be resolved when they come into view. */
+	private readonly _lenses = new WeakMap<Monaco.languages.CodeLens, { key: string; raw: RawLens }>();
+
+	async lenses(model: Monaco.editor.ITextModel, token?: Monaco.CancellationToken): Promise<Monaco.languages.CodeLensList | null> {
+		const client = await this.ready(model);
+		if (!client?.capabilities.codeLensProvider) {
+			return null;
+		}
+		const found = codeLenses(await client.request<unknown>('textDocument/codeLens', { textDocument: { uri: model.uri.toString() } }, 15_000, token));
+		const lenses = found.map(({ range, raw }) => {
+			const lens: Monaco.languages.CodeLens = { range, command: this.lensDoes(client, raw) ?? undefined };
+			this._lenses.set(lens, { key: client.key, raw });
+			return lens;
+		});
+		return { lenses, dispose: () => undefined };
+	}
+
+	/** A lens came into view: the server now counts ("3 references") and says what a click shows. */
+	async resolveLens(_model: Monaco.editor.ITextModel, lens: Monaco.languages.CodeLens, token?: Monaco.CancellationToken): Promise<Monaco.languages.CodeLens> {
+		const held = this._lenses.get(lens);
+		const client = held && this._clients.get(held.key);
+		if (!held || !client?.live) {
+			return lens;
+		}
+		const resolved = (await client.request<RawLens>('codeLens/resolve', held.raw, 15_000, token)) ?? held.raw;
+		// Words alone when the server had none after all: the editor would write "no commands" there.
+		lens.command = this.lensDoes(client, resolved) ?? { id: '', title: '' };
+		return lens;
+	}
+
+	/** A lens's words (the server's, shown as text) and the editor command a click on them runs. */
+	private lensDoes(client: Client, raw: RawLens): Monaco.languages.Command | null {
+		const command = lensCommand(raw.command, client.capabilities);
+		if (!command) {
+			return null;
+		}
+		const { title, does } = command;
+		const monaco = this._monaco!;
+		switch (does.kind) {
+			case 'show':
+				return { id: 'editor.action.showReferences', title, arguments: [monaco.Uri.parse(does.uri), does.position, does.locations.map((l) => ({ uri: monaco.Uri.parse(l.uri), range: l.range }))] };
+			case 'references':
+				return { id: LENS_REFERENCES, title, arguments: [does.uri, does.position] };
+			case 'run':
+				return { id: LENS_RUN, title, arguments: [client.key, does.command, does.arguments] };
+			default:
+				return { id: '', title };
+		}
+	}
+
+	/** A lens whose command is the server's own was clicked: the server does it, and asks for an edit to be applied if it comes to one. */
+	private async runLens(key: string, command: string, args: unknown[]): Promise<void> {
+		const client = this._clients.get(key);
+		if (client?.live) {
+			await client.request('workspace/executeCommand', { command, arguments: args }, 30_000);
+		}
+	}
+
+	/** A "3 references" lens that only names the place: the references are asked for there, as from the keyboard. */
+	private peekReferences(uri: string, position: Monaco.IPosition): void {
+		const editor = this._monaco?.editor.getEditors().find((e) => e.getModel()?.uri.toString() === uri);
+		if (editor) {
+			editor.setPosition(position);
+			editor.focus();
+			editor.trigger('code lens', 'editor.action.referenceSearch.trigger', {});
+		}
 	}
 
 	// ---- rename and quick fixes: edits a server asks for, across files ---------------

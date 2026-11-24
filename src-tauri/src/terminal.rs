@@ -30,6 +30,8 @@ pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Writer,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    /// Run when the program is cut off (`kill`), not when it ends by itself: see `on_close`.
+    closer: Option<Box<dyn FnOnce() + Send>>,
 }
 
 /// Markers Claude Code sets for the programs it starts. A dev build launched from inside a Claude Code
@@ -122,7 +124,7 @@ pub fn open(shell: &Shell, cwd: &Path, cols: u16, rows: u16, mut on_data: impl F
         over.store(true, Ordering::SeqCst);
         on_exit(code);
     });
-    Ok(Pty { master: pair.master, writer: Arc::new(Mutex::new(writer)), killer })
+    Ok(Pty { master: pair.master, writer: Arc::new(Mutex::new(writer)), killer, closer: None })
 }
 
 impl Pty {
@@ -134,6 +136,9 @@ impl Pty {
     /// TerminateProcess on Windows. Dropping the pty afterwards takes its children along.
     pub fn kill(&mut self) {
         let _ = self.killer.kill();
+        if let Some(closer) = self.closer.take() {
+            closer();
+        }
     }
 }
 
@@ -239,6 +244,19 @@ pub fn close(terminals: &Terminals, key: &str) {
     }
 }
 
+/// Have `closer` run when the program behind `key` is cut off: its tab closed, Stop, the window or the app
+/// going. For what a program leaves behind when it gets no chance to clean up (a compose target's
+/// containers). It does not run when the program ends by itself. False when the program is already gone.
+pub fn on_close(terminals: &Terminals, key: &str, closer: impl FnOnce() + Send + 'static) -> bool {
+    match terminals.open.lock().unwrap().get_mut(key) {
+        Some(pty) => {
+            pty.closer = Some(Box::new(closer));
+            true
+        }
+        None => false,
+    }
+}
+
 /// Keystrokes (or a paste) for the shell.
 #[tauri::command]
 pub async fn term_write(terminals: State<'_, Terminals>, key: String, data: String) -> Result<()> {
@@ -261,13 +279,18 @@ pub async fn term_close(terminals: State<'_, Terminals>, key: String) -> Result<
     Ok(())
 }
 
+/// End every program. Quitting (Cmd+Q, the Dock) destroys no window first, so the app's exit calls this too.
+pub fn close_all(terminals: &Terminals) {
+    let all: Vec<Pty> = terminals.open.lock().unwrap().drain().map(|(_, pty)| pty).collect();
+    for mut pty in all {
+        pty.kill();
+    }
+}
+
 /// No shell outlives the window.
 pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if matches!(event, tauri::WindowEvent::Destroyed) {
-        let all: Vec<Pty> = window.state::<Terminals>().open.lock().unwrap().drain().map(|(_, pty)| pty).collect();
-        for mut pty in all {
-            pty.kill();
-        }
+        close_all(&window.state::<Terminals>());
     }
 }
 

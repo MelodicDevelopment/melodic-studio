@@ -292,6 +292,16 @@ pub fn duplicate(git: &Git, rel: &str) -> Result<String> {
     Ok(rel_join(dir, &new_name))
 }
 
+/// The OS trash, the only way anything here or in git.rs gets there. Under `cargo test` the entry
+/// is deleted instead: every run used to leave its scratch files ("b *.txt") in the real Trash.
+pub(crate) fn to_trash(path: &Path) -> std::result::Result<(), ()> {
+    #[cfg(test)]
+    let moved = if path.is_dir() && !path.is_symlink() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }.map_err(|_| ());
+    #[cfg(not(test))]
+    let moved = trash::delete(path).map_err(|_| ());
+    moved
+}
+
 /// Move entries to the OS trash. Where there is no trash (some Linux desktops) a file is deleted,
 /// a folder is refused: nothing large disappears for good from a menu click.
 pub fn trash(git: &Git, paths: &[String]) -> Result<()> {
@@ -300,7 +310,7 @@ pub fn trash(git: &Git, paths: &[String]) -> Result<()> {
         found.push((rel, entry(&git.dir, rel)?));
     }
     for (rel, path) in found {
-        if trash::delete(&path).is_err() {
+        if to_trash(&path).is_err() {
             if path.is_dir() && !path.is_symlink() {
                 return Err(AppError::msg(format!("{rel} could not be moved to the trash")));
             }
@@ -337,7 +347,7 @@ fn place(target: &Path, to_dir: &str, plan: Vec<(String, PathBuf, String)>, on_c
                 OnConflict::Skip | OnConflict::Ask => continue,
                 OnConflict::KeepBoth => name = free_name(target, &name, false),
                 OnConflict::Replace => {
-                    trash::delete(&dest).or_else(|_| if dest.is_dir() { Err(()) } else { std::fs::remove_file(&dest).map_err(|_| ()) }).map_err(|_| AppError::msg(format!("{name} could not be replaced")))?;
+                    to_trash(&dest).or_else(|_| if dest.is_dir() { Err(()) } else { std::fs::remove_file(&dest).map_err(|_| ()) }).map_err(|_| AppError::msg(format!("{name} could not be replaced")))?;
                 }
             }
         }

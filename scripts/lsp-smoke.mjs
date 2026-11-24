@@ -27,6 +27,8 @@
  *   offers?: { [capability]: boolean },   // what the server says it can do, e.g. { renameProvider: false }
  *   symbol?: { query, contains },         // workspace symbol search: a name it must find
  *   hints?: { contains },                 // inlay hints for the whole file: a label one of them carries
+ *   tokens?: [{ needle, type }],          // colours by meaning: the name at `needle` is of this kind in the editor's legend ("parameter", "variable.readonly")
+ *   lens?: { contains, does },            // a code lens, resolved, whose words contain `contains`; `does` is what a click does (show | references | run | none)
  *   edit?: { after, insert, diagnostics, fix?: { title, text } }, // type `insert` after `after` (as a range if the server takes ranges): an error must follow
  *   disk?: { file, text, clears },        // last: write a new file and tell the server (it has to have asked to be told);
  *                                         // the errors containing `clears` must go, which shows it read the file
@@ -39,7 +41,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
-const { Client, languageId, hoverContents, locations, documentSymbols, markers, completions, resolved, signatureHelp, highlights, syncKind, contentChanges, clientCapabilities, WATCHED_FILES, workspaceEdit, applyTextEdits, codeActions, inlayHints, workspaceSymbols, touches } = await import(pathToFileURL(join(here, '../src/services/lsp/protocol.ts')).href);
+const { Client, languageId, hoverContents, locations, documentSymbols, markers, completions, resolved, signatureHelp, highlights, syncKind, contentChanges, clientCapabilities, WATCHED_FILES, workspaceEdit, applyTextEdits, codeActions, inlayHints, workspaceSymbols, touches, tokenMap, semanticTokens, TOKEN_TYPES, TOKEN_MODIFIERS, codeLenses, lensCommand } = await import(pathToFileURL(join(here, '../src/services/lsp/protocol.ts')).href);
 const shared = JSON.parse(readFileSync(join(here, '../src/services/lsp/capabilities.json'), 'utf8'));
 
 /** The URIs Monaco would make (it escapes more than Node does), when its URI class loads outside a browser. */
@@ -250,6 +252,43 @@ for (const check of plan.checks) {
 			async () => inlayHints(await client.request('textDocument/inlayHint', { textDocument: { uri }, range: whole })).map((h) => h.label),
 			(labels) => labels.some((label) => label.includes(check.hints.contains))
 		);
+	}
+	if (check.tokens) {
+		const map = tokenMap(client.capabilities);
+		if (!map) {
+			fail(`${plan.server} does not colour files by meaning`);
+		}
+		/** "line:column" of each coloured name -> its kind, as the editor would look its colour up. */
+		const kinds = async () => {
+			const data = semanticTokens(await client.request('textDocument/semanticTokens/full', { textDocument: { uri } }), map) ?? [];
+			const found = new Map();
+			let line = 0;
+			let column = 0;
+			for (let i = 0; i < data.length; i += 5) {
+				line += data[i];
+				column = data[i] === 0 ? column + data[i + 1] : data[i + 1];
+				found.set(`${line}:${column}`, [TOKEN_TYPES[data[i + 3]], ...TOKEN_MODIFIERS.filter((_, bit) => data[i + 4] & (1 << bit))].join('.'));
+			}
+			return found;
+		};
+		const wanted = check.tokens.map((t) => ({ ...t, at: position(text, t.needle) }));
+		const found = await eventually(`colours by meaning in ${check.file}`, kinds, (map) => wanted.every((t) => map.get(`${t.at.line}:${t.at.character}`) === t.type));
+		result.tokens = { count: found.size, checked: wanted.map((t) => `${t.needle} is ${t.type}`) };
+	}
+	if (check.lens) {
+		const resolvedLenses = async () => {
+			const out = [];
+			for (const { raw } of codeLenses(await client.request('textDocument/codeLens', { textDocument: { uri } }))) {
+				const lens = raw.command ? raw : ((await client.request('codeLens/resolve', raw)) ?? raw);
+				const command = lensCommand(lens.command, client.capabilities);
+				if (command) {
+					out.push({ title: command.title, does: command.does.kind, line: raw.range.start.line });
+				}
+			}
+			return out;
+		};
+		const lenses = await eventually(`code lens in ${check.file}`, resolvedLenses, (list) => list.some((l) => l.title.includes(check.lens.contains) && l.does === check.lens.does));
+		result.lenses = lenses;
 	}
 	if (check.definition) {
 		const params = { textDocument: { uri }, position: position(text, check.definition.needle) };

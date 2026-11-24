@@ -3,11 +3,13 @@
 //!
 //! Each worktree gets a port of its own, so a copy of the app started there never collides with
 //! the one running in the main checkout: `ASPNETCORE_URLS` (and Kestrel's endpoint setting, which a
-//! launch profile cannot override) for .NET, `PORT` for everything else.
+//! launch profile cannot override) for .NET, the command line for PHP's own server (`with_port`), a compose
+//! file of ours for a compose target (`compose.rs`), `PORT` for everything else.
 //! The main checkout keeps whatever port the app itself picks. A worktree's port is chosen once
 //! and remembered (in the app's cache folder), so its address stays the same between runs.
 
 use crate::commands::{main_repo, repo};
+use crate::compose;
 use crate::error::{AppError, Result};
 use crate::targets::{self, Runtime, Target};
 use crate::terminal::{self, Shell, Terminals};
@@ -24,6 +26,9 @@ use tauri::{Manager, State};
 #[derive(Default)]
 pub struct Runs {
     ports: Mutex<Option<HashMap<String, u16>>>,
+    /// The terminal of each compose target that was started: "<checkout>\n<target id>" -> terminal key.
+    composed: Mutex<HashMap<String, String>>,
+    stops: compose::Stops,
 }
 
 /// What the window learns about a run it started.
@@ -72,10 +77,15 @@ fn ports_file(app: &tauri::AppHandle) -> Option<PathBuf> {
 impl Runs {
     /// The port for `target` in the worktree at `checkout`.
     pub fn port(&self, app: &tauri::AppHandle, checkout: &Path, target: &Target) -> Option<u16> {
+        self.port_for(app, checkout, &target.id)
+    }
+
+    /// The port remembered for `what` (a target's id, a compose service's port) in the worktree at `checkout`.
+    pub fn port_for(&self, app: &tauri::AppHandle, checkout: &Path, what: &str) -> Option<u16> {
         let file = ports_file(app);
         let mut guard = self.ports.lock().unwrap();
         let ports = guard.get_or_insert_with(|| file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default());
-        let key = format!("{}\n{}", checkout.to_string_lossy(), target.id);
+        let key = format!("{}\n{what}", checkout.to_string_lossy());
         // A copy that was just stopped (Restart) may hold the port for a moment longer.
         let usable = |port: u16| {
             for attempt in 0..8 {
@@ -111,6 +121,30 @@ pub fn port_env(runtime: Runtime, port: u16) -> Vec<(String, String)> {
             vec![("ASPNETCORE_URLS".to_string(), url.clone()), ("Kestrel__Endpoints__Http__Url".to_string(), url)]
         }
         _ => vec![("PORT".to_string(), port.to_string())],
+    }
+}
+
+/// The target as a copy on `port` runs it, where the port is not read from the environment: PHP's own
+/// server takes its address as an argument, and so does Laravel's `artisan serve`.
+pub fn with_port(target: &Target, port: u16) -> Target {
+    let mut target = target.clone();
+    if target.runtime == Runtime::Php {
+        if let Some(address) = target.argv.iter().position(|a| a == "-S").and_then(|at| target.argv.get_mut(at + 1)) {
+            *address = format!("127.0.0.1:{port}");
+        } else if target.argv.get(1).map(String::as_str) == Some("artisan") {
+            target.argv.push(format!("--port={port}"));
+        }
+    }
+    target
+}
+
+/// Where a copy of `target` is told its port, for saying so when nothing answers on it.
+pub fn port_source(target: &Target) -> &'static str {
+    match target.runtime {
+        Runtime::Dotnet => "ASPNETCORE_URLS",
+        Runtime::Docker => "the ports its compose file publishes",
+        Runtime::Php if target.argv.first().map(String::as_str) == Some("php") => "its command line",
+        _ => "PORT",
     }
 }
 
@@ -166,6 +200,58 @@ pub fn command_line(target: &Target, extra: &[String]) -> String {
     target.argv.iter().chain(extra).cloned().collect::<Vec<_>>().join(" ")
 }
 
+/// A target made ready to start in one checkout.
+pub struct Launch {
+    pub shell: Shell,
+    pub dir: PathBuf,
+    /// The port this copy was told to listen on; None when it keeps the app's own.
+    pub port: Option<u16>,
+    /// The command line, for showing.
+    pub command: String,
+    /// A compose target: where it is noted as running, and what stops its containers.
+    stop: Option<(String, Box<dyn FnOnce() + Send>)>,
+}
+
+impl Launch {
+    /// Call once the program runs on terminal `key`.
+    pub fn started(&mut self, terminals: &Terminals, runs: &Runs, key: &str) {
+        if let Some((slot, stop)) = self.stop.take() {
+            // Not noted when the program is already gone: nothing is left to cut off.
+            if terminal::on_close(terminals, key, stop) {
+                runs.composed.lock().unwrap().insert(slot, key.to_string());
+            }
+        }
+    }
+}
+
+/// `target` (plus `extra` arguments) as it is started in `checkout`: on a port of its own with `own_port`,
+/// with `env` added to its environment.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare(app: &tauri::AppHandle, terminals: &Terminals, runs: &Runs, checkout: &Path, target: &Target, extra: &[String], own_port: bool, mut env: Vec<(String, String)>) -> Result<Launch> {
+    let dir = folder(checkout, target)?;
+    if target.runtime == Runtime::Docker {
+        // A copy of it still running here goes first, and so does a stop that is under way: `up` attaches to
+        // containers that are there, and would end with them. (Restart closes the old tab from the window, but
+        // that command can arrive after this one.)
+        let slot = format!("{}\n{}", checkout.to_string_lossy(), target.id);
+        let old = runs.composed.lock().unwrap().remove(&slot);
+        if let Some(old) = old {
+            terminal::close(terminals, &old);
+        }
+        runs.stops.settle();
+        let plan = compose::plan(app, runs, checkout, &dir, target, own_port)?;
+        let run = Target { argv: plan.argv, ..target.clone() };
+        let shell = program(&dir, &run, extra, env)?;
+        let stop: Box<dyn FnOnce() + Send> = Box::new(runs.stops.stopper(dir.clone(), plan.stop));
+        return Ok(Launch { shell, dir, port: plan.port, command: command_line(&run, extra), stop: Some((slot, stop)) });
+    }
+    let port = if own_port { runs.port(app, checkout, target) } else { None };
+    let run = port.map(|p| with_port(target, p)).unwrap_or_else(|| target.clone());
+    env.extend(port.map(|p| port_env(target.runtime, p)).unwrap_or_default());
+    let shell = program(&dir, &run, extra, env)?;
+    Ok(Launch { shell, dir, port, command: command_line(&run, extra), stop: None })
+}
+
 /// Start target `target` of repository `id` in its active checkout. Output arrives as `term-data`
 /// events and the end, with the exit code, as `term-exit`.
 #[allow(clippy::too_many_arguments)]
@@ -174,12 +260,10 @@ pub async fn target_run(app: tauri::AppHandle, state: State<'_, AppState>, termi
     let checkout = repo(&state, &id)?.dir;
     let in_worktree = main_repo(&state, &id)?.1.is_some();
     let target = find(&checkout, &target)?;
-    let dir = folder(&checkout, &target)?;
-    let port = if in_worktree { runs.port(&app, &checkout, &target) } else { None };
-    let env = port.map(|p| port_env(target.runtime, p)).unwrap_or_default();
-    let shell = program(&dir, &target, &[], env)?;
-    let key = terminal::start(app, &terminals, &shell, &dir, cols, rows, || {})?;
-    Ok(RunStarted { key, port, command: command_line(&target, &[]) })
+    let mut launch = prepare(&app, &terminals, &runs, &checkout, &target, &[], in_worktree, vec![])?;
+    let key = terminal::start(app, &terminals, &launch.shell, &launch.dir, cols, rows, || {})?;
+    launch.started(&terminals, &runs, &key);
+    Ok(RunStarted { key, port: launch.port, command: launch.command })
 }
 
 #[cfg(test)]
@@ -222,6 +306,19 @@ mod tests {
         assert_eq!(port_env(Runtime::Dotnet, 7251), [("ASPNETCORE_URLS".to_string(), "http://127.0.0.1:7251".to_string()), ("Kestrel__Endpoints__Http__Url".to_string(), "http://127.0.0.1:7251".to_string())]);
         assert_eq!(port_env(Runtime::Node, 5174), [("PORT".to_string(), "5174".to_string())]);
         assert_eq!(port_env(Runtime::Python, 8001)[0].0, "PORT");
+    }
+
+    #[test]
+    fn php_is_told_its_port_on_the_command_line() {
+        let php = |argv: &[&str]| Target { runtime: Runtime::Php, ..target(argv, "") };
+        assert_eq!(with_port(&php(&["php", "-S", "127.0.0.1:8000", "-t", "public"]), 7301).argv, ["php", "-S", "127.0.0.1:7301", "-t", "public"]);
+        assert_eq!(with_port(&php(&["php", "artisan", "serve"]), 7302).argv, ["php", "artisan", "serve", "--port=7302"]);
+        // A composer script reads PORT, like everything else.
+        assert_eq!(with_port(&php(&["composer", "run-script", "--timeout=0", "serve"]), 7303).argv.len(), 4);
+        assert_eq!(with_port(&target(&["node", "-S", "x"], ""), 7304).argv, ["node", "-S", "x"], "only PHP's own server");
+        assert_eq!(port_source(&php(&["php", "-S", "127.0.0.1:8000"])), "its command line");
+        assert_eq!(port_source(&php(&["composer", "run-script", "--timeout=0", "serve"])), "PORT");
+        assert_eq!(port_source(&target(&["npm", "start"], "")), "PORT");
     }
 
     #[test]

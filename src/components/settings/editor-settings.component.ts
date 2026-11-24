@@ -57,6 +57,8 @@ const ZOOM_LABELS = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2].map(
 				${toggle('lineNumbers', 'Line numbers')}
 				${toggle('stickyScroll', 'Sticky scroll', 'Keeps the enclosing function or class at the top')}
 				${toggle('bracketColors', 'Colour matching brackets')}
+				${toggle('semanticColors', 'Colour names by what they are', 'Parameters, constants, types and functions each in their own colour, where a language server tells them apart')}
+				${toggle('codeLens', 'Code lens', 'A line above a type or function saying how often it is used, such as "3 references"; click it to see them')}
 				${toggle('ligatures', 'Font ligatures', 'For fonts that have them (Fira Code, JetBrains Mono)')}
 				${toggle('cursorBlink', 'Blinking cursor')}
 			</div>

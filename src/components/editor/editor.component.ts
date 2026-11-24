@@ -330,6 +330,8 @@ export class EditorComponent {
 			lineNumbers: s.lineNumbers ? 'on' : 'off',
 			stickyScroll: { enabled: s.stickyScroll },
 			bracketPairColorization: { enabled: s.bracketColors },
+			'semanticHighlighting.enabled': s.semanticColors,
+			codeLens: s.codeLens,
 			guides: { bracketPairs: s.bracketColors ? 'active' : false, indentation: true },
 			renderWhitespace: s.whitespace,
 			cursorBlinking: s.cursorBlink ? 'blink' : 'solid',

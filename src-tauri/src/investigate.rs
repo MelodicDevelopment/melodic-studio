@@ -573,6 +573,10 @@ pub fn filter_args(target: &Target, filter: &str) -> Result<Vec<String>> {
         Runtime::Rust => vec![f],
         Runtime::Go => vec!["-run".into(), f],
         Runtime::Python => vec!["-k".into(), f],
+        // Composer passes what follows `--` to the script, which is PHPUnit (or Pest) in the projects that have one.
+        Runtime::Php if target.argv.first().map(String::as_str) == Some("composer") => vec!["--".into(), "--filter".into(), f],
+        Runtime::Php => vec!["--filter".into(), f],
+        Runtime::Docker => return Err(AppError::msg("A compose service has no tests to filter")),
         // npm and pnpm pass what follows `--` to the script; yarn and bun pass everything.
         Runtime::Node if matches!(target.argv.first().map(String::as_str), Some("npm" | "pnpm")) => vec!["--".into(), f],
         Runtime::Node => vec![f],
@@ -656,7 +660,8 @@ impl Tool<'_> {
 
     fn run_target(&self, args: &Value) -> ToolResult {
         let target = self.target(args, Kind::Run)?;
-        let port = self.app.state::<Runs>().port(self.app, &self.session.checkout, &target);
+        // A compose target's ports are only known once `docker compose` has read the project, which is part of starting it.
+        let port = if target.runtime == Runtime::Docker { None } else { self.app.state::<Runs>().port(self.app, &self.session.checkout, &target) };
         let approval = Approval { tool: "run_target".into(), target: Some(target.name.clone()), group: Some(target.group.clone()), project: project(&target), command: Some(run::command_line(&target, &[])), port, touches: text_arg(args, "touches").map(|t| cut(t, 600)), ..Default::default() };
         self.ask(approval, Some((target.clone(), vec![])))?;
         let (_, port, output) = self.running().ok_or("The app could not be started.")?;
@@ -680,8 +685,9 @@ impl Tool<'_> {
         let printed = tail(&out.since(0), OUTPUT_SENT);
         let status = match (up, out.ended) {
             (true, _) => format!("{} is running and accepts connections on port {}. Send requests with http_request.", target.name, port.unwrap_or(0)),
+            (false, None) if port.is_none() => format!("{} is running, but it publishes no port to send requests to. Look at what it prints with target_output.", target.name),
             (false, Some(code)) => format!("{} ended{} before it accepted connections.", target.name, code.map(|c| format!(" with exit code {c}")).unwrap_or_default()),
-            (false, None) => format!("{} is running but nothing answers on port {} yet. It may still be starting (look again with target_output), or it does not read its port from {}.", target.name, port.unwrap_or(0), if target.runtime == Runtime::Dotnet { "ASPNETCORE_URLS" } else { "PORT" }),
+            (false, None) => format!("{} is running but nothing answers on port {} yet. It may still be starting (look again with target_output), or it does not read its port from {}.", target.name, port.unwrap_or(0), run::port_source(&target)),
         };
         let reply = format!("{status}\n\nOutput:\n{printed}");
         if up {
@@ -925,24 +931,21 @@ pub async fn investigate_start(app: tauri::AppHandle, hub: State<'_, Investigati
         if let Some(old) = session.running.lock().unwrap().take() {
             terminal::close(&terminals, &old.term);
         }
-        let dir = run::folder(&session.checkout, target)?;
-        let port = (target.kind == Kind::Run).then(|| runs.port(&app, &session.checkout, target)).flatten();
         let replay = {
             let mut replays = session.replays.lock().unwrap();
             *replays = next_run(&session.checkout).max(*replays + 1);
             *replays
         };
         snapshot(&session.checkout, replay)?;
-        let mut env = port.map(|p| run::port_env(target.runtime, p)).unwrap_or_default();
-        env.push(("STUDIO_REPLAY_FILE".to_string(), replay_dir(&session.checkout).join(format!("run-{replay}.jsonl")).to_string_lossy().to_string()));
-        let shell = run::program(&dir, target, extra, env)?;
+        let env = vec![("STUDIO_REPLAY_FILE".to_string(), replay_dir(&session.checkout).join(format!("run-{replay}.jsonl")).to_string_lossy().to_string())];
+        let mut launch = run::prepare(&app, &terminals, &runs, &session.checkout, target, extra, target.kind == Kind::Run, env)?;
         let output: Shared = Arc::new((Mutex::new(Output::default()), Condvar::new()));
         let (tap, done) = (output.clone(), output.clone());
         let key = terminal::start_tapped(
             app.clone(),
             &terminals,
-            &shell,
-            &dir,
+            &launch.shell,
+            &launch.dir,
             cols,
             rows,
             move |bytes| tap.0.lock().unwrap().push(bytes),
@@ -951,8 +954,10 @@ pub async fn investigate_start(app: tauri::AppHandle, hub: State<'_, Investigati
                 done.1.notify_all();
             },
         )?;
+        launch.started(&terminals, &runs, &key);
+        let port = launch.port;
         *session.running.lock().unwrap() = Some(Running { term: key.clone(), port, output });
-        Ok(Started { key, port, command: run::command_line(target, extra), replay })
+        Ok(Started { key, port, command: launch.command, replay })
     })();
     let _ = pending.answer.send(if started.is_ok() { Answer::Started } else { Answer::Denied });
     started

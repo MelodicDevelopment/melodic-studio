@@ -201,6 +201,9 @@ fn exec(mut c: Command, stdin: Option<&[u8]>, ok_codes: &[i32]) -> Result<String
     }
 }
 
+/// How long the fetch nobody asked for may take.
+const QUIET_FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// More commits than this is not a list anyone edits by hand.
 const REBASE_LIMIT: usize = 500;
 
@@ -710,7 +713,7 @@ impl Git {
                 } else {
                     let full = self.dir.join(path);
                     if full.exists() {
-                        trash::delete(&full).or_else(|_| std::fs::remove_file(&full)).map_err(|e| AppError::msg(format!("Could not remove {path}: {e}")))?;
+                        crate::files::to_trash(&full).or_else(|_| std::fs::remove_file(&full)).map_err(|e| AppError::msg(format!("Could not remove {path}: {e}")))?;
                     }
                 }
             }
@@ -1205,6 +1208,27 @@ impl Git {
             return Ok(());
         }
         self.run(&["fetch", "--all", "--prune", "-q"]).map(|_| ())
+    }
+
+    /// The fetch the window runs by itself every few minutes. Nobody asked for it, so it may
+    /// not ask for anything either: no password or passphrase window (git's askpass, ssh's,
+    /// Git Credential Manager's sign-in), and it is stopped after `QUIET_FETCH_LIMIT` so a
+    /// connection that hangs cannot hold up the fetch, pull or push the user starts next.
+    /// Whatever needs an answer fails here and is asked by the fetch the user clicks.
+    pub fn fetch_quiet(&self) -> Result<()> {
+        if self.default_remote().is_none() {
+            return Ok(());
+        }
+        let mut c = base_command();
+        // An empty GIT_ASKPASS is git's "no askpass at all" (it also skips core.askPass and SSH_ASKPASS).
+        c.env("GIT_ASKPASS", "").env("SSH_ASKPASS", "").env("SSH_ASKPASS_REQUIRE", "never").env("GCM_INTERACTIVE", "never");
+        c.current_dir(&self.dir).args(["fetch", "--all", "--prune", "-q"]);
+        let out = crate::host_cli::run(c, None, QUIET_FETCH_LIMIT, "git fetch")?;
+        if out.ok {
+            Ok(())
+        } else {
+            Err(AppError::Git(out.stderr.trim().to_string()))
+        }
     }
 
     pub fn pull(&self) -> Result<()> {
@@ -1950,6 +1974,47 @@ mod tests {
         assert_eq!(g.branches().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_quiet_fetch_brings_what_the_remote_has() {
+        let dir = scratch("fetch-quiet");
+        let g = Git::at(&dir);
+        // No remote: nothing to do, and nothing wrong.
+        g.fetch_quiet().unwrap();
+        assert!(g.status().unwrap().last_fetched.is_none());
+
+        let bare = remote_for(&dir, "origin");
+        std::fs::write(dir.join("f.txt"), "base\n").unwrap();
+        g.commit(&["f.txt".into()], "Base", "", false).unwrap();
+        let main = g.run(&["symbolic-ref", "--short", "HEAD"]).unwrap().trim().to_string();
+        git(&dir, &["push", "-q", "-u", "origin", &main]);
+
+        // Someone else pushes a commit.
+        let other = dir.with_file_name(format!("{}-other", dir.file_name().unwrap().to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&other);
+        git(&dir, &["clone", "-q", &bare.to_string_lossy(), &other.to_string_lossy()]);
+        git(&other, &["config", "user.name", "Other"]);
+        git(&other, &["config", "user.email", "other@example.com"]);
+        git(&other, &["config", "commit.gpgsign", "false"]);
+        git(&other, &["checkout", "-q", &main]);
+        std::fs::write(other.join("f.txt"), "theirs\n").unwrap();
+        Git::at(&other).commit(&["f.txt".into()], "Theirs", "", false).unwrap();
+        git(&other, &["push", "-q", "origin", &main]);
+
+        assert_eq!(g.status().unwrap().behind, 0);
+        g.fetch_quiet().unwrap();
+        let st = g.status().unwrap();
+        assert_eq!(st.behind, 1);
+        assert!(st.last_fetched.is_some());
+
+        // A remote that cannot be reached is an error, said in git's words, not a wait.
+        git(&dir, &["remote", "set-url", "origin", &dir.join("no-such-remote").to_string_lossy()]);
+        assert!(matches!(g.fetch_quiet(), Err(AppError::Git(m)) if !m.is_empty()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     /// A second repository to push to, added as `name`.

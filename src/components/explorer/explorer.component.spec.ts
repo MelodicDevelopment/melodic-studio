@@ -242,6 +242,8 @@ describe('the tree', () => {
 	});
 
 	test('the window coming back reads the open folders again', async () => {
+		// Without the fetch that focus can start: what it brings is a second status, and a second read.
+		repos.setAutoFetch(false);
 		await click(row('src'));
 		const before = w.sent('list_dir').length;
 		window.dispatchEvent(new Event('focus'));

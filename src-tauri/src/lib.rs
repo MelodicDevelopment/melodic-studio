@@ -1,6 +1,7 @@
 mod agent;
 mod ai_git;
 mod commands;
+mod compose;
 mod config;
 mod conversation;
 mod dev;
@@ -142,6 +143,7 @@ pub fn run() {
             commands::merge_squash,
             commands::merge_abort,
             commands::fetch,
+            commands::fetch_background,
             commands::pull,
             commands::push,
             commands::remote_set,
@@ -239,7 +241,11 @@ pub fn run() {
         .run(|app, event| {
             // Quitting (Cmd+Q, the Dock) ends the app without a window event, so this is the one place every exit passes.
             match event {
-                tauri::RunEvent::Exit => dev::stop(app),
+                tauri::RunEvent::Exit => {
+                    // Before the process goes: a compose target's containers are stopped by a command of ours.
+                    terminal::close_all(&app.state::<terminal::Terminals>());
+                    dev::stop(app)
+                }
                 // A repository picked from the Dock icon's recent list, or a folder dropped on the icon.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Opened { urls } => recent::opened(app, &urls),

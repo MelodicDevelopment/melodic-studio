@@ -289,6 +289,8 @@ describe('reading the status', () => {
 	beforeEach(async () => {
 		vi.useFakeTimers();
 		await start();
+		// The fetch a poll can start has its own tests ("fetching in the background").
+		repos.setAutoFetch(false);
 	});
 
 	afterEach(() => {
@@ -342,6 +344,136 @@ describe('reading the status', () => {
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(repos.status()).toBe(status);
 		expect(repos.diff()).toBe(diff);
+	});
+});
+
+describe('fetching in the background', () => {
+	const MIN = 60_000;
+	const fetches = () => w.sent('fetch_background').length;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		await start();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** The last fetch was this long ago, as the status says it. */
+	const fetchedAgo = (ms: number) => statusIs({ remote: 'origin', lastFetched: Date.now() - ms });
+
+	test('a poll fetches once the last fetch is five minutes old, and the status is read again', async () => {
+		await fetchedAgo(6 * MIN);
+		w.on('fetch_background', () => {
+			w.on('repo_status', () => ({ ...repos.status()!, behind: 2, lastFetched: Date.now() }));
+		});
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(fetches()).toBe(1);
+		expect(repos.status()!.behind).toBe(2);
+		expect(repos.sync()!.kind).toBe('pull');
+		expect(repos.busy()).toBe('');
+		expect(errors()).toEqual([]);
+		// Fetched just now: the next polls leave it alone.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(fetches()).toBe(1);
+	});
+
+	test('a fetch made lately, here or in a terminal, is enough', async () => {
+		await fetchedAgo(4 * MIN);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(fetches()).toBe(0);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(fetches()).toBe(1);
+	});
+
+	test('a repository never fetched is fetched', async () => {
+		await statusIs({ remote: 'origin', lastFetched: null });
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(fetches()).toBe(1);
+	});
+
+	test('the window getting the focus fetches too', async () => {
+		await fetchedAgo(10 * MIN);
+		window.dispatchEvent(new Event('focus'));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(fetches()).toBe(1);
+	});
+
+	test('not without a remote, not while the window is hidden, not when switched off', async () => {
+		await statusIs({ remote: null, upstream: null, lastFetched: null });
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(fetches()).toBe(0);
+
+		await fetchedAgo(10 * MIN);
+		const hidden = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+		await vi.advanceTimersByTimeAsync(10_000);
+		await repos.fetchIfDue();
+		expect(fetches()).toBe(0);
+		hidden.mockRestore();
+
+		repos.setAutoFetch(false);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(fetches()).toBe(0);
+		expect(localStorage.getItem('studio.fetch.auto')).toBe('off');
+		repos.setAutoFetch(true);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(fetches()).toBe(1);
+	});
+
+	test('the setting is remembered', async () => {
+		await start(() => localStorage.setItem('studio.fetch.auto', 'off'));
+		expect(repos.autoFetch()).toBe(false);
+		await fetchedAgo(10 * MIN);
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(fetches()).toBe(0);
+	});
+
+	test('one that fails says nothing and is not tried again for five minutes', async () => {
+		await fetchedAgo(10 * MIN);
+		w.on('fetch_background', () => { throw appError('auth', 'Permission denied (publickey)'); });
+		await vi.advanceTimersByTimeAsync(4 * MIN);
+		expect(fetches()).toBe(1);
+		expect(errors()).toEqual([]);
+		expect(repos.statusError()).toBeNull();
+		await vi.advanceTimersByTimeAsync(2 * MIN);
+		expect(fetches()).toBe(2);
+	});
+
+	test('it blocks nothing, and a fetch, pull or push started meanwhile waits for it', async () => {
+		await fetchedAgo(10 * MIN);
+		const fetched = deferred();
+		w.on('fetch_background', () => fetched.promise);
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(fetches()).toBe(1);
+		expect(repos.busy()).toBe('');
+		// Polls go on, and do not start a second one.
+		await vi.advanceTimersByTimeAsync(10 * MIN);
+		expect(fetches()).toBe(1);
+
+		const pull = repos.fetch();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(repos.busy()).toBe('fetch');
+		expect(w.sent('fetch')).toEqual([]);
+		fetched.resolve();
+		await vi.advanceTimersByTimeAsync(1_000);
+		await pull;
+		expect(w.sent('fetch').length).toBe(1);
+		expect(repos.busy()).toBe('');
+	});
+
+	test('an answer for a repository no longer on screen changes nothing', async () => {
+		await fetchedAgo(10 * MIN);
+		const fetched = deferred();
+		w.on('fetch_background', () => fetched.promise);
+		await vi.advanceTimersByTimeAsync(5_000);
+		const other = repos.app()!.repos.find((r) => r.id !== repos.repo()!.id)!;
+		await repos.selectRepo(other.id);
+		const reads = w.sent('repo_status').length;
+		const polls = () => w.sent('repo_status').length - reads;
+		fetched.resolve();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(polls()).toBe(0);
 	});
 });
 

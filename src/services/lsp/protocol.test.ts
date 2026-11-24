@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyTextEdits, planEdit, Client, codeActions, COMPLETION_KIND, changesSince, clientCapabilities, completions, inlayHints, touches, workspaceEdit, workspaceSymbols, contentChanges, highlights, languageOf, newSince, oldSpans, progress, resolved, saveWanted, signatureHelp, statusChanges, symbolsAt, syncKind, triggerCharacters, type EditorSymbol, type FileState, type Span, type LspMessage } from './protocol.ts';
+import { applyTextEdits, planEdit, Client, codeActions, COMPLETION_KIND, changesSince, clientCapabilities, completions, inlayHints, touches, tokenMap, semanticTokens, TOKEN_TYPES, codeLenses, lensCommand, workspaceEdit, workspaceSymbols, contentChanges, highlights, languageOf, newSince, oldSpans, progress, resolved, saveWanted, signatureHelp, statusChanges, symbolsAt, syncKind, triggerCharacters, type EditorSymbol, type FileState, type Span, type LspMessage } from './protocol.ts';
 
 /** A client whose messages land in a list, delivered a tick late like the app's own carrier. */
 /** Messages on their way out of a client a test wired. */
@@ -274,7 +274,9 @@ test('only servers that do not watch the disk themselves are offered to be told'
 	const base = { workspace: { configuration: true }, textDocument: {} };
 	assert.deepEqual(clientCapabilities(base, 'php'), { workspace: { configuration: true, didChangeWatchedFiles: { dynamicRegistration: true } }, textDocument: {} });
 	assert.equal(clientCapabilities(base, 'typescript'), base);
-	assert.equal(clientCapabilities(base, 'rust'), base);
+	assert.equal(clientCapabilities(base, 'python'), base);
+	// Rust gets something of its own (the command its code lens names), and still watches the disk itself.
+	assert.equal(clientCapabilities(base, 'rust').workspace, base.workspace);
 	assert.deepEqual(base, { workspace: { configuration: true }, textDocument: {} }, 'the shared copy is left alone');
 });
 
@@ -439,4 +441,102 @@ test('a request from the server that takes doing something is answered when it i
 	client.receive({ id: 6, method: 'window/showMessageRequest', params: {} });
 	await settled();
 	assert.deepEqual(sent.map((m) => [m.id, m.result]).sort(), [[5, { applied: true }], [6, null]]);
+});
+
+// ---- colours by meaning ----------------------------------------------------------------
+
+const kind = (name: string): number => TOKEN_TYPES.indexOf(name);
+
+test('a server\'s legend is read against ours: its own names for our kinds count, the kinds a grammar colours do not', () => {
+	// typescript-language-server's legend.
+	const ts = tokenMap({ semanticTokensProvider: { full: true, range: true, legend: { tokenTypes: ['class', 'enum', 'interface', 'namespace', 'typeParameter', 'type', 'parameter', 'variable', 'enumMember', 'property', 'function', 'member'], tokenModifiers: ['declaration', 'static', 'async', 'readonly', 'defaultLibrary', 'local'] } } })!;
+	assert.deepEqual(ts.types, ['class', 'enum', 'interface', 'namespace', 'typeParameter', 'type', 'parameter', 'variable', 'enumMember', 'property', 'function', 'method'].map(kind));
+	assert.deepEqual(ts.modifiers, [0, 0, 0, 1, 0, 0]);
+	// Some of rust-analyzer's: keywords and strings stay the grammar's, `constant` is our `readonly`.
+	const rust = tokenMap({ semanticTokensProvider: { full: { delta: true }, legend: { tokenTypes: ['keyword', 'string', 'builtinType', 'typeAlias', 'union', 'constParameter', 'procMacro', 'lifetime', 'function'], tokenModifiers: ['constant', 'mutable'] } } })!;
+	assert.deepEqual(rust.types, [-1, -1, kind('type'), kind('type'), kind('struct'), kind('parameter'), kind('macro'), -1, kind('function')]);
+	assert.deepEqual(rust.modifiers, [1, 0]);
+});
+
+test('a server that colours nothing, or only ranges, has no legend to read', () => {
+	assert.equal(tokenMap({}), null);
+	assert.equal(tokenMap({ semanticTokensProvider: { range: true, legend: { tokenTypes: ['class'], tokenModifiers: [] } } }), null);
+	assert.equal(tokenMap({ semanticTokensProvider: { full: true } }), null);
+	assert.deepEqual(tokenMap({ semanticTokensProvider: { full: true, legend: { tokenTypes: ['class'] } } }), { types: [kind('class')], modifiers: [] });
+});
+
+test('tokens are renumbered into our legend, and the ones after a dropped token still land where they were', () => {
+	// keyword(0) function(1) parameter(2) variable(3); modifiers declaration(bit 0) readonly(bit 1).
+	const map = tokenMap({ semanticTokensProvider: { full: true, legend: { tokenTypes: ['keyword', 'function', 'parameter', 'variable'], tokenModifiers: ['declaration', 'readonly'] } } })!;
+	const data = [
+		// line 0: `export`(0-6, keyword) `function`(7-15, keyword) `greet`(16, function, declaration) `name`(22, parameter)
+		0, 0, 6, 0, 0,
+		0, 7, 8, 0, 0,
+		0, 9, 5, 1, 1,
+		0, 6, 4, 2, 1,
+		// line 2: `const`(1, keyword) `LIMIT`(7, variable, declaration + readonly)
+		2, 1, 5, 0, 0,
+		0, 6, 5, 3, 3,
+		// line 3: a token of no length, then one of a kind the server never listed.
+		1, 0, 0, 1, 0,
+		0, 4, 3, 9, 0,
+	];
+	assert.deepEqual([...semanticTokens({ data }, map)!], [
+		0, 16, 5, kind('function'), 0,
+		0, 6, 4, kind('parameter'), 0,
+		2, 7, 5, kind('variable'), 1,
+	]);
+	assert.deepEqual([...semanticTokens({ data: [] }, map)!], []);
+});
+
+test('an answer that is not a token list is no tokens at all', () => {
+	const map = { types: [0], modifiers: [] };
+	for (const bad of [null, undefined, {}, { data: 'x' }, { data: [0, 0, 1, 0] }, { data: [0, 0, 1, 0, -1] }, { data: [0, 0.5, 1, 0, 0] }, { data: [0, 0, 1, '0', 0] }]) {
+		assert.equal(semanticTokens(bad, map), null);
+	}
+});
+
+// ---- code lens -------------------------------------------------------------------------
+
+test('lenses are read with their range, and kept as sent for resolving', () => {
+	const sent = { range: { start: at(1, 16), end: at(1, 21) }, data: { uri: 'file:///repo/a.ts' } };
+	assert.deepEqual(codeLenses([sent, { command: { title: 'no range' } }, null]), [{ range: { startLineNumber: 2, startColumn: 17, endLineNumber: 2, endColumn: 22 }, raw: sent }]);
+	assert.deepEqual(codeLenses(null), []);
+});
+
+test('a lens says what a click does: the three spellings of "show references", a command of the server\'s own, or nothing', () => {
+	const there = { uri: 'file:///repo/b.ts', range: { start: at(7, 24), end: at(7, 28) } };
+	const shown = { kind: 'show', uri: 'file:///repo/a.ts', position: { lineNumber: 2, column: 17 }, locations: [{ uri: 'file:///repo/b.ts', range: { startLineNumber: 8, startColumn: 25, endLineNumber: 8, endColumn: 29 } }] };
+	// typescript-language-server, then rust-analyzer.
+	assert.deepEqual(lensCommand({ title: '1 reference', command: 'editor.action.showReferences', arguments: ['file:///repo/a.ts', at(1, 16), [there]] }, {}), { title: '1 reference', does: shown });
+	assert.deepEqual(lensCommand({ title: '1 reference', command: 'rust-analyzer.showReferences', arguments: ['file:///repo/a.ts', at(1, 16), [there]] }, {}), { title: '1 reference', does: shown });
+	// csharp-ls names the request and leaves the asking to the client.
+	assert.deepEqual(lensCommand({ title: '1 Reference(s)', command: 'textDocument/references', arguments: [{ textDocument: { uri: 'file:///repo/A.cs' }, position: at(5, 18), context: { includeDeclaration: true } }] }, {}), {
+		title: '1 Reference(s)',
+		does: { kind: 'references', uri: 'file:///repo/A.cs', position: { lineNumber: 6, column: 19 } },
+	});
+	// Nothing found, nothing to click; the same when the arguments are not what was promised.
+	assert.deepEqual(lensCommand({ title: '0 references', command: '', arguments: ['file:///repo/a.ts', at(1, 16), []] }, {}), { title: '0 references', does: { kind: 'none' } });
+	assert.deepEqual(lensCommand({ title: '2 references', command: 'editor.action.showReferences', arguments: ['file:///repo/a.ts'] }, {}), { title: '2 references', does: { kind: 'none' } });
+	assert.deepEqual(lensCommand({ title: '2 Reference(s)', command: 'textDocument/references', arguments: [] }, {}), { title: '2 Reference(s)', does: { kind: 'none' } });
+	// A command is run only when the server said it is one of its own.
+	const gopls = { executeCommandProvider: { commands: ['gopls.generate'] } };
+	assert.deepEqual(lensCommand({ title: 'run go generate', command: 'gopls.generate', arguments: [{ Dir: '/repo' }] }, gopls), { title: 'run go generate', does: { kind: 'run', command: 'gopls.generate', arguments: [{ Dir: '/repo' }] } });
+	assert.deepEqual(lensCommand({ title: 'Run', command: 'rust-analyzer.runSingle', arguments: [{}] }, gopls), { title: 'Run', does: { kind: 'none' } });
+	// Not resolved yet.
+	assert.equal(lensCommand(undefined, {}), null);
+	assert.equal(lensCommand({ command: 'x' }, {}), null);
+});
+
+test('the servers that need telling are told: code lens on for TypeScript, references lenses and a known command for Rust', async () => {
+	const { client, sent } = wired();
+	const ready = client.initialize({});
+	await settled();
+	client.receive({ jsonrpc: '2.0', id: sent[0].id, result: { capabilities: {} } });
+	assert.equal(await ready, true);
+	await settled();
+	const lens = { referencesCodeLens: { enabled: true }, implementationsCodeLens: { enabled: true } };
+	assert.deepEqual(sent.slice(1).map((m) => [m.method, m.params]), [['initialized', {}], ['workspace/didChangeConfiguration', { settings: { typescript: lens, javascript: lens } }]]);
+
+	assert.deepEqual(clientCapabilities({ textDocument: {} }, 'rust'), { textDocument: {}, experimental: { commands: { commands: ['rust-analyzer.showReferences'] } } });
 });

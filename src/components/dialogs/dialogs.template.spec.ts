@@ -526,4 +526,15 @@ describe('settings: the rest', () => {
 		await choose(field(d, 'Appearance'), 'Dark');
 		expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
 	});
+
+	test('fetching in the background is on until its box is unticked, and that is remembered', async () => {
+		const d = await ask('settings');
+		const box = field(d, 'Fetch in the background');
+		expect(ticked(box)).toBe(true);
+		await tick(box, false);
+		expect(repos.autoFetch()).toBe(false);
+		expect(localStorage.getItem('studio.fetch.auto')).toBe('off');
+		await tick(box, true);
+		expect(repos.autoFetch()).toBe(true);
+	});
 });

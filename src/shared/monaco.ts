@@ -4,6 +4,7 @@
  * about: the app theme, and the shadow root the editor is mounted in.
  */
 import type * as Monaco from 'monaco-editor';
+import { semanticName } from '../services/lsp/protocol';
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import JsonWorker from 'monaco-editor/language/json/json.worker.js?worker';
 import CssWorker from 'monaco-editor/language/css/css.worker.js?worker';
@@ -288,6 +289,32 @@ function token(name: string): string | null {
 	return `#${hex(+m[1])}${hex(+m[2])}${hex(+m[3])}${m[4] === undefined ? '' : hex(+m[4] * 255)}`;
 }
 
+/**
+ * Names coloured by what they are, once a language server says so: [dark, light], the colours
+ * VS Code's own themes give them. A kind with a modifier (`variable.readonly`, a constant) is
+ * looked up first, then the kind alone.
+ */
+const MEANING: Record<string, [string, string]> = {
+	namespace: ['4EC9B0', '267F99'],
+	type: ['4EC9B0', '267F99'],
+	class: ['4EC9B0', '267F99'],
+	enum: ['4EC9B0', '267F99'],
+	interface: ['4EC9B0', '267F99'],
+	struct: ['4EC9B0', '267F99'],
+	typeParameter: ['4EC9B0', '267F99'],
+	parameter: ['9CDCFE', '001080'],
+	variable: ['9CDCFE', '001080'],
+	'variable.readonly': ['4FC1FF', '0070C1'],
+	property: ['9CDCFE', '001080'],
+	'property.readonly': ['4FC1FF', '0070C1'],
+	enumMember: ['4FC1FF', '0070C1'],
+	event: ['9CDCFE', '001080'],
+	function: ['DCDCAA', '795E26'],
+	method: ['DCDCAA', '795E26'],
+	macro: ['569CD6', '0000FF'],
+	decorator: ['DCDCAA', '795E26'],
+};
+
 /** The editor wears the app's surface, borders and accents; syntax colours stay VS Code's. */
 function applyMonacoTheme(monaco: MonacoApi): void {
 	const wanted: Record<string, string> = {
@@ -323,6 +350,7 @@ function applyMonacoTheme(monaco: MonacoApi): void {
 	// Syntax colours follow the surface actually on screen, whichever way the theme got set.
 	const surface = /^#(..)(..)(..)/.exec(colors['editor.background'] ?? '');
 	const dark = surface ? 0.299 * parseInt(surface[1], 16) + 0.587 * parseInt(surface[2], 16) + 0.114 * parseInt(surface[3], 16) < 128 : getResolvedTheme() === 'dark';
-	monaco.editor.defineTheme(THEME, { base: dark ? 'vs-dark' : 'vs', inherit: true, rules: [], colors });
+	const rules = Object.entries(MEANING).map(([kind, [onDark, onLight]]) => ({ token: semanticName(kind), foreground: dark ? onDark : onLight }));
+	monaco.editor.defineTheme(THEME, { base: dark ? 'vs-dark' : 'vs', inherit: true, rules, colors });
 	monaco.editor.setTheme(THEME);
 }
