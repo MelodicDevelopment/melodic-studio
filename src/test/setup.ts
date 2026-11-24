@@ -7,6 +7,9 @@
  * - Monaco never loads unless a spec brings its own fake (`vi.mock` in the spec wins over this one).
  *   `LspService` is made as soon as its module is imported and asks for Monaco on the Files tab, and
  *   the real one cannot run here: it used to fail in the background of whichever test came next.
+ * - xterm never loads either, for the same reason and one more: the real one is a slow first import, and
+ *   on a cold CI runner it arrived after a test under fake timers had stopped turning them (the first
+ *   run on Linux, 2026-11-24, timed out that way). A spec about the screens brings a fuller fake.
  */
 import { vi } from 'vitest';
 
@@ -16,6 +19,45 @@ vi.mock('../shared/monaco', async (original) => ({
 	...(await original<Record<string, unknown>>()),
 	loadMonaco: () => new Promise(() => {}),
 }));
+
+vi.mock('../shared/xterm', () => {
+	/** As much of an xterm `Terminal` as starting a screen takes: a size, and somewhere for output to go. */
+	class QuietTerminal {
+		cols = 80;
+		rows = 24;
+		options: Record<string, unknown>;
+		constructor(options: Record<string, unknown> = {}) {
+			this.options = { ...options };
+		}
+		loadAddon(): void {}
+		onData(): void {}
+		onResize(): void {}
+		attachCustomKeyEventHandler(): void {}
+		open(): void {}
+		write(): void {}
+		input(): void {}
+		paste(): void {}
+		resize(cols: number, rows: number): void {
+			this.cols = cols;
+			this.rows = rows;
+		}
+		focus(): void {}
+		blur(): void {}
+		dispose(): void {}
+		getSelection(): string {
+			return '';
+		}
+		hasSelection(): boolean {
+			return false;
+		}
+		clearSelection(): void {}
+	}
+	return {
+		loadXterm: async () => ({ Terminal: QuietTerminal, FitAddon: class { fit(): void {} }, WebLinksAddon: class {} }),
+		adoptXtermStyles: () => undefined,
+		xtermTheme: () => ({}),
+	};
+});
 
 // Listeners the app puts on the window and the document are remembered, so `world()` can take the
 // last app's away: a `focus` or `keydown` sent in one test must not reach the stores of the test before.
