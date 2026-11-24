@@ -140,6 +140,23 @@ export class InitRepoComponent {
 	owners: HostOwner[] = [];
 	owner = '';
 	repoName = '';
+
+	/**
+	 * The name as typed, spaces made dashes. The field is given the result itself: when a dash is typed over with
+	 * a space the name is what it was, nothing is drawn again, and the field would go on showing the space.
+	 */
+	setRepoName(e: CustomEvent<{ value: string }>): void {
+		const name = e.detail.value.replace(/\s+/g, '-');
+		this.repoName = name;
+		const field = e.currentTarget as (HTMLElement & { value?: string }) | null;
+		if (field && field.value !== name) {
+			field.value = name;
+		}
+		const inner = field?.shadowRoot?.querySelector('input');
+		if (inner && inner.value !== name) {
+			inner.value = name;
+		}
+	}
 	isPrivate = true;
 	/** Azure DevOps organization (name or URL). */
 	org = '';

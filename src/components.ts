@@ -3,6 +3,7 @@ import '@melodicdev/components/button';
 import '@melodicdev/components/input';
 import '@melodicdev/components/textarea';
 import '@melodicdev/components/checkbox';
+import '@melodicdev/components/toggle';
 import '@melodicdev/components/select';
 import '@melodicdev/components/dialog';
 import '@melodicdev/components/popover';
@@ -12,6 +13,7 @@ import '@melodicdev/components/badge';
 import '@melodicdev/components/spinner';
 import '@melodicdev/components/tooltip';
 import '@melodicdev/components/toast';
+import '@melodicdev/components/alert';
 
 // Services (self-register)
 import './services/backend.service';

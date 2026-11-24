@@ -39,6 +39,14 @@ export class PipelineStore {
 	/** Studio's own steps in progress, by session: the review question or the test run, so Stop can end it. */
 	private readonly _asks = new Map<string, Ask>();
 	private readonly _testing = new Set<string>();
+	/**
+	 * How many times Stop or Discard was pressed for a session while no turn of Claude's was going. A step of
+	 * Studio's own (commit and push, the review, the tests) notes the number when it starts and gives up at
+	 * its next pause when it has risen: a push can take seconds, and the task must not run on after it said it stopped.
+	 */
+	private readonly _halts = new Map<string, number>();
+	/** Tasks being given up: what their stopping says is not news to the user who is throwing them away. */
+	private readonly _discarding = new Set<string>();
 
 	private get agents(): AgentsStore {
 		return Injector.get(AgentsStore);
@@ -73,10 +81,18 @@ export class PipelineStore {
 	private wait(id: string, note: string, step: StepName, reason: WaitReason = 'halted'): void {
 		this.patch(id, (p) => withStep({ ...p, step, waiting: true, note, reason }, step, { state: 'you' }));
 		const s = this.session(id);
-		if (s && !this.onScreen(s)) {
+		if (s && !this._discarding.has(id) && !this.onScreen(s)) {
 			const repo = Injector.get(RepoStore).app()?.repos.find((r) => r.id === s.repoId);
 			this.toast.show({ variant: 'info', title: `${nameOf(s)} needs you${repo && repo.id !== Injector.get(RepoStore).repo()?.id ? ` · ${repo.name}` : ''}`, message: note, duration: 9000 });
 		}
+	}
+
+	private halts(id: string): number {
+		return this._halts.get(id) ?? 0;
+	}
+
+	private halt(id: string): void {
+		this._halts.set(id, this.halts(id) + 1);
 	}
 
 	private onScreen(s: AgentSession): boolean {
@@ -254,8 +270,9 @@ export class PipelineStore {
 	/** Review: a read-only question to Claude over everything the worktree has since the task started. */
 	async review(id: string, after: StepName | null = null): Promise<void> {
 		const before = this.session(id)?.pipeline;
-		if (!before || !(await this.commit(id, after ?? (before.fixes ? 'fix' : 'code')))) {
-			return;
+		const halts = this.halts(id);
+		if (!before || !(await this.commit(id, after ?? (before.fixes ? 'fix' : 'code'))) || halts !== this.halts(id)) {
+			return; // committing failed, or Stop was pressed while it went
 		}
 		const s = this.session(id);
 		const p = s?.pipeline;
@@ -269,6 +286,9 @@ export class PipelineStore {
 		this.patch(id, (x) => withStep({ ...x, step: 'review', waiting: false, note: null, reason: null }, 'review', { state: 'run', summary: x.fixes ? `Reviewing fix ${x.fixes}.` : 'Reviewing the change.', lines: [] }));
 		try {
 			const { text, ...range } = await this.backend.pipelineReviewDiff(s.repoId, s.cwd, s.base);
+			if (halts !== this.halts(id)) {
+				return;
+			}
 			if (!range.files.length || !text.trim()) {
 				this.patch(id, (x) => withStep({ ...x, findings: [] }, 'review', { state: 'done', summary: 'Nothing changed since the task started, so there was nothing to review.' }));
 				return this.test(id);
@@ -297,7 +317,7 @@ export class PipelineStore {
 				})
 			);
 		} catch (e) {
-			if (this.session(id)?.pipeline?.waiting) {
+			if (halts !== this.halts(id) || this.session(id)?.pipeline?.waiting) {
 				return; // stopped meanwhile
 			}
 			this.wait(id, `The review did not finish: ${asAppError(e).message.slice(0, 200)}`, 'review');
@@ -313,12 +333,18 @@ export class PipelineStore {
 			return;
 		}
 		this.patch(id, (x) => withStep({ ...x, step: 'test', waiting: false, note: null, reason: null }, 'test', { state: 'run', summary: 'Running the tests on this machine.', lines: [] }));
+		const halts = this.halts(id);
 		let targets: RunTarget[];
 		try {
 			targets = (await this.backend.pipelineTests(s.repoId, s.cwd)).slice(0, MAX_TEST_TARGETS);
 		} catch (e) {
-			this.wait(id, `The tests could not be found: ${asAppError(e).message.slice(0, 200)}`, 'test');
+			if (halts === this.halts(id)) {
+				this.wait(id, `The tests could not be found: ${asAppError(e).message.slice(0, 200)}`, 'test');
+			}
 			return;
+		}
+		if (halts !== this.halts(id)) {
+			return; // Stop has said so already
 		}
 		const runs: { ok: boolean; command: string; output: string; code: number | null }[] = [];
 		this._testing.add(id);
@@ -379,6 +405,7 @@ export class PipelineStore {
 			return;
 		}
 		const step = s.pipeline.step === 'done' ? 'ship' : s.pipeline.step;
+		this.halt(id);
 		this.wait(id, 'Stopped by you. Its branch keeps everything committed so far.', step);
 		this._asks.get(id)?.cancel();
 		if (this._testing.delete(id)) {
@@ -445,23 +472,35 @@ export class PipelineStore {
 		}
 	}
 
-	/** Give a task up: stop it, then delete its worktree and branch, here and on the remote. Nothing is merged. */
-	async discard(id: string): Promise<void> {
+	/**
+	 * Give a task up: stop it, then delete its worktree and branch, here and on the remote. Nothing is merged.
+	 * False when the cleanup failed, so its worktree and branch are still there (and the session should stay, to find them by).
+	 */
+	async discard(id: string): Promise<boolean> {
 		const s = this.session(id);
 		if (!s?.pipeline) {
-			return;
+			return true;
 		}
-		if (s.status === 'running') {
-			await this.agents.stop(id);
-			await this.agents.idle(id, 4000);
-		}
-		this._asks.get(id)?.cancel();
-		if (this._testing.delete(id)) {
-			await this.backend.pipelineTestStop(`pipeline:${id}`).catch(() => undefined);
-		}
-		if (await this.cleanUp(id, 'discarded')) {
-			this.agents.patchPipeline(id, (p) => withStep({ ...p, step: 'done', waiting: false, note: null, reason: null }, 'ship', { state: 'skip', summary: 'Discarded: its worktree and branch were deleted.' }));
-			this.agents.markDone(id);
+		const own = !!s.isolated && !!s.branch;
+		this._discarding.add(id);
+		this.halt(id);
+		try {
+			if (s.status === 'running') {
+				await this.agents.stop(id);
+				await this.agents.idle(id, 4000);
+			}
+			this._asks.get(id)?.cancel();
+			if (this._testing.delete(id)) {
+				await this.backend.pipelineTestStop(`pipeline:${id}`).catch(() => undefined);
+			}
+			const cleaned = await this.cleanUp(id, 'discarded');
+			if (cleaned) {
+				this.agents.patchPipeline(id, (p) => withStep({ ...p, step: 'done', waiting: false, note: null, reason: null }, 'ship', { state: 'skip', summary: 'Discarded: its worktree and branch were deleted.' }));
+				this.agents.markDone(id);
+			}
+			return cleaned || !own;
+		} finally {
+			this._discarding.delete(id);
 		}
 	}
 

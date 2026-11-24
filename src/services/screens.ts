@@ -54,6 +54,8 @@ interface Screen {
 	/** `term.open()` has run; it needs a host that is on screen. */
 	opened: boolean;
 	ended: boolean;
+	/** Its program is being started: the native side has been asked and has not answered with the key yet. */
+	opening?: boolean;
 	started: number;
 	/** Keystrokes not sent yet. One write at a time keeps them in order. */
 	outbox: string;
@@ -251,18 +253,20 @@ export class ScreenPool {
 	 */
 	async start(id: string, open: (cols: number, rows: number) => Promise<string>): Promise<void> {
 		const screen = this._screens.get(id);
-		if (!screen || screen.key) {
-			return;
+		if (!screen || screen.key || screen.opening) {
+			return; // started, or being started: asking twice would run the program twice on one screen
 		}
 		screen.ended = false;
 		screen.started = Date.now();
 		const size = { cols: screen.term.cols, rows: screen.term.rows };
 		this._opening++;
+		screen.opening = true;
 		let key: string;
 		try {
 			key = await open(size.cols, size.rows);
 		} finally {
 			this._opening--;
+			screen.opening = false;
 		}
 		if (this._screens.get(id) !== screen) {
 			// Closed while the program was starting.

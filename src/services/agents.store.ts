@@ -873,6 +873,9 @@ export class AgentsStore {
 		if (session.kind === 'investigate') {
 			// Its answer is read and its worktree checked for leftover recording before anything is announced.
 			void this.conclude(key, ok && !stopped);
+			if (!ok && !stopped && !watching) {
+				this.announce(this.find(key) ?? session, false); // a failed turn has nothing to conclude, but is still news
+			}
 		} else if (!stopped && !watching && !session.pipeline) {
 			this.announce(this.find(key) ?? session, ok);
 		}
@@ -911,6 +914,7 @@ export class AgentsStore {
 			this.historyChat.set(chat.id ? { ...chat, open: false } : null);
 		}
 		this.asking.set(null);
+		this._askedFrom = null;
 		this.comparing.set(null);
 		this.replaying.set(null);
 		this.selectedId.set(id);
@@ -1062,8 +1066,21 @@ export class AgentsStore {
 			this.repos.setTab('agents');
 		}
 		this.comparing.set(null);
+		// The box takes the session's place; Cancel goes back to it.
+		this._askedFrom = this.selectedId() ?? this._askedFrom;
 		this.selectedId.set(null);
 		this.asking.set({ scope, seed });
+	}
+
+	/** The session that was on screen when the box for a new question opened. */
+	private _askedFrom: string | null = null;
+
+	/** Cancel in the box for a new question: back to the session it took the place of, or to the desk. */
+	cancelAsk(): void {
+		const chat = this.historyChat();
+		// The box in the History tab took no session's place: closing it shows the commits again.
+		const back = chat?.open && !chat.id ? null : this._askedFrom;
+		this.select(back && this.get(back) ? back : null);
 	}
 
 	/**
@@ -1079,8 +1096,10 @@ export class AgentsStore {
 		await this.listen();
 		const session = this.newSession(repo.id, text, repo.worktree ?? repo.path, this.repos.status()?.branch ?? null, { kind: 'ask', mode: 'default', tools: ASK_TOOLS[scope], base: this.repos.status()?.head ?? null });
 		this.save([...this.sessions(), session]);
+		// Read before `select`, which closes a History box that is not this session's.
+		const docked = scope === 'history' && !!this.historyChat()?.open;
 		this.select(session.id);
-		if (scope === 'history' && this.historyChat()?.open) {
+		if (docked) {
 			this.historyChat.set({ id: session.id, open: true });
 		}
 		await this.send(session.id, text, { images });

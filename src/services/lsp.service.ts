@@ -917,7 +917,10 @@ export class LspService {
 
 	async hover(model: Monaco.editor.ITextModel, position: Monaco.Position, token?: Monaco.CancellationToken): Promise<Monaco.languages.Hover | null> {
 		const client = await this.ready(model);
-		const result = await client?.request<{ contents: unknown; range?: LspRange }>('textDocument/hover', this.where(model, position), 15_000, token);
+		if (!client?.capabilities.hoverProvider) {
+			return null;
+		}
+		const result = await client.request<{ contents: unknown; range?: LspRange }>('textDocument/hover', this.where(model, position), 15_000, token);
 		const contents = hoverContents(result?.contents).map((value) => ({ value }));
 		return contents.length ? { contents, range: result?.range ? editorRange(result.range) : undefined } : null;
 	}
@@ -1310,7 +1313,10 @@ export class LspService {
 
 	async symbols(model: Monaco.editor.ITextModel, token?: Monaco.CancellationToken): Promise<Monaco.languages.DocumentSymbol[]> {
 		const client = await this.ready(model);
-		const result = await client?.request<unknown>('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString() } }, 15_000, token);
+		if (!client?.capabilities.documentSymbolProvider) {
+			return [];
+		}
+		const result = await client.request<unknown>('textDocument/documentSymbol', { textDocument: { uri: model.uri.toString() } }, 15_000, token);
 		// Kinds and tags are plain numbers in protocol.ts, already on Monaco's scale.
 		return documentSymbols(result) as Monaco.languages.DocumentSymbol[];
 	}
@@ -1428,7 +1434,12 @@ export class LspService {
 		const settle = async (since: number, uris: string[]): Promise<void> => {
 			last = Math.max(last, since);
 			let read = 0;
-			void client.request('textDocument/documentSymbol', { textDocument: { uri: uris[0] ?? [...open.keys()][0] } }, 30_000).then(() => (read = Date.now()));
+			const about = uris[0] ?? [...open.keys()][0];
+			if (about) {
+				void client.request('textDocument/documentSymbol', { textDocument: { uri: about } }, 30_000).then(() => (read = Date.now()));
+			} else {
+				read = Date.now(); // nothing is shown to it (the change only deleted files): there is no document to ask about
+			}
 			for (;;) {
 				const busy = Object.keys(this.working()).some((work) => work.startsWith(`${client.key}|`));
 				const quiet = Date.now() - Math.max(last, read);
@@ -1528,7 +1539,11 @@ export class LspService {
 					}
 				}
 				await settle(back, shown);
-				before = now().filter((e) => !DISK_SOURCES.includes(e.source ?? ''));
+				// A renamed file's earlier errors are told of its old name: they are compared under the new one, or each would count as new.
+				const renamed = new Map(plans.filter((plan) => plan.was !== plan.file.path).map((plan) => [plan.was, plan.file.path]));
+				before = now()
+					.filter((e) => !DISK_SOURCES.includes(e.source ?? ''))
+					.map((e) => (renamed.has(e.path) ? { ...e, path: renamed.get(e.path)! } : e));
 			}
 			const fresh = newSince(before, after);
 			result.files += plans.length;

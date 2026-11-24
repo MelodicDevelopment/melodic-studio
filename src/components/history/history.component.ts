@@ -424,8 +424,8 @@ export class HistoryComponent {
 	/** The compare box has focus: the list shows branches to pick from. */
 	picking = false;
 	filter = '';
-	/** Branch the arrow keys are on in the picker. */
-	private _hl: string | null = null;
+	/** The branch the arrow keys are on. Not `_hl`: a name starting with `_` is not watched, and the highlight on screen would not follow. */
+	hl: string | null = null;
 
 	elementRef!: HTMLElement;
 
@@ -477,7 +477,7 @@ export class HistoryComponent {
 
 	highlighted(): string | null {
 		const list = this.flat();
-		return this._hl && list.includes(this._hl) ? this._hl : (list[0] ?? null);
+		return this.hl && list.includes(this.hl) ? this.hl : (list[0] ?? null);
 	}
 
 	startPicking(): void {
@@ -487,7 +487,7 @@ export class HistoryComponent {
 
 	setFilter(value: string): void {
 		this.filter = value;
-		this._hl = null;
+		this.hl = null;
 	}
 
 	onKey(e: KeyboardEvent): void {
@@ -496,7 +496,7 @@ export class HistoryComponent {
 		if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
 			const next = list[Math.max(0, Math.min(list.length - 1, at + (e.key === 'ArrowDown' ? 1 : -1)))];
-			this._hl = next ?? null;
+			this.hl = next ?? null;
 			this.picking = true;
 			requestAnimationFrame(() => this.elementRef.shadowRoot?.querySelector('.branch.hl')?.scrollIntoView({ block: 'nearest' }));
 		} else if (e.key === 'Enter') {
@@ -512,7 +512,7 @@ export class HistoryComponent {
 
 	choose(name: string): void {
 		this.filter = '';
-		this._hl = null;
+		this.hl = null;
 		this.picking = false;
 		void this.store.setCompare(name);
 	}

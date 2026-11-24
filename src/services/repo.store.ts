@@ -336,9 +336,10 @@ export class RepoStore {
 
 	// ---- errors -------------------------------------------------------------
 
-	fail(e: unknown): void {
+	/** `pushed`: the failure is a push's. Only then can "rejected" mean the remote has moved on, which is what forcing is for. */
+	fail(e: unknown, pushed = false): void {
 		const err = asAppError(e);
-		if (/\[rejected\]|non-fast-forward|fetch first|stale info/i.test(err.message)) {
+		if (pushed && /\[rejected\]|non-fast-forward|fetch first|stale info/i.test(err.message)) {
 			// The remote has commits this branch does not: after a pull that is fine, after an amend or rebase it needs a force.
 			this.ask('force-push');
 			return;
@@ -368,7 +369,7 @@ export class RepoStore {
 			}
 		} catch (e) {
 			ok = false;
-			this.fail(e);
+			this.fail(e, busy === 'push');
 		} finally {
 			this.busy.set('');
 		}
@@ -432,10 +433,11 @@ export class RepoStore {
 		}
 		const rest = tabs.filter((t) => t !== id);
 		this.setRepoTabs(rest);
-		this._views.delete(id);
 		if (id === this.id) {
 			await this.selectRepo(rest[Math.min(at, rest.length - 1)]);
 		}
+		// After the switch, which keeps the view of the repository it leaves: a closed tab starts clean next time.
+		this._views.delete(id);
 	}
 
 	/** Move a tab to position `to` (dragged in the strip). */
@@ -522,9 +524,10 @@ export class RepoStore {
 		this.busy.set('repo');
 		const from = this.id;
 		const newTab = this._nextInNewTab;
-		this._nextInNewTab = false;
 		try {
 			const opened = await how();
+			// Used up only now: after a try that failed the dialog is still open, and the next try is the same request.
+			this._nextInNewTab = false;
 			this.overview.set(false);
 			this.keepView(from);
 			this.placeRepoTab(from, opened.id, newTab);
@@ -587,10 +590,14 @@ export class RepoStore {
 
 	async removeRepo(id: string): Promise<void> {
 		try {
+			const shown = id === this.id;
 			await this.backend.removeRepo(id);
 			this._views.delete(id);
 			this.setRepoTabs(this.repoTabs().filter((t) => t !== id));
-			this.resetRepoState();
+			if (shown) {
+				// Another repository takes its place. Removing one that is not on screen leaves the open one as it is.
+				this.resetRepoState();
+			}
 			await this.reloadApp();
 			await this.refresh();
 			void this.loadBranches();

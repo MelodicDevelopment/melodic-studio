@@ -98,6 +98,7 @@ export class HostWorkStore {
 	private _prToken = 0;
 	private _detailToken = 0;
 	private _runsToken = 0;
+	private _jiraToken = 0;
 	private _ciTimer: ReturnType<typeof setInterval> | null = null;
 	private _watching = false;
 	private _jiraTimer: ReturnType<typeof setTimeout> | null = null;
@@ -482,19 +483,27 @@ export class HostWorkStore {
 			this.jiraIssues.set([]);
 			return;
 		}
+		const token = ++this._jiraToken;
 		this.jiraLoading.set(true);
 		this.jiraError.set(null);
 		try {
 			const list = await this.backend.jiraIssues(config.site, config.project, this.jiraQuery().trim());
+			if (token !== this._jiraToken) {
+				return; // a newer search is on its way
+			}
 			this.jiraIssues.set(list);
 			if (!list.some((i) => i.key === this.selectedJira())) {
 				this.selectedJira.set(list[0]?.key ?? null);
 			}
 		} catch (e) {
-			this.jiraIssues.set([]);
-			this.jiraError.set(asAppError(e).message);
+			if (token === this._jiraToken) {
+				this.jiraIssues.set([]);
+				this.jiraError.set(asAppError(e).message);
+			}
 		} finally {
-			this.jiraLoading.set(false);
+			if (token === this._jiraToken) {
+				this.jiraLoading.set(false);
+			}
 		}
 	}
 

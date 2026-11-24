@@ -222,7 +222,9 @@ export class RepoTabsComponent {
 		dx = Math.max(d.rects[0].left - own.left, Math.min(d.rects[d.rects.length - 1].right - own.right, dx));
 		d.el.style.transform = `translateX(${dx}px)`;
 		const centre = own.left + own.width / 2 + dx;
-		d.to = d.rects.filter((r, i) => i !== d.from && r.left + r.width / 2 < centre).length;
+		// A tab to the right counts as passed once the centres meet: the drag is held inside the strip, so the
+		// dragged tab's centre can reach the last tab's but never go beyond it, and the last place must be reachable.
+		d.to = d.rects.filter((r, i) => i !== d.from && (i > d.from ? r.left + r.width / 2 <= centre : r.left + r.width / 2 < centre)).length;
 		// The tabs between the old and the new place make room by one slot.
 		const slot = d.from + 1 < d.rects.length ? d.rects[d.from + 1].left - own.left : own.left - d.rects[d.from - 1].left;
 		d.tabs.forEach((t, i) => {

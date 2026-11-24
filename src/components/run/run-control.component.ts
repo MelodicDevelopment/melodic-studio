@@ -1,6 +1,7 @@
 import { MelodicComponent } from '@melodicdev/core/components';
 import { Service } from '@melodicdev/core/injection';
 import { html, css } from '@melodicdev/core/template';
+import { effect, untracked } from '@melodicdev/core/signals';
 import { RunStore, filterTargets, foundIn, groupTargets, targetTitle } from '../../services/run.store';
 import { RepoStore } from '../../services/repo.store';
 import type { RunTarget } from '../../services/backend.service';
@@ -386,6 +387,13 @@ export class RunControlComponent {
 
 	onCreate(): void {
 		window.addEventListener('focus', this._focus);
+		// A repository, worktree or branch switch looks again. An effect, because what `onRender` reads is not
+		// followed: a branch checkout, which does not rebuild this control, used to go unnoticed until the list was opened.
+		effect(() => {
+			this.repos.repo();
+			this.repos.status();
+			untracked(() => void this.run.load());
+		});
 	}
 
 	onDestroy(): void {
@@ -394,9 +402,6 @@ export class RunControlComponent {
 
 	/** The targets belong to the checkout on screen, which changes without this component being rebuilt. */
 	onRender(): void {
-		// Read here so a repository, worktree or branch switch renders again; the load itself is keyed and does nothing twice.
-		this.repos.repo();
-		this.repos.status();
 		this.elementRef.toggleAttribute('hidden', !this.run.targets()?.length);
 		queueMicrotask(() => void this.run.load());
 	}

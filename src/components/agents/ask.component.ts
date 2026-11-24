@@ -38,7 +38,7 @@ const EXAMPLES: Record<AskScope, string[]> = {
 				<div class="row">
 					<span class="note"><ml-icon icon="lock-simple" size="sm"></ml-icon>${about.about}</span>
 					<ms-attach-button .box=${DRAFT_IMAGES.ask}></ms-attach-button>
-					<ml-button variant="outline" size="sm" @ml:click=${() => agents.select(agents.selectedId())}>Cancel</ml-button>
+					<ml-button variant="outline" size="sm" @ml:click=${() => agents.cancelAsk()}>Cancel</ml-button>
 					<ml-button variant="primary" size="sm" ?disabled=${!self.question.trim() || cli === null || !!agents.attaching()[DRAFT_IMAGES.ask]} ?loading=${self.sending} title=${isMac() ? '⌘ Enter' : 'Ctrl+Enter'} @ml:click=${() => self.submit()}>Ask</ml-button>
 				</div>
 				${cli === null ? html`<p class="bad">The <b>claude</b> command was not found. Install Claude Code, then restart Melodic Studio.</p>` : ''}

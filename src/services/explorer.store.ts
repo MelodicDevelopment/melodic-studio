@@ -130,6 +130,13 @@ export class ExplorerStore {
 			this.preview.set(saved?.preview ?? null);
 			this.selected.set(new Set());
 			this.notice.set(null);
+			// A file whose read was under way when this checkout went off screen: its answer was dropped then,
+			// and a rescan leaves a tab that is loading alone, so nothing else would ask again.
+			for (const tab of this.tabs()) {
+				if (tab.kind === 'loading') {
+					void this.read(tab.path, false);
+				}
+			}
 		}
 		void this.rescan();
 	}
@@ -331,6 +338,21 @@ export class ExplorerStore {
 		}
 	}
 
+	/**
+	 * `patch` for a tab of `checkout`, which may have gone off screen while a save or a read was under way:
+	 * its tabs are then in its snapshot, and the tab of the same path in the checkout on screen is another file.
+	 */
+	private patchIn(checkout: string, path: string, change: Partial<OpenFile>): void {
+		if (checkout === this._repoId) {
+			this.patch(path, change);
+			return;
+		}
+		const kept = this._snapshots.get(checkout);
+		if (kept) {
+			this._snapshots.set(checkout, { ...kept, tabs: kept.tabs.map((t) => (t.path === path ? { ...t, ...change } : t)) });
+		}
+	}
+
 	private forget(path: string): void {
 		const key = this.key(path);
 		this._buffers.get(key)?.model?.dispose();
@@ -417,7 +439,14 @@ export class ExplorerStore {
 			buf.savedVersion = version;
 			const saved = buf.model;
 			this.afterSave.forEach((listener) => listener(saved));
-			this.setDirty(path, buf.model.getAlternativeVersionId() !== version);
+			const dirty = buf.model.getAlternativeVersionId() !== version;
+			if (id !== this._repoId) {
+				// The checkout went off screen while the file was written: the tab that is saved is its own.
+				this.patchIn(id, path, { dirty });
+				this.rest(id);
+				return true;
+			}
+			this.setDirty(path, dirty);
 			if (this.notice()?.path === path) {
 				this.notice.set(null);
 			}
@@ -444,8 +473,16 @@ export class ExplorerStore {
 				buf.disk = '\u0000'; // force the replace even if the text matches what was last read
 				this.replace(buf, file.text);
 			}
+			if (id !== this._repoId) {
+				this.patchIn(id, path, { kind: kindOf(file), dirty: false }); // its checkout went off screen meanwhile
+				this.rest(id);
+				return;
+			}
 			this.patch(path, { kind: kindOf(file), dirty: false });
 		} catch {
+			if (id !== this._repoId) {
+				return;
+			}
 			this.close(path, true);
 		}
 		if (this.notice()?.path === path) {

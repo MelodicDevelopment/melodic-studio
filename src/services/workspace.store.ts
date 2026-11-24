@@ -185,8 +185,15 @@ function savedViews(): Record<string, WorkspaceView> {
 	return out;
 }
 
+/** The layouts as saved, by repository. Anything under the key that is not such a record counts as nothing saved. */
+function savedLayouts(): Record<string, LayoutNode> {
+	const saved = read<unknown>(LAYOUT_KEY, {});
+	return saved && typeof saved === 'object' && !Array.isArray(saved) ? (saved as Record<string, LayoutNode>) : {};
+}
+
 function loadConversations(): Conversation[] {
-	return read<Conversation[]>(CONV_KEY, [])
+	const saved = read<unknown>(CONV_KEY, []);
+	return (Array.isArray(saved) ? (saved as Conversation[]) : [])
 		.filter((c) => c && c.kind === 'claude' && c.sessionId)
 		.map((c) => ({ ...c, state: 'saved' as ConvState, waitingFor: null, unread: false, subagents: (c.subagents ?? []).map((s) => ({ ...s, running: false })) }));
 }
@@ -233,7 +240,7 @@ export class WorkspaceStore {
 	/** Claude Code sessions started outside the app, by repository (read from Claude Code's transcripts). */
 	readonly elsewhere = signal<Record<string, ClaudeSession[]>>({});
 
-	private readonly _savedLayouts = read<Record<string, LayoutNode>>(LAYOUT_KEY, {});
+	private readonly _savedLayouts = savedLayouts();
 	/** Conversation id -> screen id in the pool. */
 	private readonly _screens = new Map<string, string>();
 	/** Native terminal key -> conversation id. */
@@ -840,11 +847,15 @@ export class WorkspaceStore {
 		}
 	}
 
+	/** Conversations whose program is being started. A pane is shown again and again meanwhile, and each time would start it once more. */
+	private readonly _startingUp = new Set<string>();
+
 	private async startProgram(id: string, screen: string): Promise<void> {
 		const conv = this.get(id);
-		if (!conv) {
+		if (!conv || this._startingUp.has(id)) {
 			return;
 		}
+		this._startingUp.add(id);
 		const resume = conv.kind === 'claude' && conv.titled;
 		try {
 			await this.pool.start(screen, async (cols, rows) => {
@@ -860,6 +871,8 @@ export class WorkspaceStore {
 			this.patch(id, { state: conv.kind === 'claude' && conv.titled ? 'saved' : 'ended' });
 			this.pool.note(screen, String((e as { message?: string })?.message ?? e));
 			this.repos.fail(e);
+		} finally {
+			this._startingUp.delete(id);
 		}
 	}
 

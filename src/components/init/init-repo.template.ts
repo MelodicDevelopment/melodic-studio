@@ -72,7 +72,7 @@ function remote(self: InitRepoComponent) {
 								@ml:change=${(e: CustomEvent) => (self.owner = e.detail.value)}
 							></ml-select>`
 						: ''}
-					<ml-input label="Repository name" .value=${self.repoName} @ml:input=${(e: CustomEvent) => (self.repoName = e.detail.value.replace(/\s+/g, '-'))}></ml-input>
+					<ml-input label="Repository name" .value=${self.repoName} @ml:input=${(e: CustomEvent) => self.setRepoName(e)}></ml-input>
 					${self.where === 'azure' ? '' : html`<ml-checkbox label="Private" hint="Only you and people you invite can see it." .checked=${self.isPrivate} @ml:change=${(e: CustomEvent) => (self.isPrivate = e.detail.checked)}></ml-checkbox>`}
 				`
 				: html`

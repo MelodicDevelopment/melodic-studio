@@ -9,3 +9,4 @@ src-tauri/gen/schemas
 .claude/settings.local.json
 src-tauri/tests/fixtures/*/obj/
 src-tauri/tests/fixtures/*/bin/
+coverage/

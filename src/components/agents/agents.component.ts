@@ -1017,9 +1017,11 @@ export class AgentsComponent {
 		const doomed = this.doomed;
 		this.close('remove-agent');
 		if (doomed?.session?.pipeline && this.alsoTree) {
-			// Worktree, branch and its pushed copy, then the session.
-			await this._pipelines.discard(doomed.session.id);
-			await this.agents.remove(doomed.session, false);
+			// Worktree, branch and its pushed copy, then the session: it stays when those could not be removed,
+			// or nothing in the app would point at them any more.
+			if (await this._pipelines.discard(doomed.session.id)) {
+				await this.agents.remove(doomed.session, false);
+			}
 		} else if (doomed?.session) {
 			await this.agents.remove(doomed.session, this.alsoTree);
 		} else if (doomed?.tree) {

@@ -275,6 +275,22 @@ export class RunStore {
 		if (!at || !target) {
 			return null;
 		}
+		// A run is known here only once its program has answered: Run pressed again before that would start a second copy.
+		const starting = `${at.path}\n${target.id}`;
+		if (this._starting.has(starting)) {
+			return null;
+		}
+		this._starting.add(starting);
+		try {
+			return await this.begin(at, target);
+		} finally {
+			this._starting.delete(starting);
+		}
+	}
+
+	private readonly _starting = new Set<string>();
+
+	private async begin(at: { repoId: string; path: string }, target: RunTarget): Promise<Run | null> {
 		for (const old of this.here().filter((r) => r.target.id === target.id)) {
 			// Its tab goes too: the new run takes its place.
 			this.terminals.close(old.id);
