@@ -1245,3 +1245,87 @@ describe('following the agents\' turns', () => {
 		expect(pipe(id).step).toBe('review');
 	});
 });
+
+describe('what the checks leave for the evidence at Ship', () => {
+	test('each pass through Review and Test is a round, and the commit and files it looked at are kept', async () => {
+		let runs = 0;
+		w.on('pipeline_test_run', () => (++runs === 1 ? FAILED : PASSED));
+		w.on('pipeline_review_diff', () => ({ ...CHANGED, commits: [{ hash: 'abc1234', summary: 'Queue wraps' }], truncated: true }));
+		const id = await reviewing();
+		await answerReview([NIT]);
+		expect(pipe(id).rounds).toEqual([{ fixes: 0, holding: 0, notes: 1, tests: '11 passed, 1 failed', ok: false }]);
+		await endTurn(id, { did: 'Reset the cursor at the end.' });
+		await answerReview([]);
+		const p = pipe(id);
+		expect(p.rounds).toEqual([
+			{ fixes: 0, holding: 0, notes: 1, tests: '11 passed, 1 failed', ok: false },
+			{ fixes: 1, holding: 0, notes: 0, tests: '12 passed', ok: true },
+		]);
+		expect(p.checked).toMatchObject({ head: 'abc1234def5678', files: [{ path: 'src/queue.ts', status: 'modified' }], commits: 1, truncated: true });
+		expect(p.checked!.at).toBeGreaterThan(0);
+		expect(p.tests).toMatchObject({ printed: '$ npm test\n Tests  12 passed (12)\n', millis: 5 });
+	});
+
+	test('a quick fix has no review to list the change, so the files are asked for alone', async () => {
+		w.on('worktree_diff', () => ({ base: 'b'.repeat(40), head: 'abc1234def5678', files: [{ path: 'src/queue.ts', oldPath: null, status: 'modified', diff: '' }], tooLarge: false }));
+		const id = await begin('quick');
+		await endTurn(id, { did: 'Wrapped the index.' });
+		const p = pipe(id);
+		expect(p.reason).toBe('ship');
+		expect(p.checked).toMatchObject({ head: 'abc1234def5678', files: [{ path: 'src/queue.ts', status: 'modified' }], commits: null });
+		expect(p.note).toBe('The checks that ran pass, but 1 thing nothing checked (see Ship). Merge it or open a pull request.');
+	});
+
+	test('files that cannot be listed do not stop a quick fix', async () => {
+		w.on('worktree_diff', () => {
+			throw appError('git', 'not a worktree');
+		});
+		const id = await begin('quick');
+		await endTurn(id, { did: 'Wrapped the index.' });
+		expect(pipe(id)).toMatchObject({ reason: 'ship', checked: { files: [] } });
+	});
+
+	test('a project with no tests ships with that said', async () => {
+		w.on('pipeline_tests', () => []);
+		const id = await reviewing();
+		await answerReview([]);
+		expect(pipe(id).note).toBe('The checks that ran pass, but 1 thing nothing checked (see Ship). Merge it or open a pull request.');
+	});
+
+	test('reaching Ship looks at the worktree, which is what tells later that it moved', async () => {
+		const id = await reviewing();
+		w.on('worktree_list', () => [{ path: session(id).cwd, branch: BRANCH, head: 'abc1234def5678', isMain: false, active: false, changes: 0, landed: false }]);
+		await answerReview([]);
+		expect(pipes.trees()[id]).toEqual({ head: 'abc1234def5678', changes: 0 });
+		w.on('worktree_list', () => [{ path: session(id).cwd, branch: BRANCH, head: 'abc1234def5678', isMain: false, active: false, changes: 3, landed: false }]);
+		await pipes.look(id); // too soon after the last look: nothing is asked
+		expect(pipes.trees()[id].changes).toBe(0);
+		await pipes.look(id, true);
+		expect(pipes.trees()[id]).toEqual({ head: 'abc1234def5678', changes: 3 });
+		w.on('worktree_list', () => []);
+		await pipes.look(id, true);
+		expect(pipes.trees()[id]).toBeUndefined();
+	});
+
+	test('Check again at Ship commits what is in the worktree, then reviews and tests it again', async () => {
+		const id = await reviewing();
+		await answerReview([]);
+		expect(pipe(id).reason).toBe('ship');
+		void pipes.recheck(id);
+		await tick();
+		expect(w.sent('pipeline_commit').length).toBe(2);
+		expect(asks().length).toBe(2);
+		expect(pipe(id)).toMatchObject({ step: 'review', waiting: false });
+		await answerReview([]);
+		expect(pipe(id)).toMatchObject({ step: 'ship', waiting: true, reason: 'ship' });
+		expect(pipe(id).rounds?.length).toBe(2);
+		expect(turns().length).toBe(2); // Claude's own session was asked nothing more
+	});
+
+	test('Check again does nothing while the task is not waiting at Ship', async () => {
+		const id = await reviewing();
+		await pipes.recheck(id);
+		expect(w.sent('pipeline_commit').length).toBe(1);
+		expect(asks().length).toBe(1);
+	});
+});

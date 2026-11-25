@@ -73,6 +73,35 @@ export interface TestOutcome {
 	output: string;
 	/** No test target was found: the step counts as passed. */
 	none: boolean;
+	/** The end of what every run printed, passing ones too: what the evidence shows. */
+	printed?: string;
+	/** How long the runs took together. */
+	millis?: number;
+}
+
+/** What one pass through Review and Test found. Kept for the evidence at Ship (`shared/evidence.ts`). */
+export interface Round {
+	/** Fixes done before this pass: 0 is the first look at the code. */
+	fixes: number;
+	/** Review findings that sent it back to Fix, and the ones that did not. */
+	holding: number;
+	notes: number;
+	/** The tests in words, and whether they passed. */
+	tests: string;
+	ok: boolean;
+}
+
+/** What the last checks looked at: the evidence is about this commit and these files, and no other. */
+export interface Checked {
+	/** The worktree's commit when they ran; empty when it could not be read. */
+	head: string;
+	/** When they finished (ms). */
+	at: number;
+	files: { path: string; status: string }[];
+	/** Commits since the task started; null when nobody counted (a quick fix has no review to count them). */
+	commits: number | null;
+	/** The review was sent only part of the diff: it was too large. */
+	truncated: boolean;
 }
 
 export interface Pipeline {
@@ -99,6 +128,9 @@ export interface Pipeline {
 	tests: TestOutcome | null;
 	/** How the last push went, in words. */
 	pushed: string | null;
+	/** Every pass through Review and Test so far, oldest first. Missing on tasks from before 0.7. */
+	rounds?: Round[];
+	checked?: Checked | null;
 }
 
 export function modelFor(p: Pipeline, step: ClaudeStep): string {
@@ -257,7 +289,7 @@ export function readTestOutput(output: string, ok: boolean, code: number | null 
 }
 
 /** Several test runs (one per project) as one outcome. */
-export function combineTests(runs: { ok: boolean; command: string; output: string; code: number | null }[]): TestOutcome {
+export function combineTests(runs: { ok: boolean; command: string; output: string; code: number | null; millis?: number }[]): TestOutcome {
 	if (!runs.length) {
 		return { ok: true, summary: 'No tests found in this project', failures: [], commands: [], output: '', none: true };
 	}
@@ -273,7 +305,15 @@ export function combineTests(runs: { ok: boolean; command: string; output: strin
 			.map((r) => `$ ${r.command}\n${r.output.slice(-12_000)}`)
 			.join('\n\n'),
 		none: false,
+		printed: read.map((r) => `$ ${r.command}\n${r.output.slice(-3000)}`).join('\n\n'),
+		millis: read.reduce((sum, r) => sum + (r.millis ?? 0), 0),
 	};
+}
+
+/** What a pass through Review and Test found, for the pipeline's `rounds`. */
+export function roundOf(p: Pipeline, tests: TestOutcome): Round {
+	const holding = blocking(p.findings, p.fixes).length;
+	return { fixes: p.fixes, holding, notes: p.findings.length - holding, tests: tests.summary, ok: tests.ok };
 }
 
 /** A commit message for a step's work: the brief's title and what it did. */

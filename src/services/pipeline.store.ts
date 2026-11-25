@@ -12,13 +12,15 @@
  * Every step is a plain awaitable method, so a script can drive it the way the buttons do.
  */
 import { Injectable, Injector } from '@melodicdev/core/injection';
+import { signal } from '@melodicdev/core/signals';
 import { ToastService } from '@melodicdev/components/toast';
 import { AgentsStore, nameOf, type AgentSession } from './agents.store';
 import { AiService, type Ask } from './ai.service';
 import { BackendService, asAppError, type RunTarget } from './backend.service';
 import { RepoStore } from './repo.store';
 import { PLAN_TOOLS, REVIEW_TOOLS, parseReview, pipelineCodePrompt, pipelineFixPrompt, pipelinePlanPrompt, pipelineReviewNote, reviewPrompt } from './ai-prompts';
-import { afterChecks, blocking, worthFixing, combineTests, commitMessage, kindOf, modelFor, newPipeline, withStep, type ClaudeStep, type Pipeline, type StepName, type WaitReason, type WorkKind } from '../shared/pipeline';
+import { afterChecks, blocking, worthFixing, combineTests, commitMessage, kindOf, modelFor, newPipeline, roundOf, withStep, type Checked, type ClaudeStep, type Pipeline, type StepName, type WaitReason, type WorkKind } from '../shared/pipeline';
+import { shipNote } from '../shared/evidence';
 import type { Attachment } from './agent-images';
 import { samePath } from './agent-paths';
 
@@ -32,6 +34,8 @@ export interface NewPipelineTask {
 
 /** At most this many test targets run per round (one per project, usually). */
 const MAX_TEST_TARGETS = 4;
+/** A task's worktree is not looked at again sooner than this, however often its evidence is drawn. */
+const LOOK_EVERY_MS = 5000;
 
 @Injectable()
 export class PipelineStore {
@@ -47,6 +51,14 @@ export class PipelineStore {
 	private readonly _halts = new Map<string, number>();
 	/** Tasks being given up: what their stopping says is not news to the user who is throwing them away. */
 	private readonly _discarding = new Set<string>();
+
+	/**
+	 * Each task's worktree as it was when last looked at (`look`): its commit and how many uncommitted changes.
+	 * The evidence at Ship says so when that is no longer what the checks saw. Not `AgentsStore.worktrees`,
+	 * which is the open repository's list as of its last load and can be older than the pipeline's own commit.
+	 */
+	readonly trees = signal<Record<string, { head: string; changes: number }>>({});
+	private readonly _looked = new Map<string, number>();
 
 	private get agents(): AgentsStore {
 		return Injector.get(AgentsStore);
@@ -98,6 +110,21 @@ export class PipelineStore {
 	private onScreen(s: AgentSession): boolean {
 		const repos = Injector.get(RepoStore);
 		return document.visibilityState === 'visible' && repos.repo()?.id === s.repoId && repos.tab() === 'agents' && this.agents.selectedId() === s.id;
+	}
+
+	/** Look at a task's worktree now. Quiet: one that is gone, or cannot be listed, is simply not known. */
+	async look(id: string, force = false): Promise<void> {
+		const s = this.session(id);
+		if (!s?.pipeline || !s.isolated || (!force && Date.now() - (this._looked.get(id) ?? 0) < LOOK_EVERY_MS)) {
+			return;
+		}
+		this._looked.set(id, Date.now());
+		const tree = await this.backend.worktrees(s.repoId).then((all) => all.find((w) => !w.isMain && samePath(w.path, s.cwd)) ?? null, () => null);
+		const was = this.trees()[id];
+		if (tree ? was?.head !== tree.head || was.changes !== tree.changes : !!was) {
+			const { [id]: _gone, ...rest } = this.trees();
+			this.trees.set(tree ? { ...rest, [id]: { head: tree.head, changes: tree.changes } } : rest);
+		}
 	}
 
 	// ---- starting ---------------------------------------------------------------
@@ -241,27 +268,28 @@ export class PipelineStore {
 
 	/**
 	 * Commit everything in the worktree as the user and push the branch. Runs before every review, so work
-	 * a stopped step left behind is committed too and never missed by a merge. False when committing failed.
+	 * a stopped step left behind is committed too and never missed by a merge. Answers the worktree's commit
+	 * afterwards, which is what the checks that follow look at (empty when git would not say); null when committing failed.
 	 */
-	private async commit(id: string, step: StepName): Promise<boolean> {
+	private async commit(id: string, step: StepName): Promise<string | null> {
 		const s = this.session(id);
 		const p = s?.pipeline;
 		if (!s || !p) {
-			return false;
+			return null;
 		}
 		const brief = s.brief;
 		const kind = step === 'fix' ? 'fix' : 'code';
 		try {
 			const done = await this.backend.pipelineCommit(s.repoId, s.cwd, commitMessage(kind, brief?.title ?? nameOf(s), brief?.did ?? '', p.fixes));
 			if (!done.committed) {
-				return true;
+				return done.head;
 			}
 			const pushed = done.pushed ? `Committed ${done.head.slice(0, 7)} and pushed ${s.branch ?? 'its branch'}.` : `Committed ${done.head.slice(0, 7)}; not pushed: ${done.pushError ?? 'no remote'}.`;
 			this.patch(id, (x) => withStep({ ...x, pushed }, step, { lines: [...x.steps[step].lines.filter((l) => !l.startsWith('Committed ')), pushed] }));
-			return true;
+			return done.head;
 		} catch (e) {
 			this.wait(id, `Committing the work failed: ${asAppError(e).message.slice(0, 200)}`, step);
-			return false;
+			return null;
 		}
 	}
 
@@ -271,7 +299,8 @@ export class PipelineStore {
 	async review(id: string, after: StepName | null = null): Promise<void> {
 		const before = this.session(id)?.pipeline;
 		const halts = this.halts(id);
-		if (!before || !(await this.commit(id, after ?? (before.fixes ? 'fix' : 'code'))) || halts !== this.halts(id)) {
+		const head = before ? await this.commit(id, after ?? (before.fixes ? 'fix' : 'code')) : null;
+		if (head === null || halts !== this.halts(id)) {
 			return; // committing failed, or Stop was pressed while it went
 		}
 		const s = this.session(id);
@@ -279,7 +308,15 @@ export class PipelineStore {
 		if (!s || !p) {
 			return;
 		}
+		// What this round's checks look at: the evidence at Ship is about this commit and these files.
+		const seen = (files: Checked['files'], commits: number | null, truncated = false): void => this.patch(id, (x) => ({ ...x, checked: { head, at: Date.now(), files: files.map((f) => ({ path: f.path, status: f.status })), commits, truncated } }));
 		if (p.steps.review.state === 'skip') {
+			// No review to list the change: ask for the files alone, and go on without them when that fails.
+			const files = await this.agents.changes(s).then((d) => d.files, () => []);
+			if (halts !== this.halts(id)) {
+				return;
+			}
+			seen(files, null);
 			this.patch(id, (x) => ({ ...x, findings: [] }));
 			return this.test(id);
 		}
@@ -289,6 +326,7 @@ export class PipelineStore {
 			if (halts !== this.halts(id)) {
 				return;
 			}
+			seen(range.files, range.commits.length, range.truncated);
 			if (!range.files.length || !text.trim()) {
 				this.patch(id, (x) => withStep({ ...x, findings: [] }, 'review', { state: 'done', summary: 'Nothing changed since the task started, so there was nothing to review.' }));
 				return this.test(id);
@@ -346,7 +384,7 @@ export class PipelineStore {
 		if (halts !== this.halts(id)) {
 			return; // Stop has said so already
 		}
-		const runs: { ok: boolean; command: string; output: string; code: number | null }[] = [];
+		const runs: { ok: boolean; command: string; output: string; code: number | null; millis: number }[] = [];
 		this._testing.add(id);
 		try {
 			for (const t of targets) {
@@ -355,7 +393,7 @@ export class PipelineStore {
 				if (run.stopped || !this._testing.has(id)) {
 					return; // Stop has said so already
 				}
-				runs.push({ ok: run.ok, command: t.cwd ? `${run.command} (in ${t.cwd})` : run.command, output: run.output, code: run.code });
+				runs.push({ ok: run.ok, command: t.cwd ? `${run.command} (in ${t.cwd})` : run.command, output: run.output, code: run.code, millis: run.millis });
 			}
 		} catch (e) {
 			this.wait(id, `The tests did not run: ${asAppError(e).message.slice(0, 200)}`, 'test');
@@ -364,7 +402,7 @@ export class PipelineStore {
 			this._testing.delete(id);
 		}
 		const tests = combineTests(runs);
-		this.patch(id, (x) => withStep({ ...x, tests }, 'test', { state: tests.ok ? 'done' : 'warn', summary: tests.summary, lines: tests.failures }));
+		this.patch(id, (x) => withStep({ ...x, tests, rounds: [...(x.rounds ?? []), roundOf(x, tests)], checked: x.checked ? { ...x.checked, at: Date.now() } : x.checked }, 'test', { state: tests.ok ? 'done' : 'warn', summary: tests.summary, lines: tests.failures }));
 		await this.decide(id);
 	}
 
@@ -377,8 +415,8 @@ export class PipelineStore {
 		const next = afterChecks(p);
 		if (next === 'ship') {
 			this.patch(id, (x) => withStep(x, 'fix', { state: x.fixes ? 'done' : x.steps.fix.state === 'skip' ? 'skip' : 'next' }));
-			const notes = p.findings.length ? ` The review left ${p.findings.length} ${p.findings.length === 1 ? 'note' : 'notes'} to look at (see Review).` : '';
-			this.wait(id, `Every check passes${p.fixes ? ` after ${p.fixes} ${p.fixes === 1 ? 'fix' : 'fixes'}` : ''}. Merge it or open a pull request.${notes}`, 'ship', 'ship');
+			this.wait(id, shipNote(p), 'ship', 'ship');
+			void this.look(id, true);
 			return;
 		}
 		if (next === 'ask') {
@@ -430,6 +468,20 @@ export class PipelineStore {
 		}
 		this.patch(id, (x) => ({ ...x, waiting: false, note: null, reason: null }));
 		await this.runStep(id);
+	}
+
+	/**
+	 * At Ship, after the worktree changed under the evidence (the user took over, or committed there): commit
+	 * what is in it, then review and test again. It ends at Ship again, or in a fix when the checks say so.
+	 */
+	async recheck(id: string): Promise<void> {
+		const p = this.session(id)?.pipeline;
+		if (!p || p.step !== 'ship' || !p.waiting) {
+			return;
+		}
+		void this.agents.checkWork(id); // the language servers look at what is there now, too
+		await this.review(id);
+		await this.look(id, true);
 	}
 
 	/** At the fix limit: allow one more fix. */

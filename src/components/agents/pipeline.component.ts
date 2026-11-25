@@ -4,6 +4,8 @@ import { html, css } from '@melodicdev/core/template';
 import { AgentsStore, type AgentSession } from '../../services/agents.store';
 import { PipelineStore } from '../../services/pipeline.store';
 import { DEFAULT_MODELS, MODELS, STEPS, STEP_LABELS, kindOf, loopWords, modelFor, spentOf, type ClaudeStep, type Pipeline, type StepName, type StepRecord } from '../../shared/pipeline';
+import { evidenceOf, evidenceText, hasEvidence, type Evidence, type Mark, type Proof, type ProofLine } from '../../shared/evidence';
+import { relativeTime } from '../../shared/format';
 import { richText } from './rich-text';
 
 /** What each of Claude's steps does, after the model's name. */
@@ -70,13 +72,13 @@ function who(self: PipelineComponent, s: AgentSession, p: Pipeline, name: StepNa
 	`;
 }
 
-/** The buttons for what the pipeline is waiting on. */
-function waiting(self: PipelineComponent, s: AgentSession, p: Pipeline) {
+/** The buttons for what the pipeline is waiting on. `said`: its note is already said by what is around it (the evidence's verdict at Ship). */
+function waiting(self: PipelineComponent, s: AgentSession, p: Pipeline, said = false) {
 	const pipes = self.pipelines;
 	const choices = p.reason === 'approve' ? (s.brief?.choices ?? []) : [];
 	return html`
 		<div class="ask">
-			<p>${p.note}</p>
+			${said ? '' : html`<p>${p.note}</p>`}
 			${choices.length
 				? html`<div class="acts">${choices.map((c) => html`<ml-button variant="outline" size="sm" title="Approve the plan with this answer" @ml:click=${() => void pipes.approve(s.id, c)}>${c}</ml-button>`)}</div>`
 				: ''}
@@ -115,6 +117,67 @@ function discard(self: PipelineComponent, s: AgentSession) {
 	`;
 }
 
+const MARK_ICONS: Record<Exclude<Mark, 'run'>, string> = { ok: 'check-circle', warn: 'warning', bad: 'warning-circle', none: 'minus-circle' };
+const MARK_WORDS: Record<Mark, string> = { ok: 'Passed', warn: 'Passed, with something to judge', bad: 'Found a problem', none: 'Not checked', run: 'Checking now' };
+
+function mark(m: Mark) {
+	return html`<span class="mark ${m}" role="img" aria-label=${MARK_WORDS[m]} title=${MARK_WORDS[m]}>${m === 'run' ? html`<span class="eq" aria-hidden="true"><b></b><b></b><b></b></span>` : html`<ml-icon icon=${MARK_ICONS[m]} size="sm"></ml-icon>`}</span>`;
+}
+
+/** A line of a proof: a place in the task's checkout opens there. Its words are a program's or Claude's: text only. */
+function proofLine(self: PipelineComponent, s: AgentSession, l: ProofLine) {
+	const place = l.place;
+	return html`<li>${place ? html`<button class="place" title="Open it in the task's checkout" @click=${() => void self.agents.openPlace(s, place.path, place.line)}>${l.text}</button>` : l.text}${l.detail ? html`<span class="more">${l.detail}</span>` : ''}</li>`;
+}
+
+function proof(self: PipelineComponent, s: AgentSession, x: Proof) {
+	const head = html`${mark(x.mark)}<span class="ptitle">${x.title}</span><span class="says">${x.says}</span>`;
+	if (!x.lines.length && !x.printed) {
+		return html`<div class="proof" data-proof=${x.id}><div class="phead">${head}</div></div>`;
+	}
+	return html`
+		<details class="proof" data-proof=${x.id}>
+			<summary class="phead">${head}<ml-icon class="chev" icon="caret-right" size="xs"></ml-icon></summary>
+			<div class="pbody">
+				${x.lines.length ? html`<ul>${x.lines.map((l) => proofLine(self, s, l))}</ul>` : ''}
+				${x.printed ? html`<pre>${x.printed}</pre>` : ''}
+			</div>
+		</details>
+	`;
+}
+
+/**
+ * Why the change can be trusted, on the Ship step: one verdict, then what nothing checked and whether the
+ * work moved since, then each proof (`shared/evidence.ts`). Shown as soon as a check has run. `ask` is what
+ * the step waits with (Merge…, Open a pull request…): it sits under the verdict and above the proofs, so the
+ * buttons are never scrolled away by what proves them.
+ */
+function evidence(self: PipelineComponent, s: AgentSession, p: Pipeline, ask: unknown) {
+	const e: Evidence = evidenceOf({ pipeline: p, check: s.check, checksOn: self.agents.checksOn(), tree: self.pipelines.trees()[s.id] ?? null });
+	return html`
+		<div class="ev ${e.mark}">
+			<div class="verdict">
+				${mark(e.mark)}
+				<strong>${e.headline}</strong>
+				<span class="grow"></span>
+				${e.at ? html`<span class="when" title=${new Date(e.at).toLocaleString()}>Checked ${relativeTime(e.at)}${e.head ? html` at <code>${e.head.slice(0, 7)}</code>` : ''}</span>` : ''}
+			</div>
+			${e.stale
+				? html`<div class="stale">
+						<p>${e.stale} What is below is about the work as it was.</p>
+						<ml-button variant="outline" size="sm" title="Commit what is in the worktree, then review and test it again" @ml:click=${() => void self.pipelines.recheck(s.id)}><ml-icon slot="icon-start" icon="arrows-clockwise"></ml-icon>Check again</ml-button>
+					</div>`
+				: ''}
+			${e.gaps.length ? html`<ul class="gaps" aria-label="What nothing checked">${e.gaps.map((g) => html`<li>${g}</li>`)}</ul>` : ''}
+			${ask}
+			<div class="proofs">${e.proofs.map((x) => proof(self, s, x))}</div>
+			<div class="evfoot">
+				<button class="copy" title="The verdict, each proof in a line and what was not checked, as text: for a pull request or a message" @click=${() => self.copy(s.id, evidenceText(e))}>${self.copied === s.id ? 'Copied' : 'Copy as text'}</button>
+			</div>
+		</div>
+	`;
+}
+
 function detail(self: PipelineComponent, s: AgentSession, p: Pipeline, name: StepName) {
 	const r = p.steps[name];
 	const here = p.step === name;
@@ -132,11 +195,11 @@ function detail(self: PipelineComponent, s: AgentSession, p: Pipeline, name: Ste
 				? html`<p class="sum">${r.summary}</p>`
 				: r.summary || (here && p.waiting)
 					? ''
-					: html`<p class="sum dim">${r.state === 'skip' ? 'This kind of work leaves this step out.' : r.state === 'run' ? 'Starting…' : 'Not reached yet.'}</p>`}
+					: html`<p class="sum dim">${r.state === 'skip' ? 'This kind of work leaves this step out.' : r.state === 'run' ? 'Starting…' : name === 'ship' && hasEvidence(p) ? 'Not reached yet. The checks so far:' : 'Not reached yet.'}</p>`}
 			${name === 'plan' && p.plan ? html`<div class="plan">${richText(p.plan, links, self.follow(s))}</div>` : ''}
 			${r.lines.length ? html`<ul>${r.lines.map((l) => html`<li>${l}</li>`)}</ul>` : ''}
 			${name === 'test' && p.tests && !p.tests.ok && p.tests.output ? html`<details><summary>What the tests printed</summary><pre>${p.tests.output}</pre></details>` : ''}
-			${here && p.waiting ? waiting(self, s, p) : ''}
+			${name === 'ship' && hasEvidence(p) ? evidence(self, s, p, here && p.waiting ? waiting(self, s, p, p.reason === 'ship') : '') : here && p.waiting ? waiting(self, s, p) : ''}
 			${running ? html`<div class="acts"><ml-button variant="outline" size="sm" @ml:click=${() => void self.pipelines.stop(s.id)}>Stop</ml-button></div>` : ''}
 			${p.step === 'done' ? '' : discard(self, s)}
 		</section>
@@ -471,6 +534,172 @@ function detail(self: PipelineComponent, s: AgentSession, p: Pipeline, name: Ste
 			font-family: var(--ml-font-mono);
 			font-weight: 600;
 		}
+		.ev {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+		.verdict {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px;
+			font-size: 14px;
+		}
+		.verdict strong {
+			font-family: var(--ms-font-display);
+			font-weight: 600;
+		}
+		.when {
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+		}
+		.when code {
+			font-family: var(--ml-font-mono);
+		}
+		.mark {
+			display: inline-flex;
+			align-items: center;
+			flex: none;
+			color: var(--ml-color-text-muted);
+		}
+		.mark.ok {
+			color: var(--ml-color-success);
+		}
+		.mark.warn {
+			color: var(--ml-color-warning);
+		}
+		.mark.bad {
+			color: var(--ms-del);
+		}
+		.mark.run {
+			color: var(--ms-run-text);
+		}
+		.stale {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 8px 12px;
+			padding: 8px 12px;
+			border-radius: 8px;
+			border: 1px solid color-mix(in srgb, var(--ml-color-warning) 50%, transparent);
+			background: var(--ml-color-warning-subtle);
+		}
+		.stale p {
+			flex: 1 1 260px;
+			font-size: 13px;
+		}
+		.gaps {
+			padding: 8px 12px 8px 28px;
+			border-radius: 8px;
+			background: var(--ml-color-warning-subtle);
+			color: var(--ml-color-text);
+		}
+		.proofs {
+			display: flex;
+			flex-direction: column;
+			border: 1px solid var(--ml-color-border-muted);
+			border-radius: 8px;
+			background: var(--ml-color-surface);
+		}
+		.proof + .proof {
+			border-top: 1px solid var(--ml-color-border-muted);
+		}
+		.phead {
+			display: flex;
+			align-items: baseline;
+			gap: 8px;
+			padding: 7px 12px;
+			font-size: 13px;
+			list-style: none;
+		}
+		.phead .mark {
+			align-self: center;
+		}
+		summary.phead {
+			cursor: pointer;
+			color: inherit;
+		}
+		summary.phead::-webkit-details-marker {
+			display: none;
+		}
+		summary.phead:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			outline-offset: -2px;
+			border-radius: 8px;
+		}
+		.ptitle {
+			flex: none;
+			min-width: 118px;
+			font-weight: 600;
+		}
+		.says {
+			flex: 1;
+			min-width: 0;
+			color: var(--ml-color-text-secondary);
+			overflow-wrap: anywhere;
+		}
+		.chev {
+			align-self: center;
+			color: var(--ml-color-text-muted);
+			transition: transform 0.12s ease;
+		}
+		details[open] > summary .chev {
+			transform: rotate(90deg);
+		}
+		.pbody {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+			padding: 0 12px 10px 38px;
+		}
+		.pbody ul {
+			padding-left: 0;
+			list-style: none;
+		}
+		.pbody pre {
+			margin: 0;
+		}
+		.place {
+			all: unset;
+			cursor: pointer;
+			color: var(--ml-color-text-link);
+			overflow-wrap: anywhere;
+		}
+		.place:hover {
+			text-decoration: underline;
+		}
+		.place:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+			border-radius: 3px;
+		}
+		.more {
+			display: block;
+			color: var(--ml-color-text-muted);
+		}
+		.evfoot {
+			display: flex;
+			justify-content: flex-end;
+		}
+		.copy {
+			all: unset;
+			font-size: 12px;
+			color: var(--ml-color-text-muted);
+			cursor: pointer;
+			padding: 2px 4px;
+			border-radius: 4px;
+		}
+		.copy:hover {
+			color: var(--ml-color-text);
+		}
+		.copy:focus-visible {
+			outline: 2px solid var(--ml-color-primary);
+		}
+		@media (prefers-reduced-motion: reduce) {
+			.chev {
+				transition: none;
+			}
+		}
 		.eq {
 			display: inline-flex;
 			align-items: flex-end;
@@ -519,6 +748,41 @@ export class PipelineComponent {
 	sessionId: string | null = null;
 	/** The step picked on each session's track; the current one when none is. Memory only. */
 	picked: Record<string, { step: StepName; at: StepName }> = {};
+
+	/** The session whose evidence was just copied, for a moment. */
+	copied: string | null = null;
+	private readonly _focus = (): void => this.look(true);
+
+	onCreate(): void {
+		window.addEventListener('focus', this._focus);
+	}
+
+	onDestroy(): void {
+		window.removeEventListener('focus', this._focus);
+	}
+
+	onRender(): void {
+		this.look();
+	}
+
+	/** While the task waits at Ship, see whether its worktree is still what the checks saw (a terminal or an editor may have changed it). */
+	private look(force = false): void {
+		const p = this.sessionId ? this.agents.get(this.sessionId)?.pipeline : null;
+		if (this.sessionId && p?.step === 'ship' && p.waiting) {
+			void this.pipelines.look(this.sessionId, force);
+		}
+	}
+
+	/** Straight from the click, which WebKit requires of the clipboard. */
+	copy(id: string, text: string): void {
+		void navigator.clipboard.writeText(text).then(
+			() => {
+				this.copied = id;
+				setTimeout(() => (this.copied = this.copied === id ? null : this.copied), 1600);
+			},
+			() => undefined
+		);
+	}
 
 	pick(id: string, step: StepName): void {
 		const p = this.agents.get(id)?.pipeline;

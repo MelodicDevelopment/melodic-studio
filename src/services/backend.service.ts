@@ -1551,8 +1551,12 @@ class DemoBackend {
 				this.branchList = this.branchList.filter((b) => b.name !== args.branch && b.name !== `origin/${String(args.branch)}`);
 				return { removedTree: had, deletedBranch: true, deletedRemote: [`origin/${String(args.branch)}`], problems: [] };
 			}
-			case 'pipeline_commit':
-				return { committed: true, head: Math.random().toString(16).slice(2).padEnd(40, '0'), pushed: true, pushError: null };
+			case 'pipeline_commit': {
+				// The worktree is at the new commit from here on, as the real list would say: the evidence at Ship compares the two.
+				const head = Math.random().toString(16).slice(2).padEnd(40, '0');
+				this.worktreeList = this.worktreeList.map((w) => (w.path === args.cwd ? { ...w, head, changes: 0 } : w));
+				return { committed: true, head, pushed: true, pushError: null };
+			}
 			case 'pipeline_review_diff':
 				return this.call('ai_review_diff', { id: args.id, scope: 'work', base: args.base });
 			case 'replay_read':

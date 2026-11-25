@@ -494,3 +494,105 @@ describe('giving a task up', () => {
 		expect(w.toasts.some((t) => t.kind === 'error' && t.title === 'Cleaning up failed' && t.message.includes('worktree is locked'))).toBe(true);
 	});
 });
+
+describe('the evidence at Ship', () => {
+	const SEEN = 'c'.repeat(40); // the worktree's commit in `trees` above
+	const passed = { ok: true, summary: '12 passed', failures: [], commands: ['npm test'], output: '', none: false, printed: '$ npm test\n Tests  12 passed (12)', millis: 1500 };
+	const check = { state: 'done' as const, problems: [], known: 0, impact: [], servers: ['TypeScript'], files: 1, users: 3, finished: true };
+	const proven = (over: Partial<Pipeline> = {}, session: Partial<AgentSession> = { check }, kind: WorkKind = 'bug'): AgentSession =>
+		task(
+			waiting(
+				{
+					...at('ship', kind),
+					tests: passed,
+					rounds: [{ fixes: 0, holding: 0, notes: 0, tests: '12 passed', ok: true }],
+					checked: { head: SEEN, at: Date.now(), files: [{ path: 'src/queue.ts', status: 'modified' }], commits: 1, truncated: false },
+					...over,
+				},
+				'ship',
+				'Every check passes. Merge it or open a pull request.'
+			),
+			session
+		);
+	const verdict = (el: HTMLElement): string => read(find(el, '.verdict strong')!);
+	const proofs = (el: HTMLElement): string[] => all(el, '[data-proof]').map((x) => read(x));
+
+	test('one verdict, then each proof in a line: the tests, the review, the language servers, the loop, the change', async () => {
+		const el = await track(proven());
+		expect(verdict(el)).toBe('Every check passed');
+		expect(read(find(el, '.when')!)).toBe('Checked just now at ccccccc');
+		expect(proofs(el).map((x) => x.split(' ').slice(0, 2).join(' '))).toEqual(['Tests 12', 'Review Read', 'Language servers', 'The loop', 'The change']);
+		expect(proofs(el)[0]).toContain('12 passed in 1.5 s · all written before this change');
+		expect(proofs(el)[2]).toContain('No new errors in 1 changed file and 3 files that use them · TypeScript');
+		expect(find(el, '.gaps')).toBeNull();
+		expect(find(el, '.stale')).toBeNull();
+		// What it waited with, and its buttons, are still there under it.
+		expect(!!button(el, 'Merge…')).toBe(true);
+	});
+
+	test('what nothing checked is said as loudly as what passed', async () => {
+		const none = { ok: true, summary: 'No tests found in this project', failures: [], commands: [], output: '', none: true };
+		const el = await track(proven({ tests: none }, { check: null }, 'quick'));
+		expect(verdict(el)).toBe('Passed what was checked · 3 things nothing checked');
+		const gaps = all(find(el, '.gaps')!, 'li').map((x) => read(x));
+		expect(gaps[0]).toMatch(/^No tests ran/);
+		expect(gaps[1]).toMatch(/a quick fix skips the review/);
+		expect(gaps[2]).toMatch(/no language server checked the 1 code file/);
+		expect(all(el, '[data-proof] .mark.none').length).toBe(3);
+	});
+
+	test('nothing is shown before a check has run', async () => {
+		const el = await track(task(at('code')));
+		await press(pad(el, 'Ship'));
+		expect(find(el, '.ev')).toBeNull();
+		expect(read(detail(el))).toContain('Not reached yet.');
+	});
+
+	test('the checks so far can be read while the loop is still going', async () => {
+		const failed = { ok: false, summary: '11 passed, 1 failed', failures: ['repeat > restarts the track'], commands: ['npm test'], output: 'boom', none: false };
+		const el = await track(task({ ...at('fix'), fixes: 1, tests: failed, rounds: [{ fixes: 0, holding: 0, notes: 0, tests: failed.summary, ok: false }] }));
+		await press(pad(el, 'Ship'));
+		expect(verdict(el)).toBe('Not ready: tests found problems');
+		expect(proofs(el)[0]).toContain('Failed: repeat > restarts the track');
+		expect(button(el, 'Check again')).toBeNull();
+	});
+
+	test('a finding left to the user opens where it is, in the task\'s checkout', async () => {
+		const risk = { file: 'src/queue.ts', line: 14, severity: 'risk' as const, title: 'An empty queue may misbehave', detail: 'next() reads index 0.' };
+		const el = await track(proven({ fixes: 1, findings: [risk] }));
+		expect(verdict(el)).toBe('Passed, with something left for you to judge');
+		expect(proofs(el)[1]).toContain('next() reads index 0.');
+		await press(button(el, 'risk · An empty queue may misbehave'));
+		expect(w.sent('worktree_select').map((c) => c.args.path)).toEqual([TREE]);
+	});
+
+	test('work that moved after the checks is said, with a way to check it again', async () => {
+		const p = proven();
+		const el = await track({ ...p, pipeline: { ...p.pipeline!, checked: { ...p.pipeline!.checked!, head: 'd'.repeat(40) } } });
+		await settle();
+		expect(verdict(el)).toBe('Changed since it was checked');
+		expect(read(find(el, '.stale p')!)).toContain('they saw ddddddd, it is at ccccccc');
+		await press(button(el, 'Check again'));
+		await settle();
+		expect(w.sent('pipeline_commit').map((c) => c.args.cwd)).toEqual([TREE]);
+		expect(pipeline().step).toBe('review');
+		expect(find(el, '.stale')).toBeNull();
+	});
+
+	test('uncommitted changes in its worktree are work the checks never saw', async () => {
+		w.on('worktree_list', () => [{ path: TREE, branch: 'agent/queue-wraps', head: SEEN, isMain: false, active: false, changes: 2, landed: false }]);
+		const el = await track(proven());
+		await settle();
+		expect(read(find(el, '.stale p')!)).toContain('2 uncommitted changes the checks never saw');
+	});
+
+	test('Copy as text puts the verdict, the proofs and the gaps on the clipboard', async () => {
+		const copied: string[] = [];
+		Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => void copied.push(text) } });
+		const el = await track(proven());
+		await press(button(el, 'Copy as text'));
+		await settle();
+		expect(copied[0]).toMatch(/^Every check passed \(checked at ccccccc\)\n\n✓ Tests: 12 passed/);
+		expect(!!button(el, 'Copied')).toBe(true);
+	});
+});
