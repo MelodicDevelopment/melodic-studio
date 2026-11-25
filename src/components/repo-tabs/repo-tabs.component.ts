@@ -4,7 +4,54 @@ import { html, css } from '@melodicdev/core/template';
 import { RepoStore } from '../../services/repo.store';
 import { AgentsStore, stateOf } from '../../services/agents.store';
 import { bucketOf } from '../../shared/attention';
-import { isDesktop, isMac } from '../../services/backend.service';
+import { isDesktop, isMac, type RepoSummary } from '../../services/backend.service';
+import { groupByOrigin, hostIcon, type HostGroup } from '../../shared/repo-groups';
+
+/** The plus: every repository already set up, to open in a tab of its own, and below them the way to add another. */
+function picker(self: RepoTabsComponent) {
+	const inTab = new Set(self.store.repoTabs());
+	const groups = self.groups;
+	return html`
+		<ml-popover id="add-pop" placement="bottom-start" offset="0" @ml:open=${self.opened}>
+			<button slot="trigger" class="add" title="Open a repository in a new tab"><ml-icon icon="plus" size="sm"></ml-icon></button>
+			<div class="panel">
+				<div class="filter">
+					<ml-input size="sm" placeholder="Open a repository" .value=${self.filter} @ml:input=${(e: CustomEvent) => (self.filter = e.detail.value)} @keydown=${self.enter}>
+						<ml-icon slot="prefix" icon="magnifying-glass" size="sm"></ml-icon>
+					</ml-input>
+				</div>
+				<div class="list">
+					${groups.length === 0 ? html`<div class="none">No repositories${self.filter.trim() ? ' match' : ' yet'}.</div>` : ''}
+					${groups.map(
+						(g) => html`
+							<div class="grp">
+								<ml-icon icon=${hostIcon(g.provider)} size="sm"></ml-icon>
+								<span class="grp-name">${g.label}</span>
+							</div>
+							${g.owners.map(
+								(o) => html`
+									${o.owner ? html`<div class="grp owner"><span class="grp-name">${o.owner}</span></div>` : ''}
+									${o.items.map(
+										(r) => html`
+											<div class="item ${o.owner ? 'deep' : ''}" title=${inTab.has(r.id) ? 'Already open: go to its tab' : 'Open in a new tab'} @click=${() => self.pick(r)}>
+												<ml-icon icon=${r.missing ? 'warning' : 'folder-simple'} size="sm"></ml-icon>
+												<span class="name">${r.name}<span class="path">${r.missing ? 'Folder not found' : r.path}</span></span>
+												${inTab.has(r.id) ? html`<span class="when">Open</span>` : ''}
+											</div>
+										`
+									)}
+								`
+							)}
+						`
+					)}
+				</div>
+				<div class="foot">
+					<ml-button variant="outline" size="sm" full-width @ml:click=${self.add}><ml-icon slot="icon-start" icon="plus"></ml-icon>Add repository…</ml-button>
+				</div>
+			</div>
+		</ml-popover>
+	`;
+}
 
 /**
  * Repositories open side by side as tabs across the top of the window, like
@@ -52,7 +99,7 @@ import { isDesktop, isMac } from '../../services/backend.service';
 						</div>
 					`
 				)}
-				<button class="add" title="Open another repository in a new tab" @click=${() => store.ask('add-repo', { newTab: true })}><ml-icon icon="plus" size="sm"></ml-icon></button>
+				${picker(self)}
 			</div>
 		`;
 	},
@@ -172,12 +219,98 @@ import { isDesktop, isMac } from '../../services/backend.service';
 		button:focus-visible {
 			outline: 2px solid var(--ml-color-primary);
 		}
-		.add {
+		#add-pop {
+			flex: none;
 			align-self: center;
+			margin: 0 6px;
+		}
+		.add {
 			border-radius: 7px;
 			width: 26px;
 			height: 26px;
-			margin: 0 6px;
+		}
+
+		/* ---- the plus's list: the toolbar's repository list, without folding ---- */
+		.panel {
+			width: 340px;
+			max-height: min(70vh, 560px);
+			display: flex;
+			flex-direction: column;
+			font-size: 13px;
+			color: var(--ml-color-text);
+		}
+		.filter {
+			padding: 10px;
+			border-bottom: 1px solid var(--ml-color-border);
+		}
+		.list {
+			flex: 1;
+			min-height: 0;
+			overflow-y: auto;
+			padding: 6px 0;
+		}
+		.grp {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			padding: 8px 14px 4px;
+			font-size: 11px;
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+			color: var(--ml-color-text-muted);
+			user-select: none;
+		}
+		.grp.owner {
+			padding: 4px 14px 2px 28px;
+			text-transform: none;
+			letter-spacing: 0;
+			font-size: 12px;
+		}
+		.grp-name {
+			flex: 1;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.none {
+			padding: 18px 14px;
+			text-align: center;
+			color: var(--ml-color-text-muted);
+		}
+		.item {
+			display: flex;
+			align-items: center;
+			gap: 9px;
+			min-height: 32px;
+			padding: 4px 10px 4px 14px;
+		}
+		.item.deep {
+			padding-left: 28px;
+		}
+		.item:hover {
+			background: var(--ms-hover);
+		}
+		.item > ml-icon {
+			flex: none;
+			color: var(--ml-color-text-muted);
+		}
+		.path {
+			display: block;
+			font-size: 11px;
+			color: var(--ml-color-text-muted);
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+		.when {
+			flex: none;
+			font-size: 11px;
+			color: var(--ml-color-text-muted);
+		}
+		.foot {
+			padding: 10px;
+			border-top: 1px solid var(--ml-color-border);
 		}
 	`,
 })
@@ -185,8 +318,51 @@ export class RepoTabsComponent {
 	@Service(RepoStore) readonly store!: RepoStore;
 	@Service(AgentsStore) readonly agents!: AgentsStore;
 
+	elementRef!: HTMLElement;
+
 	/** Leave room for the traffic lights the overlay title bar draws over the top row. */
 	readonly mac = isDesktop() && isMac();
+
+	/** What is typed in the plus's list. */
+	filter = '';
+
+	/** The repositories the plus offers: all of them, the ones already in a tab too (picking one goes to its tab). */
+	get groups(): HostGroup<RepoSummary>[] {
+		const q = this.filter.trim().toLowerCase();
+		const repos = this.store.app()?.repos ?? [];
+		return groupByOrigin(q ? repos.filter((r) => r.name.toLowerCase().includes(q) || r.path.toLowerCase().includes(q)) : repos);
+	}
+
+	private closePicker(): void {
+		(this.elementRef.shadowRoot?.querySelector('#add-pop') as (HTMLElement & { component?: { close(): void } }) | null)?.component?.close();
+		this.filter = '';
+	}
+
+	/** Put the cursor in the filter box as the list opens. */
+	readonly opened = (): void => {
+		const input = this.elementRef.shadowRoot?.querySelector('#add-pop ml-input');
+		requestAnimationFrame(() => (input?.shadowRoot?.querySelector('input') as HTMLInputElement | null)?.focus());
+	};
+
+	pick(repo: RepoSummary): void {
+		this.closePicker();
+		void this.store.selectRepo(repo.id, true);
+	}
+
+	/** Enter opens the first repository listed. */
+	readonly enter = (e: KeyboardEvent): void => {
+		const first = this.groups[0]?.owners[0]?.items[0];
+		if (e.key === 'Enter' && first) {
+			e.preventDefault();
+			this.pick(first);
+		}
+	};
+
+	/** A repository that is not set up yet: the Add a repository dialog, whose result gets a tab of its own. */
+	readonly add = (): void => {
+		this.closePicker();
+		this.store.ask('add-repo', { newTab: true });
+	};
 
 	/** A tab being dragged to a new place. Pointer events, not HTML drag and drop (the window handles file drops). */
 	private _drag: { id: string; el: HTMLElement; tabs: HTMLElement[]; rects: DOMRect[]; from: number; to: number; startX: number; moved: boolean } | null = null;

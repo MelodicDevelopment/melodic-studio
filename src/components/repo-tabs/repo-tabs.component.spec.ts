@@ -31,11 +31,32 @@ function forgetElements(): void {
 	}
 }
 
+/** happy-dom has no Popover API: these keep an `open` mark on the element and send the `toggle` event a browser does. */
+function popovers(): void {
+	const proto = HTMLElement.prototype as unknown as Record<string, (this: HTMLElement) => void>;
+	const set = (el: HTMLElement, open: boolean): void => {
+		if (el.hasAttribute('data-open') !== open) {
+			el.toggleAttribute('data-open', open);
+			el.dispatchEvent(Object.assign(new Event('toggle'), { newState: open ? 'open' : 'closed', oldState: open ? 'closed' : 'open' }));
+		}
+	};
+	proto.showPopover = function () {
+		set(this, true);
+	};
+	proto.hidePopover = function () {
+		set(this, false);
+	};
+	proto.togglePopover = function () {
+		set(this, !this.hasAttribute('data-open'));
+	};
+}
+
 /** The app on this platform, started. `navigator.platform` is what `isMac()` reads. */
 async function start(on = 'MacIntel'): Promise<void> {
 	Object.defineProperty(navigator, 'platform', { value: on, configurable: true });
 	w = await world();
 	forgetElements();
+	popovers();
 	await import('../../components');
 	repos = w.get((await import('../../services/repo.store')).RepoStore);
 	agents = w.get((await import('../../services/agents.store')).AgentsStore);
@@ -58,6 +79,14 @@ afterEach(() => {
 async function two(): Promise<HTMLElement> {
 	await repos.openRepoTab(CADENCE);
 	return mount('ms-repo-tabs');
+}
+
+/** A repository that is set up and open in no tab. */
+const third = { id: '/Users/demo/Source/tempo', name: 'tempo', path: '/Users/demo/Source/tempo', missing: false, origin: null };
+
+/** Open the plus's list. */
+async function plus(el: Element): Promise<void> {
+	await click(find(el, '#add-pop')!.shadowRoot!.querySelector('.ml-popover__trigger'));
 }
 
 function tabs(el: Element): HTMLElement[] {
@@ -142,9 +171,60 @@ describe('the strip', () => {
 		expect(names(el)).toEqual(['harmony', 'cadence']);
 	});
 
-	test('the plus opens Add a repository, for a tab of its own', async () => {
+	test('the plus lists the repositories already set up, the ones in a tab marked', async () => {
 		const el = await two();
-		await click(find(el, 'button.add'));
+		repos.app.set({ ...repos.app()!, repos: [...repos.app()!.repos, third] });
+		await plus(el);
+		expect(find(el, '#add-pop')!.shadowRoot!.querySelector('.ml-popover__content')!.hasAttribute('data-open')).toBe(true);
+		expect(all(el, '#add-pop .item').map((i) => [find(i, '.name')!.firstChild!.textContent, find(i, '.when')?.textContent ?? ''])).toEqual([
+			['harmony', 'Open'],
+			['cadence', 'Open'],
+			['tempo', ''],
+		]);
+	});
+
+	test('picking one from the plus opens it in a tab of its own', async () => {
+		const el = await two();
+		repos.app.set({ ...repos.app()!, repos: [...repos.app()!.repos, third] });
+		const select = vi.spyOn(repos, 'selectRepo').mockResolvedValue();
+		await plus(el);
+		await click(all(el, '#add-pop .item')[2]);
+		expect(select).toHaveBeenCalledWith(third.id, true);
+		expect(opened).toEqual([]);
+	});
+
+	test('picking one that is already in a tab goes to that tab', async () => {
+		const el = await two();
+		await plus(el);
+		await click(all(el, '#add-pop .item')[0]);
+		await settle();
+		expect(on(el)).toEqual(['harmony']);
+		expect(names(el)).toEqual(['harmony', 'cadence']);
+	});
+
+	test('the plus\'s filter narrows the list, and Enter opens the first one left', async () => {
+		const el = await two();
+		repos.app.set({ ...repos.app()!, repos: [...repos.app()!.repos, third] });
+		const select = vi.spyOn(repos, 'selectRepo').mockResolvedValue();
+		await plus(el);
+		const input = find<HTMLInputElement>(find(el, '#add-pop ml-input')!, 'input')!;
+		input.value = 'temp';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		await settle();
+		expect(all(el, '#add-pop .item').map((i) => find(i, '.name')!.firstChild!.textContent)).toEqual(['tempo']);
+		input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, composed: true, cancelable: true }));
+		expect(select).toHaveBeenCalledWith(third.id, true);
+		input.value = 'nothing like it';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		await settle();
+		expect(find(el, '#add-pop .none')!.textContent).toBe('No repositories match.');
+	});
+
+	test('"Add repository…" under the plus\'s list opens Add a repository, for a tab of its own', async () => {
+		const el = await two();
+		await plus(el);
+		find(el, '#add-pop ml-button')!.dispatchEvent(new CustomEvent('ml:click', { bubbles: true, composed: true }));
+		await settle();
 		expect(opened).toEqual(['add-repo']);
 		expect(repos.prompt()).toEqual({ newTab: true });
 	});
